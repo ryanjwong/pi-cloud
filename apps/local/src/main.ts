@@ -24,7 +24,7 @@ const deployment = await startLocal({
   bindings: sqliteBindings({ file: join(dataDir, "sessions.sqlite") }),
   extensions: connectors(control),
   runner: {
-    plugins: defaultPlugins(dataDir),
+    plugins: defaultPlugins(runner),
     modelCredentials: modelCredentialLookup(runner),
     secrets: sandboxSecretLookup(runner)
   }

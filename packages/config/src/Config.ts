@@ -25,7 +25,8 @@ export const ControlPlaneEnv = Config.all({
   model: Config.String("PI_CLOUD_MODEL").pipe(Config.withDefault("anthropic/claude-opus-5-5")),
   github: Config.option(Config.all({
     webhookSecret: Config.Redacted("GITHUB_WEBHOOK_SECRET"),
-    mention: Config.option(Config.String("GITHUB_MENTION"))
+    mention: Config.option(Config.String("GITHUB_MENTION")),
+    sandboxProvider: Config.String("GITHUB_SANDBOX_PROVIDER").pipe(Config.withDefault("local"))
   })),
   slack: Config.option(Config.all({
     signingSecret: Config.Redacted("SLACK_SIGNING_SECRET"),
@@ -58,6 +59,8 @@ export const RunnerEnv = Config.all({
   controlPlaneUrl: Config.option(Config.String("CONTROL_PLANE_URL")),
   runnerSecret: Config.option(Config.Redacted("PI_CLOUD_RUNNER_SECRET")),
   modelCredentials: ModelCredentials,
+  githubToken: Config.option(Config.Redacted("GITHUB_TOKEN")),
+  templatesFile: Config.option(Config.String("SANDBOX_TEMPLATES_FILE")),
   /**
    * Secrets sandbox templates may request: each name listed in `SANDBOX_SECRETS`, read like any other secret.
    * A listed secret that cannot be read is a startup error; an unlisted one can never reach a sandbox.

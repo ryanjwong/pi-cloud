@@ -1,0 +1,15 @@
+{
+  "name": "@pi-cloud/tool-github",
+  "version": "0.1.0",
+  "description": "GitHub tools for pi-cloud agents: comment on issues and pull requests, open pull requests. Runs on the runner, so the token never enters a sandbox.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@earendil-works/pi-ai": "1.1.0",
+    "@earendil-works/pi-durable": "1.1.0",
+    "@pi-cloud/runner": "workspace:*",
+    "effect": "4.0.2"
+  }
+}

@@ -36,6 +36,12 @@ export interface GithubEvent {
 /** Events about one issue or pull request share a key, so they reach the same session. */
 export const threadKey = (repository: string, number: number) => `github:${repository}#${number}`
 
+/** The repository and number a thread key refers to. */
+export const threadOfKey = (key: string): { readonly repository: string; readonly number: number } | undefined => {
+  const match = /^github:([^#]+)#(\d+)$/.exec(key)
+  return match === null ? undefined : { repository: match[1]!, number: Number(match[2]) }
+}
+
 const text = (lines: ReadonlyArray<string | null | undefined | false>) => lines.filter(Boolean).join("\n")
 
 /**
@@ -116,7 +122,10 @@ export interface GithubTriggerOptions {
   readonly secret: string
   /** Mounted at `/v1/triggers/{name}`. Defaults to `github`. */
   readonly name?: string
-  /** Spec for new sessions, e.g. a sandbox template that clones the repository. */
+  /**
+   * Spec for new sessions, e.g. a sandbox of the repository (`{ sandbox: "repo", sandboxes: { repo: { provider,
+   * repository: { url, credential } } } }`). The thread is added to its `metadata.github`.
+   */
   readonly spec?: SessionSpec | ((repository: string) => SessionSpec)
   /** Only react to comments, issues and pull requests that contain this text, e.g. `@pi`. */
   readonly mention?: string
@@ -142,10 +151,14 @@ export const githubTrigger = (options: GithubTriggerOptions): Trigger =>
         const route = options.route ?? defaultRoute({ mention: options.mention })
         const repository = event.payload.repository?.full_name ?? ""
         const spec = typeof options.spec === "function" ? options.spec(repository) : options.spec
-        return route(event).map((routed, index) => ({
-          ...routed,
-          spec,
-          requestId: routed.requestId ?? (event.delivery === undefined ? undefined : `${event.delivery}:${index}`)
-        }))
+        return route(event).map((routed, index) => {
+          // New sessions record their thread, so GitHub tools know where to reply.
+          const thread = threadOfKey(routed.key)
+          return {
+            ...routed,
+            spec: thread === undefined ? spec : { ...spec, metadata: { ...spec?.metadata, github: thread } },
+            requestId: routed.requestId ?? (event.delivery === undefined ? undefined : `${event.delivery}:${index}`)
+          }
+        })
       })
   })

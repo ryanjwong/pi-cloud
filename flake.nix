@@ -122,6 +122,14 @@
               example = { PORT = "8787"; GITHUB_MENTION = "@pi"; SANDBOX_SECRETS = "GITHUB_TOKEN"; };
               description = "Non-secret settings, as environment variables. See `pi-cloud-config` for the list.";
             };
+            sandboxTemplates = lib.mkOption {
+              type = lib.types.attrsOf (lib.types.attrsOf lib.types.anything);
+              default = { };
+              example = lib.literalExpression ''{
+                api = { provider = "local"; repository = { url = "https://github.com/acme/api.git"; credential = "GITHUB_TOKEN"; }; setup = [ "pnpm install" ]; };
+              }'';
+              description = "Sandbox templates by name, available to every session (`pi-cloud chat --sandbox api`).";
+            };
             sandboxPackages = lib.mkOption {
               type = lib.types.listOf lib.types.package;
               default = with pkgs; [ bash coreutils findutils gnugrep gnused gitMinimal ];
@@ -141,7 +149,11 @@
               wantedBy = [ "multi-user.target" ];
               after = [ "network-online.target" ];
               wants = [ "network-online.target" ];
-              environment = { DATA_DIR = "/var/lib/pi-cloud"; } // cfg.settings;
+              environment = { DATA_DIR = "/var/lib/pi-cloud"; }
+                // lib.optionalAttrs (cfg.sandboxTemplates != { }) {
+                  SANDBOX_TEMPLATES_FILE = pkgs.writeText "pi-cloud-sandbox-templates.json" (builtins.toJSON cfg.sandboxTemplates);
+                }
+                // cfg.settings;
               path = cfg.sandboxPackages;
               serviceConfig = {
                 ExecStart = "${cfg.package}/bin/${programs.${cfg.role}}";

@@ -5,14 +5,13 @@ import { modelCredentialLookup, RunnerEnv, sandboxSecretLookup } from "@pi-cloud
 import { RunnerHost } from "@pi-cloud/runner"
 import { Option, Redacted } from "effect"
 import { createServer } from "node:http"
-import { resolve } from "node:path"
 import { Readable } from "node:stream"
 import { load } from "./env.ts"
 import { defaultPlugins } from "./plugins.ts"
 
 const env = await load(RunnerEnv)
 const host = new RunnerHost({
-  plugins: defaultPlugins(resolve(env.dataDir)),
+  plugins: defaultPlugins(env),
   secret: Option.getOrUndefined(Option.map(env.runnerSecret, Redacted.value)),
   controlPlaneUrl: Option.getOrUndefined(env.controlPlaneUrl),
   modelCredentials: modelCredentialLookup(env),

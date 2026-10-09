@@ -13,6 +13,20 @@ type StoredSandbox = {
   readonly handle: SandboxHandle
 }
 
+/**
+ * Git configuration that authenticates HTTPS remotes with the `credential` secret through a credential helper.
+ * The helper reads the variable when git asks, so the token is never written to a command line, a URL, or
+ * `.git/config`. Works for GitHub tokens and any host that accepts a token as the password.
+ */
+export const gitCredentialEnv = (credential: string): Record<string, string> => ({
+  GIT_TERMINAL_PROMPT: "0",
+  GIT_CONFIG_COUNT: "1",
+  GIT_CONFIG_KEY_0: "credential.helper",
+  GIT_CONFIG_VALUE_0: `!f() { test "$1" = get && echo username=x-access-token && echo "password=$${credential}"; }; f`
+})
+
+const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`
+
 /** The session's sandboxes, by name, and which one tools run in. Session-scoped, so subagents share it. */
 export const SandboxesDoc = defineDoc<{ active?: string; sandboxes: Record<string, StoredSandbox> }>({
   kind: "pi-cloud.sandboxes",
@@ -53,12 +67,15 @@ export const sandboxes = (options: SandboxPluginOptions): RunnerPlugin =>
       /** Template env plus resolved secrets. Secrets are resolved on the runner and never stored. */
       const environment = async (template: SandboxTemplate) => {
         const env: Record<string, string> = { ...template.env }
-        for (const name of template.secrets ?? []) {
+        const credential = template.repository?.credential
+        const names = new Set([...(template.secrets ?? []), ...(credential === undefined ? [] : [credential])])
+        for (const name of names) {
           const value = await plugin.secrets(name)
           if (value === undefined) throw new Error(`Secret ${name} is not available on this runner`)
           env[name] = value
           mask.add(name, value)
         }
+        if (credential !== undefined) Object.assign(env, gitCredentialEnv(credential))
         return env
       }
 
@@ -114,7 +131,11 @@ export const sandboxes = (options: SandboxPluginOptions): RunnerPlugin =>
           const stored: StoredSandbox = { template: args.template, handle }
           if ((await api.memo<boolean>("setup", context)) !== true) {
             const shell = await connect(stored)
-            for (const command of template.setup ?? []) {
+            const repository = template.repository
+            const clone = repository === undefined
+              ? []
+              : [`git clone --quiet${repository.ref === undefined ? "" : ` --branch ${shellQuote(repository.ref)}`} ${shellQuote(repository.url)} .`]
+            for (const command of [...clone, ...(template.setup ?? [])]) {
               api.output(`$ ${command}\n`)
               const result = await shell.exec(command, {
                 cwd: handle.cwd,
@@ -165,6 +186,10 @@ export const sandboxes = (options: SandboxPluginOptions): RunnerPlugin =>
           `Templates: ${names.map((name) => `${name} (${templates[name]!.provider})`).join(", ")}.`
         ]
         if (state?.active !== undefined) lines.push(`Active sandbox: ${state.active}.`)
+        const preferred = plugin.session.spec.sandbox
+        if (state?.active === undefined && preferred !== undefined) {
+          lines.push(`This session works in the "${preferred}" sandbox: create it with sandbox_create before anything else.`)
+        }
         return lines.join("\n")
       })
 

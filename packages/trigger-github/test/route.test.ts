@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { defaultRoute, type GithubEvent } from "../src/index.ts"
+import { defaultRoute, type GithubEvent, threadKey, threadOfKey } from "../src/index.ts"
 
 const repository = { full_name: "acme/api" }
 const sender = { login: "octocat", type: "User" }
@@ -76,5 +76,10 @@ describe("GitHub default routing", () => {
     expect(mentioned(event("issue_comment", { ...comment, sender }))).toEqual([])
     expect(mentioned(event("issue_comment", { ...comment, sender, comment: { body: "@pi look", html_url: "u" } }))).toHaveLength(1)
     expect(mentioned(event("pull_request", { action: "synchronize", repository, sender, pull_request: pr }))).toHaveLength(1)
+  })
+
+  it("parses thread keys back into repository and number", () => {
+    expect(threadOfKey(threadKey("acme/api", 7))).toEqual({ repository: "acme/api", number: 7 })
+    expect(threadOfKey("slack:C1:123")).toBeUndefined()
   })
 })

@@ -14,6 +14,7 @@ const { values: flags, positionals } = parseArgs({
     model: { type: "string" },
     title: { type: "string" },
     instructions: { type: "string" },
+    sandbox: { type: "string" },
     url: { type: "string" }
   }
 })
@@ -22,9 +23,11 @@ const write = (text: string) => void process.stdout.write(text)
 
 const usage = `pi-cloud <command>
 
-  new  [--model provider/model] [--title t]   create a session, print its id
+  new  [--model provider/model] [--title t] [--sandbox template]
+                                              create a session, print its id; --sandbox names the template
+                                              (from the runner's SANDBOX_TEMPLATES_FILE) the agent works in
   ls                                          list sessions
-  chat [id] [--model provider/model]          talk to a session (creates one without an id)
+  chat [id] [--model ...] [--sandbox ...]      talk to a session (creates one without an id)
   send <id> <message...>                      send one message and stream the answer
   tail <id>                                   print a session's live events
   rm   <id>                                   delete a session
@@ -38,6 +41,7 @@ const createSession = Effect.gen(function*() {
       title: flags.title,
       spec: {
         model: parseModel(flags.model ?? "anthropic/claude-opus-5-5"),
+        ...(flags.sandbox === undefined ? {} : { sandbox: flags.sandbox }),
         ...(flags.instructions === undefined ? {} : { instructions: flags.instructions })
       }
     }

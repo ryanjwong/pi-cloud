@@ -18,8 +18,17 @@ export type ModelRef = typeof ModelRef.Type
  */
 export const SandboxTemplate = Schema.Struct({
   provider: Schema.String,
+  /**
+   * A git repository cloned into the sandbox before `setup` runs. With `credential`, git authenticates with that
+   * secret through a credential helper, so the token never appears in a command, a URL, or `.git/config`.
+   */
+  repository: Schema.optional(Schema.Struct({
+    url: Schema.String,
+    ref: Schema.optional(Schema.String),
+    credential: Schema.optional(Schema.String)
+  })),
   image: Schema.optional(Schema.String),
-  /** Shell commands run once after the sandbox is created, e.g. cloning a repository. */
+  /** Shell commands run once after the sandbox is created (and the repository cloned), e.g. installing tools. */
   setup: Schema.optional(Schema.Array(Schema.String)),
   /** Working directory inside the sandbox. */
   cwd: Schema.optional(Schema.String),
@@ -35,8 +44,10 @@ export const SessionSpec = Schema.Struct({
   model: Schema.optional(ModelRef),
   thinkingLevel: Schema.optional(Schema.String),
   instructions: Schema.optional(Schema.String),
-  /** Sandbox templates the agent may create, by name. */
+  /** Sandbox templates the agent may create, by name, in addition to those the runner defines. */
   sandboxes: Schema.optional(Schema.Record(Schema.String, SandboxTemplate)),
+  /** The template the agent should work in; it is told to create that sandbox before doing anything else. */
+  sandbox: Schema.optional(Schema.String),
   /** Plugin configuration by plugin name; opaque to the control plane. */
   plugins: Schema.optional(Schema.Record(Schema.String, Schema.Json)),
   /** Free-form metadata for projections, e.g. the Slack thread a session belongs to. */

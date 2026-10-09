@@ -105,6 +105,9 @@ importers:
       '@pi-cloud/storage-sqlite':
         specifier: workspace:*
         version: link:../../packages/storage-sqlite
+      '@pi-cloud/tool-github':
+        specifier: workspace:*
+        version: link:../../packages/tool-github
       '@pi-cloud/trigger-github':
         specifier: workspace:*
         version: link:../../packages/trigger-github
@@ -287,6 +290,21 @@ importers:
       '@pi-cloud/protocol':
         specifier: workspace:*
         version: link:../protocol
+      effect:
+        specifier: 4.0.2
+        version: 4.0.2
+
+  packages/tool-github:
+    dependencies:
+      '@earendil-works/pi-ai':
+        specifier: 1.1.0
+        version: 1.1.0(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(undici@8.11.2)(ws@8.22.0)
+      '@earendil-works/pi-durable':
+        specifier: 1.1.0
+        version: 1.1.0(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(undici@8.11.2)(ws@8.22.0)
+      '@pi-cloud/runner':
+        specifier: workspace:*
+        version: link:../runner
       effect:
         specifier: 4.0.2
         version: 4.0.2

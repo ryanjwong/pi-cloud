@@ -26,13 +26,16 @@ export const SETTINGS: ReadonlyArray<Setting> = [
   { name: "PI_CLOUD_MODEL", secret: false, components: ["control-plane"], description: "Model for sessions created by triggers and sources", default: "anthropic/claude-opus-5-5" },
   { name: "GITHUB_WEBHOOK_SECRET", secret: true, components: ["control-plane"], description: "Enables the GitHub trigger" },
   { name: "GITHUB_MENTION", secret: false, components: ["control-plane"], description: "Only react to GitHub activity mentioning this, e.g. @pi" },
+  { name: "GITHUB_SANDBOX_PROVIDER", secret: false, components: ["control-plane"], description: "Sandbox provider for the repository sandbox of GitHub-triggered sessions", default: "local" },
   { name: "SLACK_SIGNING_SECRET", secret: true, components: ["control-plane"], description: "Enables the Slack source (with SLACK_BOT_TOKEN)" },
   { name: "SLACK_BOT_TOKEN", secret: true, components: ["control-plane"], description: "Posts the agent's replies to Slack" },
   // Runner
   { name: "CONTROL_PLANE_URL", secret: false, components: ["runner"], description: "Control plane to attach to (runner host)" },
   { name: "ANTHROPIC_API_KEY", secret: true, components: ["runner"], description: "Anthropic models" },
   { name: "OPENAI_API_KEY", secret: true, components: ["runner"], description: "OpenAI models" },
-  { name: "SANDBOX_SECRETS", secret: false, components: ["runner"], description: "Comma-separated secret names sandbox templates may request, each read like any other secret" }
+  { name: "GITHUB_TOKEN", secret: true, components: ["runner"], description: "GitHub tools (comment, open pull requests); list it in SANDBOX_SECRETS to also clone and push" },
+  { name: "SANDBOX_SECRETS", secret: false, components: ["runner"], description: "Comma-separated secret names sandbox templates may request, each read like any other secret" },
+  { name: "SANDBOX_TEMPLATES_FILE", secret: false, components: ["runner"], description: "JSON file of sandbox templates by name, available to every session" }
 ]
 
 /** Model provider credentials, by the variable name pi-ai looks them up under. */

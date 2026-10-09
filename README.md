@@ -58,6 +58,7 @@ The workspace is a stack of small libraries, each building on the ones below it,
 | | `@pi-cloud/sources` | Two-way connections: the `Source` interface (receive messages, deliver replies) and the extension that runs them. |
 | Adapters | `@pi-cloud/sandbox-local` | Sandboxes as directories on the runner's machine. |
 | | `@pi-cloud/trigger-github` | GitHub webhooks: issues, comments, pull requests and reviews reach the session of their thread. |
+| | `@pi-cloud/tool-github` | GitHub tools for the agent (`github_comment`, `github_open_pull_request`), run by the runner so the token stays out of sandboxes. |
 | | `@pi-cloud/source-slack` | Slack: each thread is a session; mentions and thread replies go in, answers are posted in the thread. |
 | | `@pi-cloud/storage-sqlite` | SQLite `StateStore` (Pi's own SQLite storage, one file per session), `SessionStore` and `BindingStore`, for Node. |
 | Clients | `@pi-cloud/client` | Typed REST client derived from the API, `followEvents` (reconnecting event stream), and `openChannel` (the WebSocket channel). |
@@ -103,7 +104,15 @@ ControlPlane.layer({
   // ...
   bindings: sqliteBindings({ file: "data/sessions.sqlite" }),
   extensions: [
-    triggers([githubTrigger({ secret, mention: "@pi", spec: { model, sandboxes: { repo: cloneTemplate } } })]),
+    triggers([githubTrigger({
+      secret,
+      mention: "@pi",
+      spec: (repository) => ({
+        model,
+        sandbox: "repo",
+        sandboxes: { repo: { provider: "local", repository: { url: `https://github.com/${repository}.git`, credential: "GITHUB_TOKEN" } } }
+      })
+    })]),
     sources([slackSource({ signingSecret, botToken, spec: { model } })])
   ]
 })
@@ -114,6 +123,14 @@ Writing another one means implementing a small interface: a `Trigger` is a name 
 `safeEqual`, `verifyHmac`) use Web Crypto, so connectors run on any runtime. The servers enable GitHub when
 `GITHUB_WEBHOOK_SECRET` is set (and `GITHUB_MENTION` to filter), Slack when `SLACK_SIGNING_SECRET` and
 `SLACK_BOT_TOKEN` are.
+
+**A GitHub round trip.** Someone comments `@pi why is CI red?` on a pull request. The trigger creates (or wakes) the
+session for `acme/api#7`, records the thread in `spec.metadata.github`, and asks the agent to work in a `repo`
+sandbox: a clone of the repository (provider from `GITHUB_SANDBOX_PROVIDER`). With `GITHUB_TOKEN` set on the runner,
+the agent has `github_comment`, which defaults to that thread, and `github_open_pull_request`. Those tools run in
+the runner, not the sandbox. To let the sandbox clone private repositories and push branches, also list
+`GITHUB_TOKEN` in `SANDBOX_SECRETS`; git then gets it through a credential helper, never in a command, URL or
+`.git/config`, and any output that contains it is masked.
 
 ## Running it
 
@@ -177,6 +194,11 @@ sops.secrets.GITHUB_TOKEN.sopsFile = ./secrets.yaml;
 services.pi-cloud = {
   enable = true;
   settings = { SANDBOX_SECRETS = "GITHUB_TOKEN"; GITHUB_MENTION = "@pi"; };
+  sandboxTemplates.api = {   # becomes SANDBOX_TEMPLATES_FILE; `pi-cloud chat --sandbox api`
+    provider = "local";
+    repository = { url = "https://github.com/acme/api.git"; credential = "GITHUB_TOKEN"; };
+    setup = [ "npm ci" ];
+  };
   secrets = {
     ANTHROPIC_API_KEY = config.sops.secrets.ANTHROPIC_API_KEY.path;
     GITHUB_TOKEN = config.sops.secrets.GITHUB_TOKEN.path;
@@ -187,6 +209,7 @@ services.pi-cloud = {
 **Where each secret goes.**
 
 - Model keys go to the model providers explicitly (`modelCredentials`); pi-ai does not read the environment.
+- `GITHUB_TOKEN` is used by the runner's GitHub tools. It reaches a sandbox only if listed in `SANDBOX_SECRETS`.
 - Sandboxes get only what their template asks for, and only names the operator listed in `SANDBOX_SECRETS`.
   Everything else in the runner's environment (model keys, the runner secret) never reaches a sandbox: local
   sandboxes run commands with a minimal base environment.
@@ -264,8 +287,12 @@ interface SandboxProvider {
 }
 ```
 
-Sessions declare templates (`provider`, `setup` commands, `env`, `secrets` by name). The agent calls
-`sandbox_create`; from then on Pi's `bash`/`read`/`write`/`edit` run inside that sandbox. The handle is stored in
+A template names a `provider`, an optional `repository` to clone (`url`, `ref`, and a `credential` secret name),
+`setup` commands, `env`, and `secrets` by name. The operator defines templates once in a JSON file
+(`SANDBOX_TEMPLATES_FILE`, or `services.pi-cloud.sandboxTemplates` on NixOS), and every session can use them next to
+`scratch` and whatever its own spec adds. `spec.sandbox` (`pi-cloud new --sandbox api`) names the template the agent
+should start in. The agent calls `sandbox_create`; from then on Pi's `bash`/`read`/`write`/`edit` run inside that
+sandbox. The handle is stored in
 the session's durable state, so a runner restarted elsewhere reconnects to the same sandbox.
 
 **Clients** are projections of the same API and event stream. `packages/cli/src/render.ts` is the whole terminal
