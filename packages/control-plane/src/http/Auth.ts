@@ -15,14 +15,30 @@ export class RunnerAuth extends Context.Service<RunnerAuth, {
     })
 }
 
-/** Public API keys. Without keys, every request is accepted (development only). */
-export const apiKeys = (keys: ReadonlyArray<string> | undefined): Layer.Layer<ApiAuth> =>
-  Layer.succeed(
-    ApiAuth,
-    ApiAuth.of({
-      bearer: (httpEffect, { credential }) =>
-        keys === undefined || keys.length === 0 || keys.includes(Redacted.value(credential))
-          ? httpEffect
+/**
+ * Authenticates public clients by bearer token. Every public surface (the REST API and the session channel)
+ * checks through this one service, so swapping it changes authentication everywhere.
+ */
+export class ClientAuth extends Context.Service<ClientAuth, {
+  check(token: string | undefined): Effect.Effect<void, Unauthorized>
+}>()("@pi-cloud/control-plane/ClientAuth") {
+  /** Accept these API keys. Without keys, every request is accepted (development only). */
+  static readonly apiKeys = (keys: ReadonlyArray<string> | undefined): Layer.Layer<ClientAuth> =>
+    Layer.succeed(ClientAuth, {
+      check: (token) =>
+        keys === undefined || keys.length === 0 || (token !== undefined && keys.includes(token))
+          ? Effect.void
           : Effect.fail(new Unauthorized({ message: "Missing or invalid API key" }))
     })
-  )
+}
+
+/** The `PublicApi` bearer middleware, backed by `ClientAuth`. */
+export const ApiAuthLive: Layer.Layer<ApiAuth, never, ClientAuth> = Layer.effect(
+  ApiAuth,
+  Effect.gen(function*() {
+    const auth = yield* ClientAuth
+    return ApiAuth.of({
+      bearer: (httpEffect, { credential }) => Effect.andThen(auth.check(Redacted.value(credential)), httpEffect)
+    })
+  })
+)

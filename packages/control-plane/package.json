@@ -1,7 +1,7 @@
 {
   "name": "@pi-cloud/control-plane",
   "version": "0.1.0",
-  "description": "The pi-cloud control plane: session registry, leases, fenced state access, command routing and event fan-out.",
+  "description": "The pi-cloud control plane: composes the core services into the public API, the session channel and the runner RPC.",
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
@@ -11,7 +11,8 @@
     "@earendil-works/chord": "1.1.0",
     "@earendil-works/pi-durable": "1.1.0",
     "@pi-cloud/protocol": "workspace:*",
-    "effect": "4.0.2"
+    "effect": "4.0.2",
+    "@pi-cloud/core": "workspace:*"
   },
   "devDependencies": {
     "@effect/platform-node": "4.0.2"

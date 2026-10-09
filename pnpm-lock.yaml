@@ -75,6 +75,9 @@ importers:
       '@pi-cloud/control-plane':
         specifier: workspace:*
         version: link:../../packages/control-plane
+      '@pi-cloud/core':
+        specifier: workspace:*
+        version: link:../../packages/core
       '@pi-cloud/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
@@ -84,6 +87,9 @@ importers:
       '@pi-cloud/sandbox':
         specifier: workspace:*
         version: link:../../packages/sandbox
+      '@pi-cloud/sandbox-local':
+        specifier: workspace:*
+        version: link:../../packages/sandbox-local
       '@pi-cloud/storage-sqlite':
         specifier: workspace:*
         version: link:../../packages/storage-sqlite
@@ -120,6 +126,9 @@ importers:
       '@earendil-works/pi-durable':
         specifier: 1.1.0
         version: 1.1.0(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(undici@8.11.2)(ws@8.22.0)
+      '@pi-cloud/core':
+        specifier: workspace:*
+        version: link:../core
       '@pi-cloud/protocol':
         specifier: workspace:*
         version: link:../protocol
@@ -130,6 +139,21 @@ importers:
       '@effect/platform-node':
         specifier: 4.0.2
         version: 4.0.2(effect@4.0.2)(redis@6.3.0)
+
+  packages/core:
+    dependencies:
+      '@earendil-works/chord':
+        specifier: 1.1.0
+        version: 1.1.0
+      '@earendil-works/pi-durable':
+        specifier: 1.1.0
+        version: 1.1.0(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(undici@8.11.2)(ws@8.22.0)
+      '@pi-cloud/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+      effect:
+        specifier: 4.0.2
+        version: 4.0.2
 
   packages/protocol:
     dependencies:
@@ -176,14 +200,26 @@ importers:
         specifier: 4.0.2
         version: 4.0.2
 
+  packages/sandbox-local:
+    dependencies:
+      '@earendil-works/pi-durable':
+        specifier: 1.1.0
+        version: 1.1.0(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(undici@8.11.2)(ws@8.22.0)
+      '@pi-cloud/sandbox':
+        specifier: workspace:*
+        version: link:../sandbox
+      effect:
+        specifier: 4.0.2
+        version: 4.0.2
+
   packages/storage-sqlite:
     dependencies:
       '@earendil-works/pi-durable':
         specifier: 1.1.0
         version: 1.1.0(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(undici@8.11.2)(ws@8.22.0)
-      '@pi-cloud/control-plane':
+      '@pi-cloud/core':
         specifier: workspace:*
-        version: link:../control-plane
+        version: link:../core
       '@pi-cloud/protocol':
         specifier: workspace:*
         version: link:../protocol

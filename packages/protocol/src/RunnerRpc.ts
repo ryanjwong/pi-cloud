@@ -1,6 +1,7 @@
 import { Schema } from "effect"
 import { Rpc, RpcGroup } from "effect/rpc"
-import { EventBatch, Session, UserContent, WhenBusy } from "./Domain.ts"
+import { CommandResult, SessionCommand } from "./Commands.ts"
+import { EventBatch, Session } from "./Domain.ts"
 import { LeaseHeld, LeaseLost, SessionNotFound, StorageFailure } from "./Errors.ts"
 
 /**
@@ -38,44 +39,14 @@ const leaseFields = {
   token: Schema.String
 }
 
-export const SubmitCommand = Schema.TaggedStruct("Submit", {
-  commandId: Schema.String,
-  conversationId: Schema.optional(Schema.Number),
-  content: UserContent,
-  requestId: Schema.optional(Schema.String),
-  whenBusy: Schema.optional(WhenBusy)
-})
-
-export const AbortCommand = Schema.TaggedStruct("Abort", {
-  commandId: Schema.String,
-  conversationId: Schema.optional(Schema.Number)
-})
-
 /** Ask the runner to start a fresh event stream, beginning with a snapshot. */
-export const ResnapshotCommand = Schema.TaggedStruct("Resnapshot", {
-  commandId: Schema.String
-})
+export const ResnapshotCommand = Schema.TaggedStruct("Resnapshot", {})
 
 /** Ask the runner to release its lease and stop, e.g. because the session was deleted. */
-export const ShutdownCommand = Schema.TaggedStruct("Shutdown", {
-  commandId: Schema.String,
-  reason: Schema.String
-})
+export const ShutdownCommand = Schema.TaggedStruct("Shutdown", { reason: Schema.String })
 
-/** Extension point: commands a plugin understands. Runners reply with an error to unknown names. */
-export const CustomCommand = Schema.TaggedStruct("Custom", {
-  commandId: Schema.String,
-  name: Schema.String,
-  payload: Schema.Json
-})
-
-export const RunnerCommand = Schema.Union([
-  SubmitCommand,
-  AbortCommand,
-  ResnapshotCommand,
-  ShutdownCommand,
-  CustomCommand
-])
+/** What runners execute: every client-facing `SessionCommand`, plus control-plane housekeeping. */
+export const RunnerCommand = Schema.Union([...SessionCommand.members, ResnapshotCommand, ShutdownCommand])
 export type RunnerCommand = typeof RunnerCommand.Type
 
 /** First message of an attachment: the lease and what the runner is hosting. */
@@ -86,14 +57,11 @@ export const LeaseGranted = Schema.TaggedStruct("LeaseGranted", {
   session: Session
 })
 
-export const RunnerMessage = Schema.Union([LeaseGranted, Schema.TaggedStruct("Command", { command: RunnerCommand })])
-export type RunnerMessage = typeof RunnerMessage.Type
-
-export const CommandResult = Schema.Union([
-  Schema.TaggedStruct("Ok", { value: Schema.optional(Schema.Json) }),
-  Schema.TaggedStruct("Err", { tag: Schema.String, message: Schema.String })
+export const RunnerMessage = Schema.Union([
+  LeaseGranted,
+  Schema.TaggedStruct("Command", { commandId: Schema.String, command: RunnerCommand })
 ])
-export type CommandResult = typeof CommandResult.Type
+export type RunnerMessage = typeof RunnerMessage.Type
 
 export class RunnerRpcs extends RpcGroup.make(
   /**

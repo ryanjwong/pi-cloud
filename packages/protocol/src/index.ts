@@ -1,3 +1,5 @@
+export * from "./Channel.ts"
+export * from "./Commands.ts"
 export * from "./Domain.ts"
 export * from "./Errors.ts"
 export * from "./PublicApi.ts"

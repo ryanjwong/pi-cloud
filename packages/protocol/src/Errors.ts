@@ -23,7 +23,7 @@ export class ConversationBusy extends Schema.TaggedError<ConversationBusy>()(
 /** The runner rejected or failed a command. */
 export class CommandFailed extends Schema.TaggedError<CommandFailed>()(
   "CommandFailed",
-  { message: Schema.String },
+  { message: Schema.String, reason: Schema.optional(Schema.String) },
   { httpApiStatus: 500 }
 ) {}
 

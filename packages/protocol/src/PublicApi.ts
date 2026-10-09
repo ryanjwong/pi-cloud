@@ -1,5 +1,6 @@
 import { Schema } from "effect"
 import { HttpApi, HttpApiEndpoint, HttpApiGroup, HttpApiMiddleware, HttpApiSchema, HttpApiSecurity, OpenApi } from "effect/http-api"
+import { SessionCommand, Submitted } from "./Commands.ts"
 import { EventBatch, SessionId, SessionSpec, SessionView, UserContent, WhenBusy } from "./Domain.ts"
 import { CommandFailed, ConversationBusy, RunnerUnavailable, SessionNotFound, Unauthorized } from "./Errors.ts"
 
@@ -29,11 +30,6 @@ export const SubmitMessage = Schema.Struct({
   conversationId: Schema.optional(Schema.Number)
 })
 
-export const Submitted = Schema.Struct({
-  submissionId: Schema.Number,
-  conversationId: Schema.Number
-})
-
 export const EntriesPage = Schema.Struct({
   /** Pi `EntryRecord`s, oldest first. */
   entries: Schema.Array(Schema.Json),
@@ -55,6 +51,16 @@ export class SessionsApi extends HttpApiGroup.make("sessions")
       params: sessionParams,
       payload: SubmitMessage,
       success: Submitted,
+      error: [SessionNotFound, RunnerUnavailable, ConversationBusy, CommandFailed]
+    }),
+    /**
+     * Run any session command (prompt, abort, configure, compact, reset, or a plugin's custom command). The
+     * WebSocket channel at `/v1/sessions/{id}/channel` accepts the same commands.
+     */
+    HttpApiEndpoint.post("command", "/:id/commands", {
+      params: sessionParams,
+      payload: SessionCommand,
+      success: Schema.Struct({ value: Schema.optional(Schema.Json) }),
       error: [SessionNotFound, RunnerUnavailable, ConversationBusy, CommandFailed]
     }),
     HttpApiEndpoint.post("abort", "/:id/abort", {

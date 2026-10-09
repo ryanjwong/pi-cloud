@@ -18,10 +18,12 @@
     "@effect/platform-node": "4.0.2",
     "@pi-cloud/client": "workspace:*",
     "@pi-cloud/control-plane": "workspace:*",
+    "@pi-cloud/core": "workspace:*",
     "@pi-cloud/protocol": "workspace:*",
     "@pi-cloud/runner": "workspace:*",
-    "effect": "4.0.2",
     "@pi-cloud/sandbox": "workspace:*",
-    "@pi-cloud/storage-sqlite": "workspace:*"
+    "@pi-cloud/sandbox-local": "workspace:*",
+    "@pi-cloud/storage-sqlite": "workspace:*",
+    "effect": "4.0.2"
   }
 }

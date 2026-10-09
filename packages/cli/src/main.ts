@@ -2,8 +2,8 @@
 // pi-cloud: a terminal projection of the public API.
 //   PI_CLOUD_URL=http://127.0.0.1:8787 pi-cloud chat --model anthropic/claude-opus-5-5
 import { NodeRuntime } from "@effect/platform-node"
-import { followEvents, PiCloud } from "@pi-cloud/client"
-import { Deferred, Effect, Fiber, Stream } from "effect"
+import { type CommandResult, followEvents, openChannel, PiCloud } from "@pi-cloud/client"
+import { Deferred, Effect, Stream } from "effect"
 import { createInterface } from "node:readline/promises"
 import { parseArgs } from "node:util"
 import { makeRenderer } from "./render.ts"
@@ -33,68 +33,101 @@ const usage = `pi-cloud <command>
 
 const createSession = Effect.gen(function*() {
   const client = yield* PiCloud
-  const [provider, ...modelId] = (flags.model ?? "anthropic/claude-opus-5-5").split("/")
   return yield* client.sessions.create({
     payload: {
       title: flags.title,
       spec: {
-        model: { provider: provider!, modelId: modelId.join("/") },
+        model: parseModel(flags.model ?? "anthropic/claude-opus-5-5"),
         ...(flags.instructions === undefined ? {} : { instructions: flags.instructions })
       }
     }
   })
 })
 
-/** Render a session's live events. */
-const watch = (sessionId: string, options: {
-  readonly history: boolean
-  /** Only render the run that takes the submission made with this request id. */
-  readonly only?: string
-  /** Called when that run ends. */
-  readonly onDone?: () => void
-}) => {
-  const renderEvent = makeRenderer(write)
-  let started = options.only === undefined
-  let mine: number | undefined
-  return followEvents(sessionId).pipe(
-    Stream.runForEach((batch) =>
-      Effect.sync(() => {
-        for (
-          const event of batch.events as ReadonlyArray<{
-            type: string
-            inputs?: ReadonlyArray<number>
-            record?: { id: number; requestId?: string }
-          }>
-        ) {
-          if (event.type === "submission" && event.record?.requestId === options.only) mine = event.record?.id
-          if (event.type === "snapshot" && !options.history) continue
-          if (!started) {
-            if (event.type !== "run_start" || mine === undefined || !event.inputs?.includes(mine)) continue
-            started = true
-          }
-          renderEvent(event)
-          if (event.type === "run_end" && mine !== undefined && event.inputs?.includes(mine)) options.onDone?.()
-        }
-      })
-    )
-  )
+const connection = {
+  url: flags.url ?? process.env.PI_CLOUD_URL ?? "http://127.0.0.1:8787",
+  apiKey: process.env.PI_CLOUD_API_KEY
 }
 
-const send = (sessionId: string, content: string) =>
+const parseModel = (value: string) => {
+  const [provider, ...modelId] = value.split("/")
+  return { provider: provider!, modelId: modelId.join("/") }
+}
+
+/**
+ * Talk to a session over its channel: render its events, send prompts, and wait for each prompt's run to end.
+ * Lines starting with `/` are agent commands.
+ */
+const converse = (sessionId: string, lines: AsyncIterable<string>, options: { readonly history: boolean }) =>
   Effect.gen(function*() {
-    const client = yield* PiCloud
-    const done = yield* Deferred.make<void>()
-    const requestId = crypto.randomUUID()
-    const fiber = yield* Effect.forkChild(watch(sessionId, {
-      history: false,
-      only: requestId,
-      onDone: () => Effect.runSync(Deferred.succeed(done, undefined))
-    }))
-    yield* Effect.sleep(200)
-    yield* client.sessions.submit({ params: { id: sessionId as never }, payload: { content, requestId } })
-    yield* Deferred.await(done)
-    yield* Fiber.interrupt(fiber)
-  })
+    const channel = yield* openChannel({ ...connection, sessionId })
+    const render = makeRenderer(write)
+    let renderedSnapshot = !options.history
+    let awaiting: { requestId: string; submissionId?: number; done: Deferred.Deferred<void> } | undefined
+
+    yield* channel.events.pipe(
+      Stream.runForEach((batch) =>
+        Effect.sync(() => {
+          for (const event of batch.events as ReadonlyArray<{ type: string; [key: string]: any }>) {
+            if (event.type === "snapshot") {
+              if (!renderedSnapshot) render(event)
+              renderedSnapshot = true
+              continue
+            }
+            if (event.type === "submission" && event.record?.requestId === awaiting?.requestId) {
+              awaiting!.submissionId = event.record.id
+            }
+            render(event)
+            if (event.type === "run_end" && awaiting?.submissionId !== undefined && event.inputs?.includes(awaiting.submissionId)) {
+              Effect.runSync(Deferred.succeed(awaiting.done, undefined))
+            }
+          }
+        })
+      ),
+      Effect.forkScoped
+    )
+
+    const report = (result: CommandResult) =>
+      Effect.sync(() => write(result._tag === "Ok" ? "  ok\n" : `  ✗ ${result.tag}: ${result.message}\n`))
+
+    const iterator = lines[Symbol.asyncIterator]()
+    while (true) {
+      const next = yield* Effect.promise(() => iterator.next())
+      if (next.done === true) break
+      const line = next.value.trim()
+      if (line === "") continue
+      if (line === "/quit") break
+      if (line === "/abort") yield* report(yield* channel.command({ _tag: "Abort" }))
+      else if (line === "/compact") yield* report(yield* channel.command({ _tag: "Compact" }))
+      else if (line.startsWith("/reset")) {
+        const handoff = line.slice("/reset".length).trim()
+        yield* report(yield* channel.command({ _tag: "Reset", handoff: handoff || undefined }))
+      } else if (line.startsWith("/model ")) {
+        yield* report(yield* channel.command({ _tag: "Configure", model: parseModel(line.slice(7).trim()) }))
+      } else {
+        const done = yield* Deferred.make<void>()
+        awaiting = { requestId: crypto.randomUUID(), done }
+        const result = yield* channel.command({ _tag: "Prompt", content: line, requestId: awaiting.requestId })
+        if (result._tag === "Err") yield* report(result)
+        else yield* Deferred.await(done)
+      }
+    }
+  }).pipe(Effect.scoped)
+
+/** Lines typed at a prompt (or piped in), until end of input. */
+async function* typed(): AsyncGenerator<string> {
+  const input = createInterface({ input: process.stdin, output: process.stdout, terminal: process.stdin.isTTY })
+  input.setPrompt("› ")
+  input.prompt()
+  for await (const line of input) {
+    yield line
+    input.prompt()
+  }
+}
+
+async function* once(line: string): AsyncGenerator<string> {
+  yield line
+}
 
 const program = Effect.gen(function*() {
   const client = yield* PiCloud
@@ -113,11 +146,14 @@ const program = Effect.gen(function*() {
     case "send": {
       const [id, ...words] = rest
       if (id === undefined || words.length === 0) return write(`${usage}\n`)
-      return yield* send(id, words.join(" "))
+      return yield* converse(id, once(words.join(" ")), { history: false })
     }
     case "tail": {
       if (rest[0] === undefined) return write(`${usage}\n`)
-      return yield* watch(rest[0], { history: true })
+      const render = makeRenderer(write)
+      return yield* followEvents(rest[0]).pipe(
+        Stream.runForEach((batch) => Effect.sync(() => batch.events.forEach((event) => render(event as never))))
+      )
     }
     case "rm": {
       if (rest[0] === undefined) return write(`${usage}\n`)
@@ -125,18 +161,8 @@ const program = Effect.gen(function*() {
     }
     case "chat": {
       const id = rest[0] ?? (yield* createSession).id
-      write(`session ${id}\n`)
-      const { entries } = yield* client.sessions.entries({ params: { id: id as never }, query: { limit: 1000 } })
-      makeRenderer(write)({ type: "snapshot", entries })
-      const input = createInterface({ input: process.stdin, output: process.stdout })
-      while (true) {
-        const line = yield* Effect.promise(() => input.question("› ").catch(() => "/quit"))
-        if (line.trim() === "/quit") break
-        if (line.trim() === "") continue
-        yield* send(id, line)
-      }
-      input.close()
-      return
+      write(`session ${id}  (/model provider/id, /compact, /reset [note], /abort, /quit)\n`)
+      return yield* converse(id, typed(), { history: true })
     }
     default:
       return write(`${usage}\n`)
@@ -144,9 +170,6 @@ const program = Effect.gen(function*() {
 })
 
 program.pipe(
-  Effect.provide(PiCloud.layer({
-    url: flags.url ?? process.env.PI_CLOUD_URL ?? "http://127.0.0.1:8787",
-    apiKey: process.env.PI_CLOUD_API_KEY
-  })),
+  Effect.provide(PiCloud.layer(connection)),
   NodeRuntime.runMain
 )

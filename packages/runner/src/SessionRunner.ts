@@ -188,7 +188,7 @@ export const hostSession = Effect.fnUntraced(function*(
     lastActive = Date.now()
     try {
       switch (command._tag) {
-        case "Submit": {
+        case "Prompt": {
           const target = await conversation(current, command.conversationId)
           const submission = await target.submit({
             type: "input",
@@ -200,6 +200,23 @@ export const hostSession = Effect.fnUntraced(function*(
         }
         case "Abort": {
           await (await conversation(current, command.conversationId)).abort(current.context)
+          return { _tag: "Ok" }
+        }
+        case "Configure": {
+          const target = await conversation(current, command.conversationId)
+          await target.configure({
+            ...(command.model === undefined ? {} : { model: command.model }),
+            ...(command.thinkingLevel === undefined ? {} : { thinkingLevel: command.thinkingLevel as never }),
+            ...(command.instructions === undefined ? {} : { instructions: command.instructions })
+          }, current.context)
+          return { _tag: "Ok" }
+        }
+        case "Compact": {
+          const target = await conversation(current, command.conversationId)
+          return { _tag: "Ok", value: { taskId: await target.compact(command.instructions, current.context) } }
+        }
+        case "Reset": {
+          await (await conversation(current, command.conversationId)).reset(command.handoff, current.context)
           return { _tag: "Ok" }
         }
         case "Resnapshot": {
@@ -225,11 +242,11 @@ export const hostSession = Effect.fnUntraced(function*(
     }
   }
 
-  const handleCommand = (command: RunnerCommand) => {
+  const handleCommand = (commandId: string, command: RunnerCommand) => {
     const current = hosted
     if (current === undefined) return
     void execute(current, command).then((result) =>
-      run(client.Reply({ sessionId, token: current.token, commandId: command.commandId, result })).catch(() => {})
+      run(client.Reply({ sessionId, token: current.token, commandId, result })).catch(() => {})
     )
   }
 
@@ -239,7 +256,7 @@ export const hostSession = Effect.fnUntraced(function*(
       const exit = yield* client.Attach({ sessionId, runnerId, token: hosted?.token }).pipe(
         Stream.runForEach((message) =>
           Effect.promise(async () => {
-            if (message._tag === "Command") return handleCommand(message.command)
+            if (message._tag === "Command") return handleCommand(message.commandId, message.command)
             ttlMs = message.ttlMs
             if (hosted?.token === message.token) return
             // A new lease: whatever we held before may be stale, so start over from storage.

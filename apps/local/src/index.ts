@@ -1,5 +1,6 @@
 import { NodeHttpServer } from "@effect/platform-node"
-import { type ControlPlaneOptions, ControlPlane, RunnerDispatcher } from "@pi-cloud/control-plane"
+import { type ControlPlaneOptions, ControlPlane } from "@pi-cloud/control-plane"
+import { RunnerDispatcher } from "@pi-cloud/core"
 import { RunnerHost, type RunnerHostOptions } from "@pi-cloud/runner"
 import { Effect, Fiber, Layer } from "effect"
 import { HttpRouter } from "effect/http"

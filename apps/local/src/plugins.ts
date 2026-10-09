@@ -3,7 +3,7 @@ import { openaiProvider } from "@earendil-works/pi-ai/providers/openai"
 import { CodingTools } from "@earendil-works/pi-durable/tools"
 import { extensions, modelProviders, type RunnerPlugin } from "@pi-cloud/runner"
 import { sandboxes } from "@pi-cloud/sandbox"
-import { localSandboxes } from "@pi-cloud/sandbox/local"
+import { localSandboxes } from "@pi-cloud/sandbox-local"
 import { join } from "node:path"
 
 /**

@@ -126,11 +126,11 @@ describe("runner reconnects", () => {
       const second = yield* Effect.forkChild(
         rpc.Attach({ sessionId: session.id, runnerId: "flaky", token }).pipe(
           Stream.runForEach((message) =>
-            message._tag === "Command" && message.command._tag === "Submit"
+            message._tag === "Command" && message.command._tag === "Prompt"
               ? rpc.Reply({
                 sessionId: session.id,
                 token,
-                commandId: message.command.commandId,
+                commandId: message.commandId,
                 result: { _tag: "Ok", value: { submissionId: 42, conversationId: 1 } }
               })
               : Effect.void

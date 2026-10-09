@@ -8,7 +8,7 @@
   },
   "dependencies": {
     "@earendil-works/pi-durable": "1.1.0",
-    "@pi-cloud/control-plane": "workspace:*",
+    "@pi-cloud/core": "workspace:*",
     "@pi-cloud/protocol": "workspace:*",
     "effect": "4.0.2"
   }

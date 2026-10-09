@@ -9,14 +9,13 @@ import {
   SessionNotFound
 } from "@pi-cloud/protocol"
 import { type Cause, Context, Deferred, Effect, Layer, Option, Queue, Schedule, Stream } from "effect"
-import { ControlPlaneConfig } from "./Config.ts"
-import { LeaseManager } from "./ports/LeaseManager.ts"
-import { RunnerDispatcher } from "./ports/RunnerDispatcher.ts"
-import { SessionStore } from "./ports/SessionStore.ts"
+import { ControlPlaneConfig, LeaseManager, RunnerDispatcher, SessionStore } from "@pi-cloud/core"
 
-/** A command without its id; `Runners.send` assigns one. */
-export type CommandDraft = RunnerCommand extends infer C ? C extends RunnerCommand ? Omit<C, "commandId"> : never
-  : never
+/** A command on its way to a runner, with the id its reply will carry. */
+interface Envelope {
+  readonly commandId: string
+  readonly command: RunnerCommand
+}
 
 /**
  * Tracks the runner attached to each session and routes commands to it. When a command arrives for a session with
@@ -28,10 +27,10 @@ export class Runners extends Context.Service<Runners, {
     readonly runnerId: string
     readonly token?: string | undefined
   }): Stream.Stream<RunnerMessage, LeaseHeld | SessionNotFound>
-  send(session: Session, command: CommandDraft): Effect.Effect<CommandResult, RunnerUnavailable>
+  send(session: Session, command: RunnerCommand): Effect.Effect<CommandResult, RunnerUnavailable>
   reply(sessionId: string, token: string, commandId: string, result: CommandResult): Effect.Effect<void, LeaseLost>
   /** Queue a command for the session's live runner without waiting for its reply. Does nothing without one. */
-  notify(sessionId: string, command: CommandDraft): Effect.Effect<void>
+  notify(sessionId: string, command: RunnerCommand): Effect.Effect<void>
   /** Ask a session's runner, if any, to stop. */
   shutdown(sessionId: string, reason: string): Effect.Effect<void>
   /** Whether a runner start has been requested and has not attached yet. */
@@ -53,7 +52,7 @@ export class Runners extends Context.Service<Runners, {
       interface Channel {
         readonly token: string
         /** Replaced on every re-attach, so only the newest connection reads commands. */
-        queue: Queue.Queue<RunnerCommand, Cause.Done>
+        queue: Queue.Queue<Envelope, Cause.Done>
         readonly pending: Map<string, Deferred.Deferred<CommandResult>>
       }
       const channels = new Map<string, Channel>()
@@ -91,12 +90,12 @@ export class Runners extends Context.Service<Runners, {
             channel = undefined
           }
           if (channel === undefined) {
-            channel = { token: lease.token, queue: yield* Queue.unbounded<RunnerCommand, Cause.Done>(), pending: new Map() }
+            channel = { token: lease.token, queue: yield* Queue.unbounded<Envelope, Cause.Done>(), pending: new Map() }
             channels.set(input.sessionId, channel)
           } else {
             // The same runner reconnected. End its previous stream and carry over commands it never took.
             const previous = channel.queue
-            channel.queue = yield* Queue.unbounded<RunnerCommand, Cause.Done>()
+            channel.queue = yield* Queue.unbounded<Envelope, Cause.Done>()
             yield* Queue.offerAll(channel.queue, yield* Queue.clear(previous))
             yield* Queue.end(previous)
           }
@@ -114,7 +113,7 @@ export class Runners extends Context.Service<Runners, {
           return Stream.concat(
             Stream.make(granted),
             Stream.fromQueue(channel.queue).pipe(
-              Stream.map((command): RunnerMessage => ({ _tag: "Command", command }))
+              Stream.map(({ command, commandId }): RunnerMessage => ({ _tag: "Command", commandId, command }))
             )
           )
         }))
@@ -152,12 +151,12 @@ export class Runners extends Context.Service<Runners, {
         )
       })
 
-      const send = Effect.fnUntraced(function*(session: Session, draft: CommandDraft) {
+      const send = Effect.fnUntraced(function*(session: Session, command: RunnerCommand) {
         const channel = (yield* liveChannel(session.id)) ?? (yield* awaitRunner(session.id))
         const commandId = crypto.randomUUID()
         const reply = yield* Deferred.make<CommandResult>()
         channel.pending.set(commandId, reply)
-        yield* Queue.offer(channel.queue, { ...draft, commandId } as RunnerCommand)
+        yield* Queue.offer(channel.queue, { commandId, command })
         return yield* Deferred.await(reply).pipe(
           Effect.timeoutOrElse({
             duration: config.commandTimeoutMs,
@@ -175,11 +174,9 @@ export class Runners extends Context.Service<Runners, {
         if (deferred !== undefined) yield* Deferred.succeed(deferred, result)
       })
 
-      const notify = Effect.fnUntraced(function*(sessionId: string, draft: CommandDraft) {
+      const notify = Effect.fnUntraced(function*(sessionId: string, command: RunnerCommand) {
         const channel = yield* liveChannel(sessionId)
-        if (channel !== undefined) {
-          yield* Queue.offer(channel.queue, { ...draft, commandId: crypto.randomUUID() } as RunnerCommand)
-        }
+        if (channel !== undefined) yield* Queue.offer(channel.queue, { commandId: crypto.randomUUID(), command })
       })
 
       // Crash recovery: a lease that expired without a release means its runner died, maybe mid-run. Wake the

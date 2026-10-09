@@ -2,16 +2,11 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context"
 import type { Storage } from "@earendil-works/pi-durable"
 import { RunnerRpcs, type StorageMethod } from "@pi-cloud/protocol"
 import { Effect, Semaphore, Stream } from "effect"
-import { ControlPlaneConfig } from "../Config.ts"
-import { EventHub } from "../ports/EventHub.ts"
-import { LeaseManager } from "../ports/LeaseManager.ts"
-import { storageFailure } from "../ports/SessionStore.ts"
-import { StateStore } from "../ports/StateStore.ts"
+import { ControlPlaneConfig, EventHub, LeaseManager, StateStore, storageFailure } from "@pi-cloud/core"
 import { Runners } from "../Runners.ts"
+import { toJson } from "../Sessions.ts"
 import { RunnerAuth } from "./Auth.ts"
 
-/** Round-trip through JSON: drops `undefined` fields exactly as a serializing backend would. */
-export const toJson = (value: unknown): unknown => value === undefined ? undefined : JSON.parse(JSON.stringify(value))
 
 const call = (storage: Storage, method: StorageMethod, args: ReadonlyArray<unknown>): Promise<unknown> => {
   const fn = (storage as unknown as Record<string, (...args: Array<unknown>) => Promise<unknown>>)[method]

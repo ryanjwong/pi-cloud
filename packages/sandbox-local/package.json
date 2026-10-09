@@ -1,0 +1,14 @@
+{
+  "name": "@pi-cloud/sandbox-local",
+  "version": "0.1.0",
+  "description": "Sandbox provider that uses directories on the runner's machine. No isolation: for development and tests.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@earendil-works/pi-durable": "1.1.0",
+    "@pi-cloud/sandbox": "workspace:*",
+    "effect": "4.0.2"
+  }
+}

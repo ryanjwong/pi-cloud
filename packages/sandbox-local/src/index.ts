@@ -2,7 +2,7 @@ import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node"
 import { Effect } from "effect"
 import { mkdir, rm } from "node:fs/promises"
 import { join, resolve } from "node:path"
-import { SandboxError, type SandboxProvider } from "./Provider.ts"
+import { SandboxError, type SandboxProvider } from "@pi-cloud/sandbox"
 
 const safe = (key: string) => key.replace(/[^a-zA-Z0-9._-]/g, "_")
 

@@ -1,17 +1,15 @@
 {
-  "name": "@pi-cloud/sandbox",
+  "name": "@pi-cloud/core",
   "version": "0.1.0",
-  "description": "Sandboxes for pi-cloud agents: the provider interface and the agent-facing sandbox tools.",
+  "description": "pi-cloud primitives: the interfaces every other layer builds on (sessions, durable state, leases, events, runner dispatch), with in-memory reference implementations.",
   "type": "module",
   "exports": {
     ".": "./src/index.ts"
   },
   "dependencies": {
     "@earendil-works/chord": "1.1.0",
-    "@earendil-works/pi-ai": "1.1.0",
     "@earendil-works/pi-durable": "1.1.0",
     "@pi-cloud/protocol": "workspace:*",
-    "@pi-cloud/runner": "workspace:*",
     "effect": "4.0.2"
   }
 }

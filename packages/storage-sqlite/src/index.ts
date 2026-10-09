@@ -1,5 +1,5 @@
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node"
-import { SessionStore, StateStore } from "@pi-cloud/control-plane"
+import { SessionStore, StateStore } from "@pi-cloud/core"
 import { Session, SessionId, StorageFailure } from "@pi-cloud/protocol"
 import { Effect, Layer, Option, Schema } from "effect"
 import { mkdirSync } from "node:fs"

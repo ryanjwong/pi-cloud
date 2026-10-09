@@ -43,25 +43,52 @@ Written in TypeScript with [Effect](https://effect.website) 4; the Cloudflare de
 
 ## Packages
 
-| Package | What it is |
-|---|---|
-| `@pi-cloud/protocol` | Wire contracts: domain schemas, the public `HttpApi`, the runner `RpcGroup`, the wake request. |
-| `@pi-cloud/control-plane` | The control plane: ports, in-memory defaults, public API and runner RPC handlers. `./node` serves it on Node; `ControlPlane.toWebHandler` serves it on fetch-style runtimes. |
-| `@pi-cloud/runner` | Hosts sessions: `RemoteStorage`, the session runner, `RunnerHost` with a fetch-style wake handler, and the plugin API. Uses only `fetch`. |
-| `@pi-cloud/sandbox` | The `SandboxProvider` interface, the agent's `sandbox_create`/`sandbox_destroy` tools, and `./local` (directories on the runner's machine). |
-| `@pi-cloud/storage-sqlite` | SQLite `StateStore` (Pi's own SQLite storage, one file per session) and `SessionStore` for Node. |
-| `@pi-cloud/client` | Typed client derived from the API, plus `followEvents` (reconnecting, resuming event stream). |
-| `@pi-cloud/cli` | `pi-cloud` terminal client: `new`, `ls`, `chat`, `send`, `tail`, `rm`. |
-| `apps/local` | Control plane and runner in one process (`main.ts`), or split (`control-plane.ts`, `runner.ts`). The tests live here. |
-| `apps/cloudflare` | Runner host on Cloudflare: a Worker routes wake requests to one Durable Object per session. Deployed with Alchemy. |
+The workspace is a stack of small libraries, each building on the ones below it, the way Pi's own packages do
+(`pi-ai` → `pi-durable` → the coding agent). Nothing reaches upward, and every substrate-specific piece is a leaf.
+
+| Layer | Package | What it is |
+|---|---|---|
+| Contracts | `@pi-cloud/protocol` | Wire contracts only: domain schemas, `SessionCommand`s, the public `HttpApi`, the session channel messages, the runner `RpcGroup`. |
+| Primitives | `@pi-cloud/core` | The interfaces everything else builds on (`SessionStore`, `StateStore`, `LeaseManager`, `EventHub`, `RunnerDispatcher`) with in-memory reference implementations. No I/O. |
+| Control plane | `@pi-cloud/control-plane` | Composes `core` into `Sessions` (the one programmatic API) and serves it as REST, the WebSocket channel, and the runner RPC. `./node` serves it on Node; `ControlPlane.toWebHandler` on fetch-style runtimes. |
+| Runtime | `@pi-cloud/runner` | Hosts Pi Durable against the control plane: `RemoteStorage`, the session runner, `RunnerHost` with a fetch-style wake handler, and the plugin API. Uses only `fetch`. |
+| Capabilities | `@pi-cloud/sandbox` | The `SandboxProvider` interface and the agent's `sandbox_create`/`sandbox_destroy` tools, as a runner plugin. |
+| Adapters | `@pi-cloud/sandbox-local` | Sandboxes as directories on the runner's machine. |
+| | `@pi-cloud/storage-sqlite` | SQLite `StateStore` (Pi's own SQLite storage, one file per session) and `SessionStore`, for Node. |
+| Clients | `@pi-cloud/client` | Typed REST client derived from the API, `followEvents` (reconnecting event stream), and `openChannel` (the WebSocket channel). |
+| | `@pi-cloud/cli` | `pi-cloud` terminal client: `new`, `ls`, `chat`, `send`, `tail`, `rm`. Chat runs over the channel. |
+| Apps | `apps/local` | Control plane and runner in one process (`main.ts`), or split (`control-plane.ts`, `runner.ts`). The end-to-end tests live here. |
+| | `apps/cloudflare` | Runner host on Cloudflare: a Worker routes wake requests to one Durable Object per session. Deployed with Alchemy. |
+
+## Talking to a session
+
+Every surface accepts the same `SessionCommand`s: `Prompt` (with `whenBusy`: `followUp`, `steer`, `reject`),
+`Abort`, `Configure` (model, thinking level, instructions), `Compact`, `Reset`, and `Custom` (handled by a runner
+plugin). Every surface reads the same Pi agent events (`message_start`, `message_update`, `tool_execution_*`,
+`run_end`, ...).
+
+- **WebSocket channel**, `GET /v1/sessions/{id}/channel`: send `{"_tag":"Command","id","command"}`, receive
+  `{"_tag":"Events","batch"}` and `{"_tag":"Result","id","result"}` on the same socket. This is what interactive
+  surfaces (TUIs, web UIs, chat bridges) use. Resume with `?after=<epoch>:<seq>`; authenticate with a bearer header
+  or `?token=`.
+- **REST**: `POST /v1/sessions/{id}/commands` runs any command; `/messages` and `/abort` are shortcuts.
+  `GET /v1/sessions/{id}/events` streams events as server-sent events. Transcript and submission reads come
+  straight from the state store, with or without a running runner.
+- **OpenAPI** at `/openapi.json`, browsable docs at `/docs`, generated from the same definition the server and the
+  typed client use. The channel's message schemas live in `@pi-cloud/protocol` (`Channel.ts`).
 
 ## Running it
 
-Requires Node 22.19+ and pnpm. Packages run as TypeScript directly (Node strips the types).
+Requires Node 22.19+ and pnpm, or Nix. Packages run as TypeScript directly (Node strips the types).
 
 ```sh
+nix develop        # dev shell with Node 22 and pnpm (optional)
+nix run            # or build and run the all-in-one server; also .#cli, .#control-plane, .#runner
+nix flake check    # typecheck and tests in the Nix sandbox
+                   # (nix run / flake check need the pnpm dependency hash in flake.nix filled in once)
+
 pnpm install
-pnpm test          # storage conformance, end to end, crash recovery, fencing, reconnects, sandboxes, restart, split deployment
+pnpm test          # conformance, end to end, channel, crash recovery, fencing, reconnects, sandboxes, restart, split
 pnpm typecheck
 
 # Everything in one process, state in apps/local/.data (set DATA_DIR to change)
@@ -88,7 +115,7 @@ keys set, then point the control plane's `RUNNER_URL` at the printed Worker URL.
 
 Everything substrate-specific is behind an interface you can replace.
 
-**Control plane ports** are Effect services; pass your own layer to `ControlPlane.layer`:
+**Control plane services** are Effect services from `@pi-cloud/core`; pass your own layer to `ControlPlane.layer`:
 
 ```ts
 ControlPlane.layer({
@@ -97,8 +124,23 @@ ControlPlane.layer({
   state: StateStore.fromOpener({ open: (sessionId) => openMyStorage(sessionId) }),
   sessions: mySessionStore,   // Layer<SessionStore>
   leases: myLeaseManager,     // Layer<LeaseManager>
-  events: myEventHub          // Layer<EventHub>
+  events: myEventHub,         // Layer<EventHub>
+  clientAuth: myAuth,         // Layer<ClientAuth>, used by REST and the channel alike
+  extensions: [slackBridge]   // extra routes built on the Sessions service
 })
+```
+
+**Extensions** are layers that add routes on top of the `Sessions` service. They are where hosted sources (a
+Slack bridge: inbound webhooks become `Prompt`s, events become replies) and event triggers (a GitHub webhook that
+wakes a session) plug in, without touching the control plane:
+
+```ts
+const githubTrigger: Extension = Layer.effectDiscard(Effect.gen(function*() {
+  const router = yield* HttpRouter.HttpRouter
+  const sessions = yield* Sessions
+  // handleGithubHook verifies the signature, picks a session, and calls sessions.command(id, { _tag: "Prompt", ... })
+  yield* router.add("POST", "/hooks/github", handleGithubHook(sessions))
+}))
 ```
 
 A state backend is any Pi Durable `Storage`. Check it with Pi's conformance suite
