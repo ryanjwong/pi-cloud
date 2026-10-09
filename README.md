@@ -49,12 +49,16 @@ The workspace is a stack of small libraries, each building on the ones below it,
 | Layer | Package | What it is |
 |---|---|---|
 | Contracts | `@pi-cloud/protocol` | Wire contracts only: domain schemas, `SessionCommand`s, the public `HttpApi`, the session channel messages, the runner `RpcGroup`. |
-| Primitives | `@pi-cloud/core` | The interfaces everything else builds on (`SessionStore`, `StateStore`, `LeaseManager`, `EventHub`, `RunnerDispatcher`) with in-memory reference implementations. No I/O. |
+| Primitives | `@pi-cloud/core` | The interfaces everything else builds on (`SessionStore`, `StateStore`, `LeaseManager`, `EventHub`, `RunnerDispatcher`, `BindingStore`) with in-memory reference implementations. No I/O. |
 | Control plane | `@pi-cloud/control-plane` | Composes `core` into `Sessions` (the one programmatic API) and serves it as REST, the WebSocket channel, and the runner RPC. `./node` serves it on Node; `ControlPlane.toWebHandler` on fetch-style runtimes. |
 | Runtime | `@pi-cloud/runner` | Hosts Pi Durable against the control plane: `RemoteStorage`, the session runner, `RunnerHost` with a fetch-style wake handler, and the plugin API. Uses only `fetch`. |
 | Capabilities | `@pi-cloud/sandbox` | The `SandboxProvider` interface and the agent's `sandbox_create`/`sandbox_destroy` tools, as a runner plugin. |
+| | `@pi-cloud/triggers` | One-way events: the `Trigger` interface, a generic signed JSON webhook, and the extension that mounts triggers. |
+| | `@pi-cloud/sources` | Two-way connections: the `Source` interface (receive messages, deliver replies) and the extension that runs them. |
 | Adapters | `@pi-cloud/sandbox-local` | Sandboxes as directories on the runner's machine. |
-| | `@pi-cloud/storage-sqlite` | SQLite `StateStore` (Pi's own SQLite storage, one file per session) and `SessionStore`, for Node. |
+| | `@pi-cloud/trigger-github` | GitHub webhooks: issues, comments, pull requests and reviews reach the session of their thread. |
+| | `@pi-cloud/source-slack` | Slack: each thread is a session; mentions and thread replies go in, answers are posted in the thread. |
+| | `@pi-cloud/storage-sqlite` | SQLite `StateStore` (Pi's own SQLite storage, one file per session), `SessionStore` and `BindingStore`, for Node. |
 | Clients | `@pi-cloud/client` | Typed REST client derived from the API, `followEvents` (reconnecting event stream), and `openChannel` (the WebSocket channel). |
 | | `@pi-cloud/cli` | `pi-cloud` terminal client: `new`, `ls`, `chat`, `send`, `tail`, `rm`. Chat runs over the channel. |
 | Apps | `apps/local` | Control plane and runner in one process (`main.ts`), or split (`control-plane.ts`, `runner.ts`). The end-to-end tests live here. |
@@ -76,6 +80,38 @@ plugin). Every surface reads the same Pi agent events (`message_start`, `message
   straight from the state store, with or without a running runner.
 - **OpenAPI** at `/openapi.json`, browsable docs at `/docs`, generated from the same definition the server and the
   typed client use. The channel's message schemas live in `@pi-cloud/protocol` (`Channel.ts`).
+
+## Sources and triggers
+
+The control plane talks to the outside world in two shapes, both built as extensions on `Sessions`:
+
+- **Triggers** are one-way. A webhook arrives, is verified, and becomes events, each about one external thing
+  (`github:acme/api#42`). The event becomes a prompt for that thing's session, which is created on first use and
+  woken if idle. The session cannot answer through a trigger; to act it uses tools (comment on the PR, update the
+  ticket). Mounted at `POST /v1/triggers/{name}`.
+- **Sources** are two-way. Inbound messages become prompts exactly like triggers, and every new assistant message in
+  the session is delivered back to where the conversation lives (the Slack thread). Mounted at
+  `POST /v1/sources/{name}`.
+
+A **binding** ties an external key to its session (and, for sources, to the reply target and the newest delivered
+reply), so redelivered webhooks are deduplicated, the same thread always reaches the same session, and replies are
+sent once even across restarts.
+
+```ts
+ControlPlane.layer({
+  // ...
+  bindings: sqliteBindings({ file: "data/sessions.sqlite" }),
+  extensions: [
+    triggers([githubTrigger({ secret, mention: "@pi", spec: { model, sandboxes: { repo: cloneTemplate } } })]),
+    sources([slackSource({ signingSecret, botToken, spec: { model } })])
+  ]
+})
+```
+
+Writing another one means implementing a small interface: a `Trigger` is a name and
+`handle(request) → events`; a `Source` adds `deliver(target, reply)`. Signature helpers (`hmacSha256Hex`,
+`safeEqual`, `verifyHmac`) use Web Crypto, so connectors run on any runtime. The local servers enable GitHub with
+`GITHUB_WEBHOOK_SECRET` (and `GITHUB_MENTION`), Slack with `SLACK_SIGNING_SECRET` and `SLACK_BOT_TOKEN`.
 
 ## Running it
 
@@ -198,6 +234,8 @@ renderer; a web UI or Slack bot is another renderer over `followEvents`.
 - **One control-plane process.** The default `LeaseManager`, `EventHub`, and runner channels live in memory.
   Running several control-plane instances needs a shared `LeaseManager` whose check is atomic with the state
   store's commit, plus a shared event hub.
+- **Source followers live in the control plane process.** With several control-plane instances, each would deliver
+  replies; that needs the same shared coordination as leases.
 - **Event replay is bounded.** A client that joins late gets the newest snapshot and the batches since it. A
   reconnect with `?after=<epoch>:<seq>` resumes without a snapshot while the gap is still buffered. For the full
   history, read `/entries`.

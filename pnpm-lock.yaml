@@ -90,9 +90,21 @@ importers:
       '@pi-cloud/sandbox-local':
         specifier: workspace:*
         version: link:../../packages/sandbox-local
+      '@pi-cloud/source-slack':
+        specifier: workspace:*
+        version: link:../../packages/source-slack
+      '@pi-cloud/sources':
+        specifier: workspace:*
+        version: link:../../packages/sources
       '@pi-cloud/storage-sqlite':
         specifier: workspace:*
         version: link:../../packages/storage-sqlite
+      '@pi-cloud/trigger-github':
+        specifier: workspace:*
+        version: link:../../packages/trigger-github
+      '@pi-cloud/triggers':
+        specifier: workspace:*
+        version: link:../../packages/triggers
       effect:
         specifier: 4.0.2
         version: 4.0.2
@@ -212,11 +224,74 @@ importers:
         specifier: 4.0.2
         version: 4.0.2
 
+  packages/source-slack:
+    dependencies:
+      '@pi-cloud/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+      '@pi-cloud/sources':
+        specifier: workspace:*
+        version: link:../sources
+      '@pi-cloud/triggers':
+        specifier: workspace:*
+        version: link:../triggers
+      effect:
+        specifier: 4.0.2
+        version: 4.0.2
+
+  packages/sources:
+    dependencies:
+      '@earendil-works/chord':
+        specifier: 1.1.0
+        version: 1.1.0
+      '@pi-cloud/control-plane':
+        specifier: workspace:*
+        version: link:../control-plane
+      '@pi-cloud/core':
+        specifier: workspace:*
+        version: link:../core
+      '@pi-cloud/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+      '@pi-cloud/triggers':
+        specifier: workspace:*
+        version: link:../triggers
+      effect:
+        specifier: 4.0.2
+        version: 4.0.2
+
   packages/storage-sqlite:
     dependencies:
       '@earendil-works/pi-durable':
         specifier: 1.1.0
         version: 1.1.0(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(undici@8.11.2)(ws@8.22.0)
+      '@pi-cloud/core':
+        specifier: workspace:*
+        version: link:../core
+      '@pi-cloud/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+      effect:
+        specifier: 4.0.2
+        version: 4.0.2
+
+  packages/trigger-github:
+    dependencies:
+      '@pi-cloud/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+      '@pi-cloud/triggers':
+        specifier: workspace:*
+        version: link:../triggers
+      effect:
+        specifier: 4.0.2
+        version: 4.0.2
+
+  packages/triggers:
+    dependencies:
+      '@pi-cloud/control-plane':
+        specifier: workspace:*
+        version: link:../control-plane
       '@pi-cloud/core':
         specifier: workspace:*
         version: link:../core

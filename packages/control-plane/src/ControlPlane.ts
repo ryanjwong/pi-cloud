@@ -1,4 +1,5 @@
 import {
+  BindingStore,
   ControlPlaneConfig,
   type ControlPlaneSettings,
   EventHub,
@@ -24,7 +25,7 @@ import { Sessions } from "./Sessions.ts"
  * events) and add HTTP routes. This is where hosted sources (a Slack bridge) and event triggers (a GitHub webhook)
  * plug in.
  */
-export type Extension = Layer.Layer<never, never, HttpRouter.HttpRouter | Sessions>
+export type Extension = Layer.Layer<never, never, HttpRouter.HttpRouter | Sessions | BindingStore>
 
 /**
  * Every HTTP route of the control plane, given its services:
@@ -67,6 +68,8 @@ export interface ControlPlaneOptions {
   readonly leases?: Layer.Layer<LeaseManager>
   /** Defaults to an in-memory hub. */
   readonly events?: Layer.Layer<EventHub>
+  /** Defaults to bindings in memory. */
+  readonly bindings?: Layer.Layer<BindingStore>
   /** Extra routes built on `Sessions`: hosted sources, event triggers, admin endpoints, ... */
   readonly extensions?: ReadonlyArray<Extension>
 }
@@ -83,6 +86,7 @@ export const layer = (options: ControlPlaneOptions) => {
       options.state ?? StateStore.memory,
       options.leases ?? LeaseManager.memory({ ttlMs }),
       options.events ?? EventHub.memory({ logLimit }),
+      options.bindings ?? BindingStore.memory,
       RunnerAuth.sharedSecret(options.runnerSecret),
       options.clientAuth ?? ClientAuth.apiKeys(options.apiKeys),
       config

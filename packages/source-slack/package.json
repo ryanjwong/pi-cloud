@@ -1,0 +1,15 @@
+{
+  "name": "@pi-cloud/source-slack",
+  "version": "0.1.0",
+  "description": "Slack source for pi-cloud: each thread is a session; mentions and thread replies go in, the agent answers in the thread.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@pi-cloud/protocol": "workspace:*",
+    "@pi-cloud/sources": "workspace:*",
+    "@pi-cloud/triggers": "workspace:*",
+    "effect": "4.0.2"
+  }
+}

@@ -1,7 +1,8 @@
 // All-in-one: control plane and runner in one process, state in SQLite under DATA_DIR.
 //   node src/main.ts
-import { sqliteSessions, sqliteState } from "@pi-cloud/storage-sqlite"
+import { sqliteBindings, sqliteSessions, sqliteState } from "@pi-cloud/storage-sqlite"
 import { join, resolve } from "node:path"
+import { connectorsFromEnv } from "./connectors.ts"
 import { startLocal } from "./index.ts"
 import { defaultPlugins } from "./plugins.ts"
 
@@ -16,6 +17,8 @@ const deployment = await startLocal({
   runnerSecret: process.env.PI_CLOUD_RUNNER_SECRET,
   sessions: sqliteSessions({ file: join(dataDir, "sessions.sqlite") }),
   state: sqliteState({ directory: join(dataDir, "state") }),
+  bindings: sqliteBindings({ file: join(dataDir, "sessions.sqlite") }),
+  extensions: connectorsFromEnv(),
   runner: { plugins: defaultPlugins(dataDir) }
 })
 

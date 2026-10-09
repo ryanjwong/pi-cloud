@@ -23,7 +23,11 @@
     "@pi-cloud/runner": "workspace:*",
     "@pi-cloud/sandbox": "workspace:*",
     "@pi-cloud/sandbox-local": "workspace:*",
+    "@pi-cloud/source-slack": "workspace:*",
+    "@pi-cloud/sources": "workspace:*",
     "@pi-cloud/storage-sqlite": "workspace:*",
+    "@pi-cloud/trigger-github": "workspace:*",
+    "@pi-cloud/triggers": "workspace:*",
     "effect": "4.0.2"
   }
 }

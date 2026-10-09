@@ -1,0 +1,17 @@
+{
+  "name": "@pi-cloud/sources",
+  "version": "0.1.0",
+  "description": "Two-way connections for pi-cloud: messages from a chat or tool become prompts, and the agent's replies go back where they came from.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@earendil-works/chord": "1.1.0",
+    "@pi-cloud/control-plane": "workspace:*",
+    "@pi-cloud/core": "workspace:*",
+    "@pi-cloud/protocol": "workspace:*",
+    "@pi-cloud/triggers": "workspace:*",
+    "effect": "4.0.2"
+  }
+}

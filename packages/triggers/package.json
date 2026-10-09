@@ -1,0 +1,15 @@
+{
+  "name": "@pi-cloud/triggers",
+  "version": "0.1.0",
+  "description": "One-way events for pi-cloud: webhooks that wake or create the session they are about.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@pi-cloud/control-plane": "workspace:*",
+    "@pi-cloud/core": "workspace:*",
+    "@pi-cloud/protocol": "workspace:*",
+    "effect": "4.0.2"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "name": "@pi-cloud/trigger-github",
+  "version": "0.1.0",
+  "description": "GitHub webhook trigger for pi-cloud: issues, comments and pull requests reach the session bound to their thread.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@pi-cloud/protocol": "workspace:*",
+    "@pi-cloud/triggers": "workspace:*",
+    "effect": "4.0.2"
+  }
+}

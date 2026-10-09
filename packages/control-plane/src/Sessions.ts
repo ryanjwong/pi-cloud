@@ -6,7 +6,17 @@ import {
   type Storage,
   type SubmissionId
 } from "@earendil-works/pi-durable"
-import { EventHub, LeaseManager, SessionStore, StateStore, storageFailure, type StreamPosition } from "@pi-cloud/core"
+import type { JsonValue } from "@earendil-works/chord"
+import {
+  type Binding,
+  BindingStore,
+  EventHub,
+  LeaseManager,
+  SessionStore,
+  StateStore,
+  storageFailure,
+  type StreamPosition
+} from "@pi-cloud/core"
 import {
   CommandFailed,
   type CommandResult,
@@ -20,7 +30,7 @@ import {
   type SessionSpec,
   type SessionView
 } from "@pi-cloud/protocol"
-import { Clock, Context, Effect, Layer, Option, type Stream } from "effect"
+import { Clock, Context, Effect, Layer, Option, Semaphore, type Stream } from "effect"
 import { Runners } from "./Runners.ts"
 
 /** Round-trip through JSON: drops `undefined` fields exactly as a serializing backend would. */
@@ -30,6 +40,15 @@ const encodeCursor = (cursor: Cursor) => Buffer.from(JSON.stringify(cursor)).toS
 const decodeCursor = (cursor: string): Cursor => JSON.parse(Buffer.from(cursor, "base64url").toString("utf8"))
 
 export type CommandError = SessionNotFound | RunnerUnavailable | ConversationBusy | CommandFailed
+
+/** How to create and bind a session for a key that has none yet. */
+export interface BindingInit {
+  readonly title?: string | undefined
+  readonly spec?: SessionSpec | undefined
+  /** The source that replies on this binding, and where. */
+  readonly source?: string | undefined
+  readonly target?: JsonValue | undefined
+}
 
 /**
  * Everything you can do with sessions, as one service. The REST API, the WebSocket channel, and any source
@@ -52,12 +71,17 @@ export class Sessions extends Context.Service<Sessions, {
     readonly cursor?: string | undefined
   }): Effect.Effect<{ readonly entries: ReadonlyArray<unknown>; readonly next?: string | undefined }, SessionNotFound>
   conversations(id: string): Effect.Effect<ReadonlyArray<unknown>, SessionNotFound>
+  /**
+   * The session bound to an external key (a pull request, a chat thread, ...), creating and binding one on first
+   * use. Calls for the same key are serialized, so concurrent events cannot create two sessions.
+   */
+  forKey(key: string, init: BindingInit): Effect.Effect<{ readonly binding: Binding; readonly created: boolean }>
   submission(id: string, submissionId: number): Effect.Effect<unknown, SessionNotFound>
 }>()("@pi-cloud/control-plane/Sessions") {
   static readonly layer: Layer.Layer<
     Sessions,
     never,
-    SessionStore | StateStore | LeaseManager | EventHub | Runners
+    SessionStore | StateStore | LeaseManager | EventHub | BindingStore | Runners
   > = Layer.effect(
     Sessions,
     Effect.gen(function*() {
@@ -66,6 +90,16 @@ export class Sessions extends Context.Service<Sessions, {
       const leases = yield* LeaseManager
       const runners = yield* Runners
       const hub = yield* EventHub
+      const bindings = yield* BindingStore
+      const keyLocks = new Map<string, Semaphore.Semaphore>()
+      const keyLock = (key: string) => {
+        let lock = keyLocks.get(key)
+        if (lock === undefined) {
+          lock = Semaphore.makeUnsafe(1)
+          keyLocks.set(key, lock)
+        }
+        return lock
+      }
 
       const find = Effect.fnUntraced(function*(id: string) {
         const session = yield* store.get(id as SessionId).pipe(Effect.orDie)
@@ -102,17 +136,40 @@ export class Sessions extends Context.Service<Sessions, {
         }
       }
 
-      return Sessions.of({
-        create: Effect.fnUntraced(function*(input) {
-          const session = new Session({
-            id: SessionId.make(`ses_${crypto.randomUUID().replaceAll("-", "")}`),
-            title: input.title,
-            spec: input.spec ?? {},
+      const create = Effect.fnUntraced(function*(input: { readonly title?: string | undefined; readonly spec?: SessionSpec | undefined }) {
+        const session = new Session({
+          id: SessionId.make(`ses_${crypto.randomUUID().replaceAll("-", "")}`),
+          title: input.title,
+          spec: input.spec ?? {},
+          createdAt: yield* Clock.currentTimeMillis
+        })
+        yield* store.put(session).pipe(Effect.orDie)
+        return yield* view(session)
+      })
+
+      const forKey = (key: string, init: BindingInit) =>
+        keyLock(key).withPermits(1)(Effect.gen(function*() {
+          const existing = yield* bindings.get(key).pipe(Effect.orDie)
+          if (Option.isSome(existing)) {
+            const alive = yield* store.get(existing.value.sessionId as SessionId).pipe(Effect.orDie)
+            if (Option.isSome(alive)) return { binding: existing.value, created: false }
+          }
+          const session = yield* create({ title: init.title ?? key, spec: init.spec })
+          const binding: Binding = {
+            key,
+            sessionId: session.id,
+            source: init.source,
+            target: init.target,
+            delivered: 0,
             createdAt: yield* Clock.currentTimeMillis
-          })
-          yield* store.put(session).pipe(Effect.orDie)
-          return yield* view(session)
-        }),
+          }
+          yield* bindings.put(binding).pipe(Effect.orDie)
+          return { binding, created: true }
+        }))
+
+      return Sessions.of({
+        create,
+        forKey,
         list: () => store.list().pipe(Effect.orDie, Effect.flatMap((all) => Effect.forEach(all, view))),
         get: (id) => Effect.flatMap(find(id), view),
         remove: Effect.fnUntraced(function*(id) {
@@ -122,6 +179,9 @@ export class Sessions extends Context.Service<Sessions, {
           yield* hub.remove(id)
           yield* states.remove(id).pipe(Effect.orDie)
           yield* store.remove(id as SessionId).pipe(Effect.orDie)
+          for (const binding of yield* bindings.list().pipe(Effect.orDie)) {
+            if (binding.sessionId === id) yield* bindings.remove(binding.key).pipe(Effect.orDie)
+          }
         }),
         command: Effect.fnUntraced(function*(id, command) {
           const session = yield* find(id)
@@ -130,8 +190,11 @@ export class Sessions extends Context.Service<Sessions, {
         events: (id, after) => Effect.map(find(id), () => hub.subscribe(id, after)),
         entries: (id, query) =>
           read(id, async (storage) => {
+            const conversationId = (query.conversationId ?? ROOT_CONVERSATION_ID) as ConversationId
+            // A session no runner has opened yet has no conversations: its transcript is simply empty.
+            if ((await storage.conversation(conversationId, BACKGROUND_CONTEXT)) === undefined) return { entries: [] }
             const page = await storage.scanEntries(
-              { conversationId: (query.conversationId ?? ROOT_CONVERSATION_ID) as ConversationId, order: "ascending" },
+              { conversationId, order: "ascending" },
               Math.min(query.limit ?? 100, 1000),
               query.cursor === undefined ? undefined : decodeCursor(query.cursor),
               BACKGROUND_CONTEXT

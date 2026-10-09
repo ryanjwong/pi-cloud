@@ -3,10 +3,11 @@
 import { NodeRuntime } from "@effect/platform-node"
 import { RunnerDispatcher } from "@pi-cloud/core"
 import { serve } from "@pi-cloud/control-plane/node"
-import { sqliteSessions, sqliteState } from "@pi-cloud/storage-sqlite"
+import { sqliteBindings, sqliteSessions, sqliteState } from "@pi-cloud/storage-sqlite"
 import { Layer } from "effect"
 import { FetchHttpClient } from "effect/http"
 import { join, resolve } from "node:path"
+import { connectorsFromEnv } from "./connectors.ts"
 
 const port = Number(process.env.PORT ?? 8787)
 const dataDir = resolve(process.env.DATA_DIR ?? ".data")
@@ -22,5 +23,7 @@ Layer.launch(serve({
   runnerSecret,
   sessions: sqliteSessions({ file: join(dataDir, "sessions.sqlite") }),
   state: sqliteState({ directory: join(dataDir, "state") }),
+  bindings: sqliteBindings({ file: join(dataDir, "sessions.sqlite") }),
+  extensions: connectorsFromEnv(),
   dispatcher: RunnerDispatcher.http({ url: runnerUrl, secret: runnerSecret }).pipe(Layer.provide(FetchHttpClient.layer))
 })).pipe(NodeRuntime.runMain)
