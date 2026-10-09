@@ -11,5 +11,8 @@
     "@pi-cloud/core": "workspace:*",
     "@pi-cloud/protocol": "workspace:*",
     "effect": "4.0.2"
+  },
+  "scripts": {
+    "test": "vitest run"
   }
 }
