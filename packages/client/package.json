@@ -1,0 +1,13 @@
+{
+  "name": "@pi-cloud/client",
+  "version": "0.1.0",
+  "description": "Typed client for the pi-cloud public API. Build TUIs, web UIs, Slack bots, ... on top of it.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@pi-cloud/protocol": "workspace:*",
+    "effect": "4.0.2"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "@pi-cloud/cli",
+  "version": "0.1.0",
+  "description": "Terminal client for pi-cloud: create sessions, chat, and watch events.",
+  "type": "module",
+  "bin": {
+    "pi-cloud": "./src/main.ts"
+  },
+  "exports": {
+    ".": "./src/render.ts"
+  },
+  "dependencies": {
+    "@pi-cloud/client": "workspace:*",
+    "@effect/platform-node": "4.0.2",
+    "effect": "4.0.2"
+  }
+}

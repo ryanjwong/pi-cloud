@@ -1,0 +1,19 @@
+{
+  "name": "@pi-cloud/runner",
+  "version": "0.1.0",
+  "description": "Hosts pi-cloud sessions: runs Pi Durable against the control plane's fenced storage, on any substrate with outbound HTTP.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@earendil-works/chord": "1.1.0",
+    "@earendil-works/pi-ai": "1.1.0",
+    "@earendil-works/pi-durable": "1.1.0",
+    "@pi-cloud/protocol": "workspace:*",
+    "effect": "4.0.2"
+  },
+  "scripts": {
+    "test": "vitest run"
+  }
+}

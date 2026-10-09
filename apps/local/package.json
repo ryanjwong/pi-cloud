@@ -1,0 +1,27 @@
+{
+  "name": "@pi-cloud/local",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Control plane and runner in one Node process, connected over HTTP like any other deployment.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "start": "node src/main.ts",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@earendil-works/chord": "1.1.0",
+    "@earendil-works/pi-ai": "1.1.0",
+    "@earendil-works/pi-durable": "1.1.0",
+    "@effect/platform-node": "4.0.2",
+    "@pi-cloud/client": "workspace:*",
+    "@pi-cloud/control-plane": "workspace:*",
+    "@pi-cloud/protocol": "workspace:*",
+    "@pi-cloud/runner": "workspace:*",
+    "effect": "4.0.2",
+    "@pi-cloud/sandbox": "workspace:*",
+    "@pi-cloud/storage-sqlite": "workspace:*"
+  }
+}

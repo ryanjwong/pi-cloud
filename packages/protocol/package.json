@@ -1,0 +1,12 @@
+{
+  "name": "@pi-cloud/protocol",
+  "version": "0.1.0",
+  "description": "Wire contracts shared by every pi-cloud component: domain schemas, the public HTTP API, and the runner RPC.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "effect": "4.0.2"
+  }
+}

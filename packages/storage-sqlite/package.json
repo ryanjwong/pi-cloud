@@ -1,0 +1,15 @@
+{
+  "name": "@pi-cloud/storage-sqlite",
+  "version": "0.1.0",
+  "description": "SQLite-backed control plane stores for Node: Pi state per session and the session registry.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@earendil-works/pi-durable": "1.1.0",
+    "@pi-cloud/control-plane": "workspace:*",
+    "@pi-cloud/protocol": "workspace:*",
+    "effect": "4.0.2"
+  }
+}

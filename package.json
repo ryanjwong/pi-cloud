@@ -1,0 +1,27 @@
+{
+  "name": "pi-cloud",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.28.0",
+  "dependencies": {
+    "@earendil-works/chord": "1.1.0",
+    "@earendil-works/pi-ai": "1.1.0",
+    "@earendil-works/pi-durable": "1.1.0",
+    "@effect/platform-node": "4.0.2",
+    "effect": "4.0.2"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.4",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.3"
+  },
+  "scripts": {
+    "typecheck": "pnpm -r --workspace-concurrency=1 exec tsc -p .",
+    "test": "pnpm -r --if-present test",
+    "start": "pnpm --filter @pi-cloud/local start",
+    "cli": "node packages/cli/src/main.ts"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  }
+}
