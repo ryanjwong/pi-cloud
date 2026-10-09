@@ -18,6 +18,8 @@
     "@pi-cloud/client": "workspace:*",
     "@pi-cloud/protocol": "workspace:*",
     "@pi-cloud/workspace": "workspace:*",
-    "effect": "4.0.2"
+    "effect": "4.0.2",
+    "@pi-cloud/pi": "workspace:*",
+    "@pi-cloud/runner": "workspace:*"
   }
 }

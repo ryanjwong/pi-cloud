@@ -16,6 +16,7 @@ import { Cause, Deferred, Effect, Exit, Fiber, Schedule, Stream } from "effect"
 import type { ControlPlaneClient } from "./ControlPlaneClient.ts"
 import { noSecrets, type PluginParts, type RunnerPlugin, runSetup, type RunningSession, type SecretResolver } from "./Plugin.ts"
 import { LeaseLostError, RemoteStorage } from "./RemoteStorage.ts"
+import { VIEW_STREAM, ViewPublisher } from "./View.ts"
 
 export interface SessionRunnerOptions {
   readonly plugins: ReadonlyArray<RunnerPlugin>
@@ -54,6 +55,8 @@ interface Hosted extends RunningSession {
   readonly context: Context
   readonly cancel: () => void
   watch: AgentEventStream | undefined
+  /** The view presentations such as Pi's TUI render. */
+  view: ViewPublisher | undefined
   seq: number
   /** Publishes run one after another so batches arrive in order. */
   publishing: Promise<void>
@@ -81,8 +84,14 @@ export const hostSession = Effect.fnUntraced(function*(
 
   const run = <A, E>(effect: Effect.Effect<A, E>) => Effect.runPromise(effect)
 
-  const publish = (current: Hosted, conversationId: number, events: ReadonlyArray<unknown>) => {
-    const batch: EventBatch = { epoch: current.epoch, seq: ++current.seq, conversationId, events: toJson(events) as any }
+  const publish = (current: Hosted, conversationId: number, events: ReadonlyArray<unknown>, stream?: string) => {
+    const batch: EventBatch = {
+      epoch: current.epoch,
+      seq: ++current.seq,
+      conversationId,
+      events: toJson(events) as any,
+      ...(stream === undefined ? {} : { stream })
+    }
     current.publishing = current.publishing.then(() =>
       run(client.Publish({ sessionId, token: current.token, batches: [batch] })).catch((error) => {
         if ((error as { _tag?: string })._tag === "LeaseLost") stopNow("lease-lost")
@@ -155,7 +164,10 @@ export const hostSession = Effect.fnUntraced(function*(
         }
         return undefined
       },
-      onReport: (error) => console.warn(`[pi-cloud runner ${runnerId}] ${sessionId}:`, error)
+      onReport: (error) => {
+        console.warn(`[pi-cloud runner ${runnerId}] ${sessionId}:`, error)
+        hosted?.view?.notice("warning", error instanceof Error ? error.message : String(error))
+      }
     }, context)
     const { model, thinkingLevel, instructions } = session.spec
     const root = await harness.root(context, {
@@ -177,15 +189,20 @@ export const hostSession = Effect.fnUntraced(function*(
       context,
       cancel,
       watch: undefined,
+      view: undefined,
       seq: 0,
       publishing: Promise.resolve()
     }
     for (const part of parts) await part.ready?.(current, context)
     await startWatch(current)
+    const view = new ViewPublisher(harness, models, context, (id, events) => void publish(current, id, events, VIEW_STREAM))
+    current.view = view
+    await view.start(root.id)
     return current
   }
 
   const close = async (current: Hosted) => {
+    current.view?.close()
     await current.watch?.stop().catch(() => {})
     await Promise.race([
       current.harness.close(current.context).catch(() => {}),
@@ -202,6 +219,37 @@ export const hostSession = Effect.fnUntraced(function*(
     return found
   }
 
+  /** Commands of the view protocol, for presentations such as Pi's TUI. */
+  const viewCommand = async (
+    current: Hosted,
+    name: string,
+    payload: Record<string, unknown> | null
+  ): Promise<CommandResult | undefined> => {
+    const view = current.view
+    if (view === undefined || !name.startsWith("view.")) return undefined
+    const id = typeof payload?.conversationId === "number" ? payload.conversationId : current.root.id
+    switch (name) {
+      case "view.watch":
+        await view.watch(id)
+        return { _tag: "Ok" }
+      case "view.cycleThinking": {
+        await view.watch(id)
+        const thinkingLevel = view.nextThinkingLevel(view.viewOf(id)!)
+        await (await conversation(current, id)).configure({ thinkingLevel }, current.context)
+        return { _tag: "Ok", value: { thinkingLevel } }
+      }
+      case "view.setModel": {
+        await view.watch(id)
+        const model = { provider: String(payload?.provider), modelId: String(payload?.modelId) }
+        const thinkingLevel = view.thinkingFor(view.viewOf(id)!, model)
+        await (await conversation(current, id)).configure({ model, thinkingLevel }, current.context)
+        return { _tag: "Ok", value: { model, thinkingLevel } }
+      }
+      default:
+        return { _tag: "Err", tag: "UnknownCommand", message: `Unknown view command ${name}` }
+    }
+  }
+
   const execute = async (current: Hosted, command: RunnerCommand): Promise<CommandResult> => {
     lastActive = Date.now()
     try {
@@ -214,6 +262,7 @@ export const hostSession = Effect.fnUntraced(function*(
             ...(command.requestId === undefined ? {} : { requestId: command.requestId }),
             ...(command.whenBusy === undefined ? {} : { whenBusy: command.whenBusy })
           }, current.context)
+          current.view?.watchAnswer(submission)
           return { _tag: "Ok", value: { submissionId: submission.id, conversationId: target.id } }
         }
         case "Abort": {
@@ -231,7 +280,9 @@ export const hostSession = Effect.fnUntraced(function*(
         }
         case "Compact": {
           const target = await conversation(current, command.conversationId)
-          return { _tag: "Ok", value: { taskId: await target.compact(command.instructions, current.context) } }
+          const taskId = await target.compact(command.instructions, current.context)
+          current.view?.watchCompaction(taskId)
+          return { _tag: "Ok", value: { taskId } }
         }
         case "Reset": {
           await (await conversation(current, command.conversationId)).reset(command.handoff, current.context)
@@ -239,6 +290,7 @@ export const hostSession = Effect.fnUntraced(function*(
         }
         case "Resnapshot": {
           await startWatch(current)
+          current.view?.resnapshot()
           return { _tag: "Ok" }
         }
         case "Shutdown": {
@@ -246,6 +298,8 @@ export const hostSession = Effect.fnUntraced(function*(
           return { _tag: "Ok" }
         }
         case "Custom": {
+          const builtIn = await viewCommand(current, command.name, command.payload as Record<string, unknown> | null)
+          if (builtIn !== undefined) return builtIn
           for (const part of current.parts) {
             const handler = part.commands?.[command.name]
             if (handler !== undefined) {

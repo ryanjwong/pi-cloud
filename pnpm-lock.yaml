@@ -202,6 +202,27 @@ importers:
         specifier: 4.0.2
         version: 4.0.2
 
+  packages/pi:
+    dependencies:
+      '@earendil-works/chord':
+        specifier: 1.1.0
+        version: 1.1.0
+      '@earendil-works/pi-ai':
+        specifier: 1.1.0
+        version: 1.1.0(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(undici@8.11.2)(ws@8.22.0)
+      '@earendil-works/pi-coding-agent':
+        specifier: 1.1.0
+        version: 1.1.0(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(ws@8.22.0)
+      '@earendil-works/pi-durable':
+        specifier: 1.1.0
+        version: 1.1.0(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(undici@8.11.2)(ws@8.22.0)
+      '@pi-cloud/runner':
+        specifier: workspace:*
+        version: link:../runner
+      effect:
+        specifier: 4.0.2
+        version: 4.0.2
+
   packages/protocol:
     dependencies:
       effect:
@@ -372,9 +393,15 @@ importers:
       '@pi-cloud/client':
         specifier: workspace:*
         version: link:../client
+      '@pi-cloud/pi':
+        specifier: workspace:*
+        version: link:../pi
       '@pi-cloud/protocol':
         specifier: workspace:*
         version: link:../protocol
+      '@pi-cloud/runner':
+        specifier: workspace:*
+        version: link:../runner
       '@pi-cloud/workspace':
         specifier: workspace:*
         version: link:../workspace

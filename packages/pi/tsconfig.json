@@ -1,0 +1,7 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "paths": { "pi-internal/*": ["./node_modules/@earendil-works/pi-coding-agent/dist/*"] }
+  },
+  "include": ["src", "test"]
+}

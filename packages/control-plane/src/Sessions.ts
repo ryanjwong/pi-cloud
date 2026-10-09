@@ -30,7 +30,7 @@ import {
   type SessionSpec,
   type SessionView
 } from "@pi-cloud/protocol"
-import { Clock, Context, Effect, Layer, Option, Semaphore, type Stream } from "effect"
+import { Clock, Context, Effect, Layer, Option, Semaphore, Stream } from "effect"
 import { Runners } from "./Runners.ts"
 
 /** Round-trip through JSON: drops `undefined` fields exactly as a serializing backend would. */
@@ -63,7 +63,12 @@ export class Sessions extends Context.Service<Sessions, {
   /** Run a command on the session's runner, starting one if needed. Resolves with the command's value. */
   command(id: string, command: SessionCommand): Effect.Effect<unknown, CommandError>
   /** Buffered then live event batches. */
-  events(id: string, after: StreamPosition | undefined): Effect.Effect<Stream.Stream<EventBatch>, SessionNotFound>
+  events(
+    id: string,
+    after: StreamPosition | undefined,
+    /** Which stream: Pi's agent events by default, or e.g. `view`. */
+    stream?: string
+  ): Effect.Effect<Stream.Stream<EventBatch>, SessionNotFound>
   /** Transcript entries, oldest first, read from the state store. */
   entries(id: string, query: {
     readonly conversationId?: number | undefined
@@ -187,7 +192,8 @@ export class Sessions extends Context.Service<Sessions, {
           const session = yield* find(id)
           return yield* settle(session.id, yield* runners.send(session, command))
         }),
-        events: (id, after) => Effect.map(find(id), () => hub.subscribe(id, after)),
+        events: (id, after, stream) =>
+          Effect.map(find(id), () => hub.subscribe(id, after).pipe(Stream.filter((batch) => batch.stream === stream))),
         entries: (id, query) =>
           read(id, async (storage) => {
             const conversationId = (query.conversationId ?? ROOT_CONVERSATION_ID) as ConversationId

@@ -25,7 +25,8 @@ const resultOf = (error: CommandError): CommandResult => {
  * `GET /v1/sessions/{id}/channel`: the session channel, a WebSocket carrying `ChannelRequest`s in and
  * `ChannelMessage`s out. Authenticates with `Authorization: Bearer <key>` or, for browsers that cannot set
  * WebSocket headers, `?token=<key>`. Resume from a known position with `?after=<epoch>:<seq>`. After
- * `ServeWorkspace`, the connection also serves the session's workspace until it closes.
+ * `ServeWorkspace`, the connection also serves the session's workspace until it closes. `?stream=view` carries the
+ * replicated view (for Pi's TUI) instead of Pi's agent events.
  */
 export const ChannelRoute = Layer.effectDiscard(Effect.gen(function*() {
   const router = yield* HttpRouter.HttpRouter
@@ -44,7 +45,8 @@ export const ChannelRoute = Layer.effectDiscard(Effect.gen(function*() {
     )
     if (!authorized) return HttpServerResponse.text("Unauthorized", { status: 401 })
 
-    const events = yield* sessions.events(id ?? "", parsePosition(url.searchParams.get("after") ?? undefined)).pipe(
+    const after = parsePosition(url.searchParams.get("after") ?? undefined)
+    const events = yield* sessions.events(id ?? "", after, url.searchParams.get("stream") ?? undefined).pipe(
       Effect.option
     )
     if (events._tag === "None") return HttpServerResponse.text("Session not found", { status: 404 })

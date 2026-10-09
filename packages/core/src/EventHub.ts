@@ -14,6 +14,9 @@ export const parsePosition = (value: string | undefined): StreamPosition | undef
 
 const isSnapshot = (batch: EventBatch) => (batch.events[0] as { type?: unknown } | undefined)?.type === "snapshot"
 
+/** Each stream of each conversation is logged and resumed on its own. */
+const logKey = (batch: EventBatch) => `${batch.stream ?? ""}:${batch.conversationId}`
+
 /**
  * Fans live agent events out to every client watching a session. Runners publish Pi's per-commit event batches;
  * the hub keeps each conversation's batches since its newest snapshot, so a client that joins late gets the
@@ -32,8 +35,8 @@ export class EventHub extends Context.Service<EventHub, {
       Effect.gen(function*() {
         interface Topic {
           readonly pubsub: PubSub.PubSub<EventBatch>
-          /** Per conversation: the newest snapshot batch and every batch after it. */
-          readonly logs: Map<number, Array<EventBatch>>
+          /** Per conversation and stream: the newest snapshot batch and every batch after it. */
+          readonly logs: Map<string, Array<EventBatch>>
         }
         const topics = new Map<string, Topic>()
 
@@ -46,7 +49,7 @@ export class EventHub extends Context.Service<EventHub, {
           return found
         })
 
-        const replay = (logs: Map<number, Array<EventBatch>>, after: StreamPosition | undefined) => {
+        const replay = (logs: Map<string, Array<EventBatch>>, after: StreamPosition | undefined) => {
           const out: Array<EventBatch> = []
           for (const log of logs.values()) {
             const first = log[0]
@@ -62,10 +65,10 @@ export class EventHub extends Context.Service<EventHub, {
             const { pubsub, logs } = yield* topic(sessionId)
             let needsSnapshot = false
             for (const batch of batches) {
-              const log = logs.get(batch.conversationId)
+              const log = logs.get(logKey(batch))
               const stale = log?.[0] !== undefined && log[0].epoch !== batch.epoch
               if (isSnapshot(batch) || log === undefined || stale) {
-                logs.set(batch.conversationId, [batch])
+                logs.set(logKey(batch), [batch])
               } else {
                 log.push(batch)
                 if (log.length > options.logLimit) needsSnapshot = true
@@ -80,12 +83,12 @@ export class EventHub extends Context.Service<EventHub, {
               // Subscribe before reading the log so nothing published in between is lost.
               const subscription = yield* PubSub.subscribe(pubsub)
               const buffered = replay(logs, after)
-              const seen = new Map<number, StreamPosition>()
-              for (const batch of buffered) seen.set(batch.conversationId, batch)
+              const seen = new Map<string, StreamPosition>()
+              for (const batch of buffered) seen.set(logKey(batch), batch)
               const fresh = (batch: EventBatch) => {
-                const last = seen.get(batch.conversationId)
+                const last = seen.get(logKey(batch))
                 if (last !== undefined && batch.epoch === last.epoch && batch.seq <= last.seq) return false
-                seen.set(batch.conversationId, batch)
+                seen.set(logKey(batch), batch)
                 return true
               }
               return Stream.concat(

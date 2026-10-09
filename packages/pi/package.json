@@ -1,0 +1,18 @@
+{
+  "name": "@pi-cloud/pi",
+  "version": "0.1.0",
+  "description": "Pi's coding agent on pi-cloud: its system prompt and subagent tool for runners, and access to its internals.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./internal": "./src/internal.ts"
+  },
+  "dependencies": {
+    "@earendil-works/chord": "1.1.0",
+    "@earendil-works/pi-ai": "1.1.0",
+    "@earendil-works/pi-coding-agent": "1.1.0",
+    "@earendil-works/pi-durable": "1.1.0",
+    "@pi-cloud/runner": "workspace:*",
+    "effect": "4.0.2"
+  }
+}

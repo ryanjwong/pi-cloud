@@ -99,6 +99,12 @@ export const EventBatch = Schema.Struct({
   /** Increases by one per batch within an epoch. */
   seq: Schema.Number,
   conversationId: Schema.Number,
-  events: Schema.Array(Schema.Json)
+  events: Schema.Array(Schema.Json),
+  /**
+   * Which stream of the session this batch belongs to. Absent: Pi's agent events. `view`: the replicated view
+   * presentations render (each conversation's `viewState()`, and session-wide state as conversation 0), as a
+   * `snapshot` event followed by `ops` events of Chord delta operations.
+   */
+  stream: Schema.optional(Schema.String)
 })
 export type EventBatch = typeof EventBatch.Type
