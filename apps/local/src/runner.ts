@@ -1,17 +1,22 @@
-// A runner host alone: accepts wake requests and attaches back to the control plane.
-//   CONTROL_PLANE_URL=http://control.internal:8787 PORT=8788 node src/runner.ts
+// A runner host alone: accepts wake requests and attaches back to the control plane (CONTROL_PLANE_URL).
+//   sops exec-env secrets.yaml 'node src/runner.ts'
 // Any machine, container, or platform that can run this and reach the control plane can host sessions.
+import { modelCredentialLookup, RunnerEnv, sandboxSecretLookup } from "@pi-cloud/config"
 import { RunnerHost } from "@pi-cloud/runner"
+import { Option, Redacted } from "effect"
 import { createServer } from "node:http"
 import { resolve } from "node:path"
 import { Readable } from "node:stream"
+import { load } from "./env.ts"
 import { defaultPlugins } from "./plugins.ts"
 
-const port = Number(process.env.PORT ?? 8788)
+const env = await load(RunnerEnv)
 const host = new RunnerHost({
-  plugins: defaultPlugins(resolve(process.env.DATA_DIR ?? ".data")),
-  secret: process.env.PI_CLOUD_RUNNER_SECRET,
-  controlPlaneUrl: process.env.CONTROL_PLANE_URL
+  plugins: defaultPlugins(resolve(env.dataDir)),
+  secret: Option.getOrUndefined(Option.map(env.runnerSecret, Redacted.value)),
+  controlPlaneUrl: Option.getOrUndefined(env.controlPlaneUrl),
+  modelCredentials: modelCredentialLookup(env),
+  secrets: sandboxSecretLookup(env)
 })
 
 createServer(async (req, res) => {
@@ -23,4 +28,4 @@ createServer(async (req, res) => {
   } as RequestInit))
   res.writeHead(response.status, Object.fromEntries(response.headers))
   res.end(await response.text())
-}).listen(port, () => console.log(`pi-cloud runner host listening on :${port}`))
+}).listen(env.port, env.host, () => console.log(`pi-cloud runner host listening on ${env.host}:${env.port}`))

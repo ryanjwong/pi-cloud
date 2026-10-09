@@ -42,6 +42,9 @@ importers:
       '@earendil-works/pi-durable':
         specifier: 1.1.0
         version: 1.1.0(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(undici@8.11.2)(ws@8.22.0)
+      '@pi-cloud/config':
+        specifier: workspace:*
+        version: link:../../packages/config
       '@pi-cloud/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
@@ -72,6 +75,9 @@ importers:
       '@pi-cloud/client':
         specifier: workspace:*
         version: link:../../packages/client
+      '@pi-cloud/config':
+        specifier: workspace:*
+        version: link:../../packages/config
       '@pi-cloud/control-plane':
         specifier: workspace:*
         version: link:../../packages/control-plane
@@ -129,6 +135,16 @@ importers:
       effect:
         specifier: 4.0.2
         version: 4.0.2
+
+  packages/config:
+    dependencies:
+      effect:
+        specifier: 4.0.2
+        version: 4.0.2
+    devDependencies:
+      '@effect/platform-node':
+        specifier: 4.0.2
+        version: 4.0.2(effect@4.0.2)(redis@6.3.0)
 
   packages/control-plane:
     dependencies:

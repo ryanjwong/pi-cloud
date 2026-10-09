@@ -14,11 +14,12 @@ import {
 import type { CommandResult, EventBatch, RunnerCommand, Session } from "@pi-cloud/protocol"
 import { Cause, Deferred, Effect, Exit, Fiber, Schedule, Stream } from "effect"
 import type { ControlPlaneClient } from "./ControlPlaneClient.ts"
-import { envSecrets, type PluginParts, type RunnerPlugin, runSetup, type RunningSession, type SecretResolver } from "./Plugin.ts"
+import { noSecrets, type PluginParts, type RunnerPlugin, runSetup, type RunningSession, type SecretResolver } from "./Plugin.ts"
 import { LeaseLostError, RemoteStorage } from "./RemoteStorage.ts"
 
 export interface SessionRunnerOptions {
   readonly plugins: ReadonlyArray<RunnerPlugin>
+  /** Resolves secret names that sandbox templates request. Defaults to none. */
   readonly secrets?: SecretResolver
   /** Base harness settings; plugin settings are merged over them. */
   readonly settings?: HarnessSettings
@@ -26,6 +27,11 @@ export interface SessionRunnerOptions {
   readonly idleMs?: number
   /** Identifies this runner in leases and logs. */
   readonly runnerId?: string
+  /**
+   * Where model providers look up their credentials (`ANTHROPIC_API_KEY`, ...). When set, pi-ai reads nothing
+   * from the process environment or disk; when omitted it falls back to its ambient lookup.
+   */
+  readonly modelCredentials?: (name: string) => string | undefined
 }
 
 /** Why a runner stopped hosting a session. */
@@ -64,7 +70,7 @@ export const hostSession = Effect.fnUntraced(function*(
 ) {
   const runnerId = options.runnerId ?? `runner_${crypto.randomUUID()}`
   const idleMs = options.idleMs ?? 30_000
-  const secrets = options.secrets ?? envSecrets
+  const secrets = options.secrets ?? noSecrets
   const stopped = yield* Deferred.make<StopReason>()
   const stop = (reason: StopReason) => Deferred.succeed(stopped, reason).pipe(Effect.asVoid)
   const stopNow = (reason: StopReason) => void Effect.runFork(stop(reason))
@@ -118,7 +124,10 @@ export const hostSession = Effect.fnUntraced(function*(
     for (const plugin of options.plugins) {
       parts.push(await runSetup(plugin, { session, config: session.spec.plugins?.[plugin.name], secrets }))
     }
-    const models = createModels()
+    const credentials = options.modelCredentials
+    const models = createModels(credentials === undefined ? undefined : {
+      authContext: { env: async (name) => credentials(name), fileExists: async () => false }
+    })
     const registry = createRegistry()
     let settings: HarnessSettings = { ...options.settings }
     for (const part of parts) {

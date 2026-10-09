@@ -6,3 +6,7 @@ dist
 .alchemy
 .wrangler
 .env
+
+# Decrypted secrets must never be committed; secrets.yaml itself is encrypted and may be.
+secrets.dec.yaml
+*.decrypted.*

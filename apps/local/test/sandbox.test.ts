@@ -26,18 +26,23 @@ const toolUse = (name: string, args: Parameters<typeof fauxToolCall>[1]) =>
 describe("sandboxes", () => {
   it("lets the agent request a sandbox from a template and work inside it", async () => {
     root = await mkdtemp(join(tmpdir(), "pi-cloud-sandboxes-"))
-    process.env.PI_CLOUD_TEST_SECRET = "s3cret-value"
+    // Something in the runner's own environment that must never reach a sandbox.
+    process.env.PI_CLOUD_LEAK_CANARY = "canary-must-not-leak"
     const faux = fauxProvider()
     faux.setResponses([
       toolUse("bash", { command: "pwd" }),
       toolUse("sandbox_create", { template: "repo" }),
       toolUse("bash", { command: "cat README.md && echo $GREETING && printf %s \"$PI_CLOUD_TEST_SECRET\" > secret.txt" }),
+      // A prompt-injected agent tries to exfiltrate: the environment holds only what the template granted, and the
+      // granted secret comes back masked.
+      toolUse("bash", { command: "env; echo token=$PI_CLOUD_TEST_SECRET" }),
       fauxAssistantMessage("All done")
     ])
     deployment = await startLocal({
       port: 41_000 + Math.floor(Math.random() * 10_000),
       runner: {
         idleMs: 5_000,
+        secrets: async (name) => (name === "PI_CLOUD_TEST_SECRET" ? "s3cret-value" : undefined),
         plugins: [
           modelProviders(faux.provider),
           extensions("coding", CodingTools),
@@ -80,6 +85,11 @@ describe("sandboxes", () => {
       expect(results[1]).toContain("ready and active")
       expect(results[2]).toContain("project readme")
       expect(results[2]).toContain("hello from the template")
+
+      expect(results[3]).toContain("token=[secret:PI_CLOUD_TEST_SECRET]")
+      expect(results[3]).toContain("GREETING=hello from the template")
+      expect(results[3]).not.toContain("canary-must-not-leak")
+      expect(results[3]).not.toContain("ANTHROPIC")
 
       // The secret reached the sandbox, but never the transcript.
       const secret = yield* Effect.promise(() => readFile(join(root!, `${session.id}_repo`, "secret.txt"), "utf8"))

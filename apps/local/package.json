@@ -17,6 +17,7 @@
     "@earendil-works/pi-durable": "1.1.0",
     "@effect/platform-node": "4.0.2",
     "@pi-cloud/client": "workspace:*",
+    "@pi-cloud/config": "workspace:*",
     "@pi-cloud/control-plane": "workspace:*",
     "@pi-cloud/core": "workspace:*",
     "@pi-cloud/protocol": "workspace:*",

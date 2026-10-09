@@ -12,6 +12,7 @@
   "dependencies": {
     "@earendil-works/pi-ai": "1.1.0",
     "@earendil-works/pi-durable": "1.1.0",
+    "@pi-cloud/config": "workspace:*",
     "@pi-cloud/protocol": "workspace:*",
     "@pi-cloud/runner": "workspace:*",
     "alchemy": "2.0.0-beta.81",

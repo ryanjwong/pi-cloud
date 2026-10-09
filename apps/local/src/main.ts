@@ -1,25 +1,33 @@
 // All-in-one: control plane and runner in one process, state in SQLite under DATA_DIR.
-//   node src/main.ts
+//   sops exec-env secrets.yaml 'node src/main.ts'
+import { ControlPlaneEnv, modelCredentialLookup, RunnerEnv, sandboxSecretLookup } from "@pi-cloud/config"
 import { sqliteBindings, sqliteSessions, sqliteState } from "@pi-cloud/storage-sqlite"
+import { Option, Redacted } from "effect"
 import { join, resolve } from "node:path"
-import { connectorsFromEnv } from "./connectors.ts"
+import { connectors } from "./connectors.ts"
+import { load } from "./env.ts"
 import { startLocal } from "./index.ts"
 import { defaultPlugins } from "./plugins.ts"
 
-const port = Number(process.env.PORT ?? 8787)
-const dataDir = resolve(process.env.DATA_DIR ?? ".data")
-const apiKeys = process.env.PI_CLOUD_API_KEYS?.split(",").filter(Boolean)
+const control = await load(ControlPlaneEnv)
+const runner = await load(RunnerEnv)
+const dataDir = resolve(control.dataDir)
+const secret = (value: Option.Option<Redacted.Redacted<string>>) => Option.getOrUndefined(Option.map(value, Redacted.value))
 
 const deployment = await startLocal({
-  port,
-  host: process.env.HOST ?? "127.0.0.1",
-  apiKeys,
-  runnerSecret: process.env.PI_CLOUD_RUNNER_SECRET,
+  port: control.port,
+  host: control.host,
+  apiKeys: control.apiKeys.map((key) => Redacted.value(key)),
+  runnerSecret: secret(control.runnerSecret),
   sessions: sqliteSessions({ file: join(dataDir, "sessions.sqlite") }),
   state: sqliteState({ directory: join(dataDir, "state") }),
   bindings: sqliteBindings({ file: join(dataDir, "sessions.sqlite") }),
-  extensions: connectorsFromEnv(),
-  runner: { plugins: defaultPlugins(dataDir) }
+  extensions: connectors(control),
+  runner: {
+    plugins: defaultPlugins(dataDir),
+    modelCredentials: modelCredentialLookup(runner),
+    secrets: sandboxSecretLookup(runner)
+  }
 })
 
 console.log(`pi-cloud listening on ${deployment.url} (API docs at ${deployment.url}/docs, data in ${dataDir})`)

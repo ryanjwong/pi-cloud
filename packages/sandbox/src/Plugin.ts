@@ -1,10 +1,11 @@
 import type { Context, JsonValue } from "@earendil-works/chord"
 import { Type } from "@earendil-works/pi-ai"
-import { defineDoc, defineExtension, defineTool, section } from "@earendil-works/pi-durable"
+import { defineDoc, defineExtension, defineTool, hook, section, ToolTask } from "@earendil-works/pi-durable"
 import type { ExecutionEnv } from "@earendil-works/pi-durable/env"
 import type { SandboxTemplate } from "@pi-cloud/protocol"
 import { definePlugin, type PluginContext, type RunnerPlugin } from "@pi-cloud/runner"
 import { Effect } from "effect"
+import { SecretMask } from "./Mask.ts"
 import type { SandboxHandle, SandboxProvider } from "./Provider.ts"
 
 type StoredSandbox = {
@@ -41,6 +42,7 @@ export const sandboxes = (options: SandboxPluginOptions): RunnerPlugin =>
       const providers = new Map(options.providers.map((provider) => [provider.name, provider]))
       const templates: Record<string, SandboxTemplate> = { ...options.templates, ...plugin.session.spec.sandboxes }
       const connections = new Map<string, Promise<ExecutionEnv>>()
+      const mask = new SecretMask()
 
       const provider = (name: string) => {
         const found = providers.get(name)
@@ -55,6 +57,7 @@ export const sandboxes = (options: SandboxPluginOptions): RunnerPlugin =>
           const value = await plugin.secrets(name)
           if (value === undefined) throw new Error(`Secret ${name} is not available on this runner`)
           env[name] = value
+          mask.add(name, value)
         }
         return env
       }
@@ -65,7 +68,8 @@ export const sandboxes = (options: SandboxPluginOptions): RunnerPlugin =>
         if (connection === undefined) {
           connection = (async () => {
             const template = templates[stored.template] ?? { provider: stored.handle.provider }
-            return Effect.runPromise(provider(stored.handle.provider).connect(stored.handle, await environment(template)))
+            const env = await environment(template)
+            return mask.env(await Effect.runPromise(provider(stored.handle.provider).connect(stored.handle, env)))
           })()
           connection.catch(() => connections.delete(key))
           connections.set(key, connection)
@@ -165,7 +169,16 @@ export const sandboxes = (options: SandboxPluginOptions): RunnerPlugin =>
       })
 
       return {
-        extensions: [defineExtension({ name: "pi-cloud-sandboxes", tools: [create, destroy], sections: [guide] })],
+        extensions: [defineExtension({
+          name: "pi-cloud-sandboxes",
+          tools: [create, destroy],
+          sections: [guide],
+          // Whatever a tool returns (command output, file contents, ...) is masked before it is stored.
+          hooks: [hook(ToolTask, {
+            afterTool: (_call, result) =>
+              mask.size === 0 ? undefined : { ...result, content: mask.deep(result.content), details: mask.deep(result.details) }
+          })]
+        })],
         env: async ({ read }, context) => {
           const state = await read.snapshot(SandboxesDoc, context)
           const active = state?.active === undefined ? undefined : state.sandboxes[state.active]

@@ -1,6 +1,7 @@
 import { WakeRequest } from "@pi-cloud/protocol"
 import * as Cloudflare from "alchemy/Cloudflare"
-import { Config, Effect, Redacted, Schema } from "effect"
+import { WorkerRunnerEnv } from "@pi-cloud/config"
+import { Effect, Redacted, Schema } from "effect"
 import { HttpServerRequest, HttpServerResponse } from "effect/http"
 import SessionHost from "./SessionHost.ts"
 
@@ -12,15 +13,14 @@ export default Cloudflare.Worker(
   "PiCloudRunners",
   {
     main: import.meta.url,
-    compatibility: { flags: ["nodejs_compat", "nodejs_compat_populate_process_env"] }
+    compatibility: { flags: ["nodejs_compat"] }
   },
   Effect.gen(function*() {
     const hosts = yield* SessionHost
-    // Yielding a Config in init binds it to this Worker; its Durable Objects share the environment.
-    const secret = yield* Config.Redacted("PI_CLOUD_RUNNER_SECRET")
-    yield* Config.String("CONTROL_PLANE_URL")
-    yield* Config.option(Config.Redacted("ANTHROPIC_API_KEY"))
-    yield* Config.option(Config.Redacted("OPENAI_API_KEY"))
+    // Loading the runner's config schema in init binds every key in it to this Worker (secrets as Worker
+    // secrets), read from the deploy environment. Its Durable Objects share that environment.
+    const env = yield* WorkerRunnerEnv
+    const secret = env.runnerSecret
     const decode = Schema.decodeUnknownEffect(WakeRequest)
 
     return {

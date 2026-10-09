@@ -49,6 +49,7 @@ The workspace is a stack of small libraries, each building on the ones below it,
 | Layer | Package | What it is |
 |---|---|---|
 | Contracts | `@pi-cloud/protocol` | Wire contracts only: domain schemas, `SessionCommand`s, the public `HttpApi`, the session channel messages, the runner `RpcGroup`. |
+| Config | `@pi-cloud/config` | The catalogue of settings and secrets, the typed schemas built from it, and the environment-then-secrets-directory provider. |
 | Primitives | `@pi-cloud/core` | The interfaces everything else builds on (`SessionStore`, `StateStore`, `LeaseManager`, `EventHub`, `RunnerDispatcher`, `BindingStore`) with in-memory reference implementations. No I/O. |
 | Control plane | `@pi-cloud/control-plane` | Composes `core` into `Sessions` (the one programmatic API) and serves it as REST, the WebSocket channel, and the runner RPC. `./node` serves it on Node; `ControlPlane.toWebHandler` on fetch-style runtimes. |
 | Runtime | `@pi-cloud/runner` | Hosts Pi Durable against the control plane: `RemoteStorage`, the session runner, `RunnerHost` with a fetch-style wake handler, and the plugin API. Uses only `fetch`. |
@@ -110,42 +111,89 @@ ControlPlane.layer({
 
 Writing another one means implementing a small interface: a `Trigger` is a name and
 `handle(request) → events`; a `Source` adds `deliver(target, reply)`. Signature helpers (`hmacSha256Hex`,
-`safeEqual`, `verifyHmac`) use Web Crypto, so connectors run on any runtime. The local servers enable GitHub with
-`GITHUB_WEBHOOK_SECRET` (and `GITHUB_MENTION`), Slack with `SLACK_SIGNING_SECRET` and `SLACK_BOT_TOKEN`.
+`safeEqual`, `verifyHmac`) use Web Crypto, so connectors run on any runtime. The servers enable GitHub when
+`GITHUB_WEBHOOK_SECRET` is set (and `GITHUB_MENTION` to filter), Slack when `SLACK_SIGNING_SECRET` and
+`SLACK_BOT_TOKEN` are.
 
 ## Running it
 
 Requires Node 22.19+ and pnpm, or Nix. Packages run as TypeScript directly (Node strips the types).
 
 ```sh
-nix develop        # dev shell with Node 22 and pnpm (optional)
-nix run            # or build and run the all-in-one server; also .#cli, .#control-plane, .#runner
-nix flake check    # typecheck and tests in the Nix sandbox
-                   # (nix run / flake check need the pnpm dependency hash in flake.nix filled in once)
-
+nix develop        # dev shell: Node 22, pnpm, sops, age
 pnpm install
-pnpm test          # conformance, end to end, channel, crash recovery, fencing, reconnects, sandboxes, restart, split
+pnpm test          # conformance, end to end, channel, crash recovery, fencing, sandboxes, connectors, config, ...
 pnpm typecheck
 
-# Everything in one process, state in apps/local/.data (set DATA_DIR to change)
-ANTHROPIC_API_KEY=... pnpm start          # API on :8787, docs at /docs, OpenAPI at /openapi.json
-
-# Talk to it
+# Everything in one process, state in apps/local/.data (DATA_DIR), secrets from secrets.yaml (see Credentials)
+sops exec-env secrets.yaml 'pnpm start'   # API on :8787, docs at /docs, OpenAPI at /openapi.json
 pnpm cli chat --model anthropic/claude-opus-5-5
 ```
 
-Split deployment: the control plane wakes runners over HTTP, and runners attach back.
+Split deployment: the control plane wakes runners over HTTP (`RUNNER_URL`), and runners attach back
+(`CONTROL_PLANE_URL`); both share `PI_CLOUD_RUNNER_SECRET`.
 
 ```sh
-# runner host (any machine that can reach the control plane)
-CONTROL_PLANE_URL=http://control:8787 PI_CLOUD_RUNNER_SECRET=s3cret node apps/local/src/runner.ts
-# control plane
-RUNNER_URL=http://runners:8788/wake PUBLIC_URL=http://control:8787 PI_CLOUD_RUNNER_SECRET=s3cret \
-  node apps/local/src/control-plane.ts
+sops exec-env secrets.yaml 'node apps/local/src/runner.ts'          # on the runner machine
+sops exec-env secrets.yaml 'node apps/local/src/control-plane.ts'   # on the control plane machine
 ```
 
-On Cloudflare (`apps/cloudflare`): `alchemy deploy` with `CONTROL_PLANE_URL`, `PI_CLOUD_RUNNER_SECRET`, and model
-keys set, then point the control plane's `RUNNER_URL` at the printed Worker URL.
+On Cloudflare (`apps/cloudflare`): `sops exec-env secrets.yaml 'pnpm --filter @pi-cloud/cloudflare run deploy'`, then
+point the control plane's `RUNNER_URL` at the printed Worker URL.
+
+## Credentials
+
+Single tenant, so the model is simple: the operator's secrets live in one SOPS-encrypted file, every server reads
+them through one typed schema, and nothing else ever reads the environment.
+
+**One catalogue.** `@pi-cloud/config` lists every setting and secret (`SETTINGS`) and builds the two schemas from
+it: `ControlPlaneEnv` and `RunnerEnv` (`WorkerRunnerEnv` on Cloudflare). Secrets are `Redacted`, so they never
+print. A missing or malformed value stops startup with one line naming it. `pi-cloud-config` (or
+`node apps/local/src/config.ts`) shows what is set and where from, never the values.
+
+**One encrypted file.** `secrets.yaml` is encrypted with [SOPS](https://github.com/getsops/sops) and age and can be
+committed: key names stay readable, values do not, and `.sops.yaml` says who can decrypt (your key, each server's
+host key).
+
+```sh
+age-keygen -o ~/.config/sops/age/keys.txt        # once; put the public key in .sops.yaml
+cp secrets.example.yaml secrets.yaml && sops encrypt --in-place secrets.yaml
+sops secrets.yaml                                # edit later
+```
+
+**Every deployment reads it the same way.**
+
+| Where | How the values arrive |
+|---|---|
+| Development | `sops exec-env secrets.yaml '<command>'`: decrypted into that process's environment only. |
+| NixOS | sops-nix decrypts to `/run/secrets/*`; the `nixosModules.default` service receives them with systemd `LoadCredential`, and the config reads `$CREDENTIALS_DIRECTORY`. Nothing in the Nix store or the environment. |
+| Containers / other | Mount files named after each setting and set `PI_CLOUD_SECRETS_DIR`. |
+| Cloudflare | `sops exec-env secrets.yaml 'alchemy deploy'`: the Worker loads `WorkerRunnerEnv` at startup, so Alchemy binds every key in it as an encrypted Worker secret. |
+
+```nix
+# NixOS, with sops-nix
+sops.secrets.ANTHROPIC_API_KEY.sopsFile = ./secrets.yaml;
+sops.secrets.GITHUB_TOKEN.sopsFile = ./secrets.yaml;
+services.pi-cloud = {
+  enable = true;
+  settings = { SANDBOX_SECRETS = "GITHUB_TOKEN"; GITHUB_MENTION = "@pi"; };
+  secrets = {
+    ANTHROPIC_API_KEY = config.sops.secrets.ANTHROPIC_API_KEY.path;
+    GITHUB_TOKEN = config.sops.secrets.GITHUB_TOKEN.path;
+  };
+};
+```
+
+**Where each secret goes.**
+
+- Model keys go to the model providers explicitly (`modelCredentials`); pi-ai does not read the environment.
+- Sandboxes get only what their template asks for, and only names the operator listed in `SANDBOX_SECRETS`.
+  Everything else in the runner's environment (model keys, the runner secret) never reaches a sandbox: local
+  sandboxes run commands with a minimal base environment.
+- Secret values that reach a sandbox are masked as `[secret:NAME]` in command output and tool results before they
+  are stored, so a prompt-injected agent (GitHub and Slack text is other people's) cannot read them back out
+  through the transcript.
+- Webhook and Slack secrets stay in the control plane; the runner secret is shared by control plane and runners.
 
 ## Extending it
 

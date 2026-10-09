@@ -15,7 +15,10 @@ import { Effect } from "effect"
 /** Resolves secret names (from a session's spec) to values, on the runner. */
 export type SecretResolver = (name: string) => Promise<string | undefined>
 
-/** Reads secrets from the runner's environment variables. */
+/** The default: no secrets at all. A runner only hands out secrets it is explicitly given. */
+export const noSecrets: SecretResolver = async () => undefined
+
+/** Reads secrets from the runner's environment variables. Anything in that environment becomes requestable. */
 export const envSecrets: SecretResolver = async (name) => globalThis.process?.env?.[name]
 
 /** What a plugin sees when a runner starts hosting a session. */

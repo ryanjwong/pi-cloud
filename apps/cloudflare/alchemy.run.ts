@@ -1,5 +1,5 @@
 // Deploy the Cloudflare runner host:
-//   CONTROL_PLANE_URL=https://control.example.com PI_CLOUD_RUNNER_SECRET=... ANTHROPIC_API_KEY=... pnpm deploy
+//   sops exec-env ../../secrets.yaml 'pnpm run deploy'   (needs CONTROL_PLANE_URL, PI_CLOUD_RUNNER_SECRET, model keys)
 // Then start the control plane with RUNNER_URL=<printed url> and the same PI_CLOUD_RUNNER_SECRET.
 import * as Alchemy from "alchemy"
 import * as Cloudflare from "alchemy/Cloudflare"
