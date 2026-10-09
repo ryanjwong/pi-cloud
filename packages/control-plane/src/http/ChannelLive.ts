@@ -1,8 +1,9 @@
 import { parsePosition } from "@pi-cloud/core"
 import { ChannelMessage, ChannelRequest, type CommandResult } from "@pi-cloud/protocol"
-import { Effect, Fiber, Layer, Schema, Stream } from "effect"
+import { Effect, Exit, Fiber, Layer, Schema, Scope, Stream } from "effect"
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http"
 import { type CommandError, Sessions, toJson } from "../Sessions.ts"
+import { type WorkspaceReplies, Workspaces } from "../Workspaces.ts"
 import { ClientAuth } from "./Auth.ts"
 
 const encode = Schema.encodeSync(ChannelMessage)
@@ -23,12 +24,14 @@ const resultOf = (error: CommandError): CommandResult => {
 /**
  * `GET /v1/sessions/{id}/channel`: the session channel, a WebSocket carrying `ChannelRequest`s in and
  * `ChannelMessage`s out. Authenticates with `Authorization: Bearer <key>` or, for browsers that cannot set
- * WebSocket headers, `?token=<key>`. Resume from a known position with `?after=<epoch>:<seq>`.
+ * WebSocket headers, `?token=<key>`. Resume from a known position with `?after=<epoch>:<seq>`. After
+ * `ServeWorkspace`, the connection also serves the session's workspace until it closes.
  */
 export const ChannelRoute = Layer.effectDiscard(Effect.gen(function*() {
   const router = yield* HttpRouter.HttpRouter
   const sessions = yield* Sessions
   const auth = yield* ClientAuth
+  const workspaces = yield* Workspaces
 
   yield* router.add("GET", "/v1/sessions/:id/channel", Effect.gen(function*() {
     const request = yield* HttpServerRequest.HttpServerRequest
@@ -50,6 +53,9 @@ export const ChannelRoute = Layer.effectDiscard(Effect.gen(function*() {
     const writer = yield* socket.writer
     const reader = yield* socket.reader
     const send = (message: ChannelMessage) => writer.write(JSON.stringify(encode(message))).pipe(Effect.ignore)
+    // Serving the workspace lasts as long as this connection.
+    const scope = yield* Scope.make()
+    let replies: WorkspaceReplies | undefined
 
     const pump = yield* events.value.pipe(
       Stream.runForEach((batch) => send({ _tag: "Events", batch })),
@@ -62,6 +68,12 @@ export const ChannelRoute = Layer.effectDiscard(Effect.gen(function*() {
           onFailure: (error) => send({ _tag: "Error", message: `Invalid request: ${error.message}` }),
           onSuccess: (message) => {
             if (message._tag === "Ping") return send({ _tag: "Pong", id: message.id })
+            if (message._tag === "ServeWorkspace") {
+              return Effect.gen(function*() {
+                replies ??= yield* Scope.provide(workspaces.serve(id ?? "", send), scope)
+              })
+            }
+            if (message._tag === "WorkspaceReply") return replies?.(message.id, message.event) ?? Effect.void
             return sessions.command(id ?? "", message.command).pipe(
               Effect.map((value): CommandResult => ({ _tag: "Ok", value: toJson(value) as never })),
               Effect.catch((error) => Effect.succeed(resultOf(error))),
@@ -84,6 +96,7 @@ export const ChannelRoute = Layer.effectDiscard(Effect.gen(function*() {
       Effect.ignore
     )
     yield* Fiber.interrupt(pump)
+    yield* Scope.close(scope, Exit.void)
     return HttpServerResponse.empty()
   }))
 }))

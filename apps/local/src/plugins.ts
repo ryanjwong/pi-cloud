@@ -7,6 +7,7 @@ import { extensions, modelProviders, type RunnerPlugin } from "@pi-cloud/runner"
 import { sandboxes } from "@pi-cloud/sandbox"
 import { localSandboxes } from "@pi-cloud/sandbox-local"
 import { githubTools } from "@pi-cloud/tool-github"
+import { workspace } from "@pi-cloud/workspace/plugin"
 import { Option, Redacted, Schema } from "effect"
 import { readFileSync } from "node:fs"
 import { join, resolve } from "node:path"
@@ -25,8 +26,9 @@ export const loadTemplates = (file: string | undefined): Record<string, SandboxT
 }
 
 /**
- * The plugin set of a Node runner: Anthropic and OpenAI models, Pi's coding tools, local sandboxes with the
- * configured templates, and GitHub tools when `GITHUB_TOKEN` is set. Swap or extend freely.
+ * The plugin set of a Node runner: Anthropic and OpenAI models, Pi's coding tools, client workspaces (the TUI's
+ * checkout), local sandboxes with the configured templates, and GitHub tools when `GITHUB_TOKEN` is set. Swap or
+ * extend freely.
  */
 export const defaultPlugins = (env: RunnerEnv): ReadonlyArray<RunnerPlugin> => {
   const plugins: Array<RunnerPlugin> = [
@@ -35,7 +37,8 @@ export const defaultPlugins = (env: RunnerEnv): ReadonlyArray<RunnerPlugin> => {
     sandboxes({
       providers: [localSandboxes({ root: join(resolve(env.dataDir), "sandboxes") })],
       templates: loadTemplates(Option.getOrUndefined(env.templatesFile))
-    })
+    }),
+    workspace()
   ]
   if (Option.isSome(env.githubToken)) plugins.push(githubTools({ token: Redacted.value(env.githubToken.value) }))
   return plugins

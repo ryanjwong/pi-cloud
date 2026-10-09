@@ -1,0 +1,20 @@
+{
+  "name": "@pi-cloud/workspace",
+  "version": "0.1.0",
+  "description": "Client workspaces: Pi's file and shell environment served by a client machine and used by a remote runner.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./plugin": "./src/Plugin.ts"
+  },
+  "scripts": {
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@earendil-works/chord": "1.1.0",
+    "@earendil-works/pi-durable": "1.1.0",
+    "@pi-cloud/protocol": "workspace:*",
+    "@pi-cloud/runner": "workspace:*",
+    "effect": "4.0.2"
+  }
+}

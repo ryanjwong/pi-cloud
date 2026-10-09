@@ -182,7 +182,10 @@ export const sandboxes = (options: SandboxPluginOptions): RunnerPlugin =>
         if (names.length === 0) return undefined
         const state = await read.snapshot(SandboxesDoc, context)
         const lines = [
-          "File and shell tools only work inside a sandbox. Create one with sandbox_create when you need them.",
+          plugin.session.spec.workspace === undefined
+            ? "File and shell tools only work inside a sandbox. Create one with sandbox_create when you need them."
+            : "File and shell tools run in the developer's workspace. For isolated work, create a sandbox with " +
+              "sandbox_create; tools then run in it until you destroy it.",
           `Templates: ${names.map((name) => `${name} (${templates[name]!.provider})`).join(", ")}.`
         ]
         if (state?.active !== undefined) lines.push(`Active sandbox: ${state.active}.`)

@@ -1,4 +1,5 @@
 import { Schema } from "effect"
+import { WorkspaceSpec } from "./Workspace.ts"
 
 /** Identifies one session: one Pi Durable store, one lease, at most one live runner. */
 export const SessionId = Schema.String.pipe(Schema.brand("SessionId"))
@@ -48,6 +49,11 @@ export const SessionSpec = Schema.Struct({
   sandboxes: Schema.optional(Schema.Record(Schema.String, SandboxTemplate)),
   /** The template the agent should work in; it is told to create that sandbox before doing anything else. */
   sandbox: Schema.optional(Schema.String),
+  /**
+   * Work on a client's machine instead of a sandbox: file and shell tools run in this directory on whichever client
+   * serves the session's workspace (see `Workspace.ts`).
+   */
+  workspace: Schema.optional(WorkspaceSpec),
   /** Plugin configuration by plugin name; opaque to the control plane. */
   plugins: Schema.optional(Schema.Record(Schema.String, Schema.Json)),
   /** Free-form metadata for projections, e.g. the Slack thread a session belongs to. */

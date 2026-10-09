@@ -5,6 +5,7 @@ import { Effect, Semaphore, Stream } from "effect"
 import { ControlPlaneConfig, EventHub, LeaseManager, StateStore, storageFailure } from "@pi-cloud/core"
 import { Runners } from "../Runners.ts"
 import { toJson } from "../Sessions.ts"
+import { Workspaces } from "../Workspaces.ts"
 import { RunnerAuth } from "./Auth.ts"
 
 
@@ -22,6 +23,7 @@ export const RunnerRpcLive = RunnerRpcs.toLayer(Effect.gen(function*() {
   const events = yield* EventHub
   const auth = yield* RunnerAuth
   const config = yield* ControlPlaneConfig
+  const workspaces = yield* Workspaces
 
   /** One commit at a time per session, checked against the lease at the moment it applies. */
   const commitLocks = new Map<string, Semaphore.Semaphore>()
@@ -68,7 +70,14 @@ export const RunnerRpcLive = RunnerRpcs.toLayer(Effect.gen(function*() {
           ? yield* commitLock(sessionId).withPermits(1)(Effect.andThen(leases.validate(sessionId, token), run))
           : yield* run
         return { value: toJson(value) as never }
-      }).pipe(Effect.withSpan("RunnerRpc.Storage", { attributes: { method, leaseTtl: config.leaseTtlMs } }))
+      }).pipe(Effect.withSpan("RunnerRpc.Storage", { attributes: { method, leaseTtl: config.leaseTtlMs } })),
+
+    Workspace: ({ sessionId, token, call }, { headers }) =>
+      Stream.unwrap(Effect.gen(function*() {
+        yield* auth.check(headers).pipe(Effect.orDie)
+        yield* leases.validate(sessionId, token)
+        return workspaces.call(sessionId, call)
+      }))
   })
 }))
 

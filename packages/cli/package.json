@@ -12,6 +12,7 @@
   "dependencies": {
     "@pi-cloud/client": "workspace:*",
     "@effect/platform-node": "4.0.2",
-    "effect": "4.0.2"
+    "effect": "4.0.2",
+    "@pi-cloud/tui": "workspace:*"
   }
 }

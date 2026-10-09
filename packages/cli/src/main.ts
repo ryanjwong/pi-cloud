@@ -1,9 +1,13 @@
 #!/usr/bin/env node
-// pi-cloud: a terminal projection of the public API.
-//   PI_CLOUD_URL=http://127.0.0.1:8787 pi-cloud chat --model anthropic/claude-opus-5-5
+// pi-cloud: Pi in your terminal, with the agent on a pi-cloud server.
+//   PI_CLOUD_URL=http://127.0.0.1:8787 pi-cloud --model anthropic/claude-opus-5-5
 import { NodeRuntime } from "@effect/platform-node"
 import { type CommandResult, followEvents, openChannel, PiCloud } from "@pi-cloud/client"
+import { runTui } from "@pi-cloud/tui"
 import { Deferred, Effect, Stream } from "effect"
+import { existsSync } from "node:fs"
+import { homedir, hostname } from "node:os"
+import { join } from "node:path"
 import { createInterface } from "node:readline/promises"
 import { parseArgs } from "node:util"
 import { makeRenderer } from "./render.ts"
@@ -15,13 +19,20 @@ const { values: flags, positionals } = parseArgs({
     title: { type: "string" },
     instructions: { type: "string" },
     sandbox: { type: "string" },
+    continue: { type: "boolean", short: "c" },
+    resume: { type: "string", short: "r" },
     url: { type: "string" }
   }
 })
-const [command = "help", ...rest] = positionals
+const [command = "tui", ...rest] = positionals
 const write = (text: string) => void process.stdout.write(text)
 
-const usage = `pi-cloud <command>
+const usage = `pi-cloud [-c | -r <id>] [--model provider/model]
+                                              open Pi on this directory: the agent runs on the server, its
+                                              tools run here; -c continues this directory's latest session,
+                                              -r attaches to any session
+
+pi-cloud <command>
 
   new  [--model provider/model] [--title t] [--sandbox template]
                                               create a session, print its id; --sandbox names the template
@@ -34,14 +45,20 @@ const usage = `pi-cloud <command>
 
   PI_CLOUD_URL (default http://127.0.0.1:8787), PI_CLOUD_API_KEY`
 
-const createSession = Effect.gen(function*() {
+const cwd = process.cwd()
+
+/** This directory as a session's workspace: the TUI serves it, so the agent's tools run here. */
+const localWorkspace = { cwd, host: hostname(), agentDir: join(homedir(), ".pi", "agent") }
+
+const createSession = (options: { readonly workspace: boolean }) => Effect.gen(function*() {
   const client = yield* PiCloud
   return yield* client.sessions.create({
     payload: {
       title: flags.title,
       spec: {
-        model: parseModel(flags.model ?? "anthropic/claude-opus-5-5"),
+        model: parseModel(flags.model ?? process.env.PI_CLOUD_MODEL ?? "anthropic/claude-opus-5-5"),
         ...(flags.sandbox === undefined ? {} : { sandbox: flags.sandbox }),
+        ...(options.workspace && flags.sandbox === undefined ? { workspace: localWorkspace } : {}),
         ...(flags.instructions === undefined ? {} : { instructions: flags.instructions })
       }
     }
@@ -136,8 +153,24 @@ async function* once(line: string): AsyncGenerator<string> {
 const program = Effect.gen(function*() {
   const client = yield* PiCloud
   switch (command) {
+    case "tui": {
+      let session
+      if (flags.resume !== undefined) session = yield* client.sessions.get({ params: { id: flags.resume as never } })
+      else if (flags.continue === true) {
+        const here = (yield* client.sessions.list()).filter((candidate) => candidate.spec.workspace?.cwd === cwd)
+        session = here.sort((a, b) => b.createdAt - a.createdAt)[0]
+        if (session === undefined) write(`No session for ${cwd} yet; starting one.\n`)
+      }
+      session ??= yield* createSession({ workspace: true })
+      // Serve the session's workspace when it lives on this machine; other sessions are just attached to.
+      const served = session.spec.workspace
+      const serve = served !== undefined && existsSync(served.cwd)
+      return yield* Effect.promise(() =>
+        runTui({ ...connection, sessionId: session.id, cwd: serve ? served.cwd : cwd, serve })
+      )
+    }
     case "new": {
-      const session = yield* createSession
+      const session = yield* createSession({ workspace: false })
       return write(`${session.id}\n`)
     }
     case "ls": {
@@ -164,7 +197,7 @@ const program = Effect.gen(function*() {
       return yield* client.sessions.delete({ params: { id: rest[0] as never } })
     }
     case "chat": {
-      const id = rest[0] ?? (yield* createSession).id
+      const id = rest[0] ?? (yield* createSession({ workspace: false })).id
       write(`session ${id}  (/model provider/id, /compact, /reset [note], /abort, /quit)\n`)
       return yield* converse(id, typed(), { history: true })
     }

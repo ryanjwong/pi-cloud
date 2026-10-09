@@ -11,7 +11,7 @@ import {
   type HarnessSettings,
   watchEvents
 } from "@earendil-works/pi-durable"
-import type { CommandResult, EventBatch, RunnerCommand, Session } from "@pi-cloud/protocol"
+import type { CommandResult, EventBatch, RunnerCommand, Session, WorkspaceCall, WorkspaceEvent } from "@pi-cloud/protocol"
 import { Cause, Deferred, Effect, Exit, Fiber, Schedule, Stream } from "effect"
 import type { ControlPlaneClient } from "./ControlPlaneClient.ts"
 import { noSecrets, type PluginParts, type RunnerPlugin, runSetup, type RunningSession, type SecretResolver } from "./Plugin.ts"
@@ -120,9 +120,18 @@ export const hostSession = Effect.fnUntraced(function*(
         throw error
       }
     })
+    const workspace = (
+      call: WorkspaceCall,
+      onEvent: (event: WorkspaceEvent) => void,
+      signal: AbortSignal | undefined
+    ) =>
+      Effect.runPromise(
+        client.Workspace({ sessionId, token, call }).pipe(Stream.runForEach((event) => Effect.sync(() => onEvent(event)))),
+        { signal }
+      )
     const parts: Array<PluginParts> = []
     for (const plugin of options.plugins) {
-      parts.push(await runSetup(plugin, { session, config: session.spec.plugins?.[plugin.name], secrets }))
+      parts.push(await runSetup(plugin, { session, config: session.spec.plugins?.[plugin.name], secrets, workspace }))
     }
     const credentials = options.modelCredentials
     const models = createModels(credentials === undefined ? undefined : {

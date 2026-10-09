@@ -9,7 +9,7 @@ import type {
   HarnessSettings
 } from "@earendil-works/pi-durable"
 import type { ExecutionEnv } from "@earendil-works/pi-durable/env"
-import type { Session } from "@pi-cloud/protocol"
+import type { Session, WorkspaceCall, WorkspaceEvent } from "@pi-cloud/protocol"
 import { Effect } from "effect"
 
 /** Resolves secret names (from a session's spec) to values, on the runner. */
@@ -27,6 +27,15 @@ export interface PluginContext {
   /** This plugin's entry in the session spec's `plugins`, if any. */
   readonly config: unknown
   readonly secrets: SecretResolver
+  /**
+   * Sends one call to the client serving this session's workspace (see `spec.workspace`), through the control
+   * plane, reporting its events until it ends. Rejects when no client serves it in time.
+   */
+  readonly workspace: (
+    call: WorkspaceCall,
+    onEvent: (event: WorkspaceEvent) => void,
+    signal: AbortSignal | undefined
+  ) => Promise<void>
 }
 
 /** Builds a conversation's execution environment; return `undefined` to let the next plugin decide. */

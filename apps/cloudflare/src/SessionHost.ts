@@ -1,8 +1,10 @@
 import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic"
 import { openaiProvider } from "@earendil-works/pi-ai/providers/openai"
+import { CodingTools } from "@earendil-works/pi-durable/tools"
 import { modelCredentialLookup, WorkerRunnerEnv } from "@pi-cloud/config"
 import type { WakeRequest } from "@pi-cloud/protocol"
-import { modelProviders, RunnerHost } from "@pi-cloud/runner"
+import { extensions, modelProviders, RunnerHost } from "@pi-cloud/runner"
+import { workspace } from "@pi-cloud/workspace/plugin"
 import * as Cloudflare from "alchemy/Cloudflare"
 import { Effect, Redacted } from "effect"
 
@@ -26,7 +28,8 @@ export default class SessionHost extends Cloudflare.DurableObject<SessionHost>()
         controlPlaneUrl: env.controlPlaneUrl,
         secret: Redacted.value(env.runnerSecret),
         modelCredentials: modelCredentialLookup(env),
-        plugins: [modelProviders(anthropicProvider, openaiProvider)]
+        // Sessions opened from the TUI run their tools on the developer's machine, through the control plane.
+        plugins: [modelProviders(anthropicProvider, openaiProvider), extensions("coding", CodingTools), workspace()]
       })
       const keepAlive = state.storage.setAlarm(Date.now() + KEEPALIVE_MS)
 

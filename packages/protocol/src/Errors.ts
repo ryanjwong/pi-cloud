@@ -20,6 +20,13 @@ export class ConversationBusy extends Schema.TaggedError<ConversationBusy>()(
   { httpApiStatus: 409 }
 ) {}
 
+/** No client is serving the session's workspace, or it went away during a call. */
+export class WorkspaceUnavailable extends Schema.TaggedError<WorkspaceUnavailable>()(
+  "WorkspaceUnavailable",
+  { sessionId: Schema.String, message: Schema.String },
+  { httpApiStatus: 503 }
+) {}
+
 /** The runner rejected or failed a command. */
 export class CommandFailed extends Schema.TaggedError<CommandFailed>()(
   "CommandFailed",

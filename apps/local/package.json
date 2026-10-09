@@ -30,6 +30,11 @@
     "@pi-cloud/tool-github": "workspace:*",
     "@pi-cloud/trigger-github": "workspace:*",
     "@pi-cloud/triggers": "workspace:*",
+    "@pi-cloud/tui": "workspace:*",
+    "@pi-cloud/workspace": "workspace:*",
     "effect": "4.0.2"
+  },
+  "devDependencies": {
+    "@xterm/headless": "5.5.0"
   }
 }

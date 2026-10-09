@@ -8,6 +8,18 @@ Durable Object, a Modal function. Sandboxes for the agent's tools are pluggable 
 Written in TypeScript with [Effect](https://effect.website) 4; the Cloudflare deployment uses
 [Alchemy](https://alchemy.run).
 
+For a developer it feels like running `pi` locally. Run `pi-cloud` in a checkout to get Pi's terminal UI,
+built from Pi's own components. The agent's file and shell tools run right there on your machine, while the
+agent loop, model keys and history live on the server. Quit any time; `pi-cloud -c` picks the session back up,
+from this or any other terminal.
+
+```sh
+cd ~/code/api
+PI_CLOUD_URL=https://pi.example.com PI_CLOUD_API_KEY=... pi-cloud      # new session on this checkout
+pi-cloud -c                                                            # continue this directory's latest
+pi-cloud -r ses_...                                                    # attach to any session (GitHub, Slack, ...)
+```
+
 ```
  clients (TUI, web, Slack, ...)
         │  public HTTP API + server-sent events
@@ -55,6 +67,7 @@ The workspace is a stack of small libraries, each building on the ones below it,
 | Runtime | `@pi-cloud/runner` | Hosts Pi Durable against the control plane: `RemoteStorage`, the session runner, `RunnerHost` with a fetch-style wake handler, and the plugin API. Uses only `fetch`. |
 | Capabilities | `@pi-cloud/sandbox` | The `SandboxProvider` interface and the agent's `sandbox_create`/`sandbox_destroy` tools, as a runner plugin. |
 | | `@pi-cloud/triggers` | One-way events: the `Trigger` interface, a generic signed JSON webhook, and the extension that mounts triggers. |
+| | `@pi-cloud/workspace` | Client workspaces: Pi's file and shell environment served by a client (`serveWorkspace`) and used by a remote runner (`remoteEnv`, the `workspace()` plugin). Passes Pi's env conformance suite. |
 | | `@pi-cloud/sources` | Two-way connections: the `Source` interface (receive messages, deliver replies) and the extension that runs them. |
 | Adapters | `@pi-cloud/sandbox-local` | Sandboxes as directories on the runner's machine. |
 | | `@pi-cloud/trigger-github` | GitHub webhooks: issues, comments, pull requests and reviews reach the session of their thread. |
@@ -62,7 +75,8 @@ The workspace is a stack of small libraries, each building on the ones below it,
 | | `@pi-cloud/source-slack` | Slack: each thread is a session; mentions and thread replies go in, answers are posted in the thread. |
 | | `@pi-cloud/storage-sqlite` | SQLite `StateStore` (Pi's own SQLite storage, one file per session), `SessionStore` and `BindingStore`, for Node. |
 | Clients | `@pi-cloud/client` | Typed REST client derived from the API, `followEvents` (reconnecting event stream), and `openChannel` (the WebSocket channel). |
-| | `@pi-cloud/cli` | `pi-cloud` terminal client: `new`, `ls`, `chat`, `send`, `tail`, `rm`. Chat runs over the channel. |
+| | `@pi-cloud/tui` | The terminal UI: Pi's chat components (`pi-coding-agent`, `pi-tui`) over the session channel, serving its directory as the workspace. |
+| | `@pi-cloud/cli` | `pi-cloud`: the TUI by default; `new`, `ls`, `chat` (line mode), `send`, `tail`, `rm` for scripts. |
 | Apps | `apps/local` | Control plane and runner in one process (`main.ts`), or split (`control-plane.ts`, `runner.ts`). The end-to-end tests live here. |
 | | `apps/cloudflare` | Runner host on Cloudflare: a Worker routes wake requests to one Durable Object per session. Deployed with Alchemy. |
 
@@ -82,6 +96,28 @@ plugin). Every surface reads the same Pi agent events (`message_start`, `message
   straight from the state store, with or without a running runner.
 - **OpenAPI** at `/openapi.json`, browsable docs at `/docs`, generated from the same definition the server and the
   typed client use. The channel's message schemas live in `@pi-cloud/protocol` (`Channel.ts`).
+
+## Working on your checkout
+
+A session whose spec has `workspace: { cwd }` runs its file and shell tools on whichever client **serves** that
+workspace. The TUI serves its directory. Each tool call goes from the runner over the runner RPC to the control
+plane, then over the session channel to the client, which runs it with Pi's own `NodeExecutionEnv`. Output,
+file watches and cancellation stream back the same way.
+
+```
+ runner (anywhere)            control plane                 your machine (pi-cloud TUI)
+ Pi tools → remoteEnv ──RPC──► Workspaces relay ──WebSocket──► serveWorkspace(NodeExecutionEnv(cwd))
+```
+
+- Behaviour matches local Pi. The client runs Pi's own environment implementation, and the forwarded one passes
+  Pi Durable's env conformance suite: exec with streamed output, readers, file watching, and aborts.
+- Pi's project instructions are loaded the way the CLI loads them: `AGENTS.md` (or `CLAUDE.md`) from
+  `~/.pi/agent` and from each directory from the root down to the checkout.
+- If no client is serving the workspace, a tool call waits for one (10 minutes by default, `workspaceWaitMs`), so
+  a session whose developer closed the laptop simply pauses. Reattaching resumes it. Esc in the TUI aborts the
+  run and kills the command running on your machine.
+- Commands run as you, with your environment, exactly like local Pi. Model keys never leave the server.
+- A sandbox the agent creates with `sandbox_create` takes over from the workspace until it is destroyed.
 
 ## Sources and triggers
 
@@ -144,7 +180,7 @@ pnpm typecheck
 
 # Everything in one process, state in apps/local/.data (DATA_DIR), secrets from secrets.yaml (see Credentials)
 sops exec-env secrets.yaml 'pnpm start'   # API on :8787, docs at /docs, OpenAPI at /openapi.json
-pnpm cli chat --model anthropic/claude-opus-5-5
+pnpm cli --model anthropic/claude-opus-5-5   # the TUI, working on the current directory
 ```
 
 Split deployment: the control plane wakes runners over HTTP (`RUNNER_URL`), and runners attach back
@@ -316,6 +352,12 @@ renderer; a web UI or Slack bot is another renderer over `followEvents`.
   history, read `/entries`.
 - **Latency.** Every commit is a round trip to the control plane. Keep runners close to it, and consider raising
   Pi's `settings.progress` intervals, which control how often streaming output is committed.
+- **The TUI is Pi's look, not all of Pi.** It renders with Pi's components and covers chatting, steering, aborting,
+  `/model`, `/thinking`, `/compact` and `/reset`. Not there yet: the model and session pickers, branching and the
+  session tree, `@` file completion, image paste, and loading Pi extensions, skills and settings from `~/.pi`
+  (only `AGENTS.md` is read).
+- **Workspace latency.** Every file or shell operation is a round trip from the runner through the control plane
+  to your machine. Keep runners near the control plane; the hop to your machine is the same one any remote UI has.
 - **Not yet built:** a Postgres state store, a shared lease manager, Modal and Cloudflare sandbox providers,
   hosting the control plane itself on Cloudflare, and real authentication (today: static API keys and a shared
   runner secret). The Cloudflare app typechecks but has not been deployed. The local sandbox provider has no

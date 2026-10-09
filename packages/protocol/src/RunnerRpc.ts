@@ -2,7 +2,8 @@ import { Schema } from "effect"
 import { Rpc, RpcGroup } from "effect/rpc"
 import { CommandResult, SessionCommand } from "./Commands.ts"
 import { EventBatch, Session } from "./Domain.ts"
-import { LeaseHeld, LeaseLost, SessionNotFound, StorageFailure } from "./Errors.ts"
+import { LeaseHeld, LeaseLost, SessionNotFound, StorageFailure, WorkspaceUnavailable } from "./Errors.ts"
+import { WorkspaceCall, WorkspaceEvent } from "./Workspace.ts"
 
 /**
  * The internal protocol between the control plane and runners.
@@ -100,6 +101,16 @@ export class RunnerRpcs extends RpcGroup.make(
     payload: { ...leaseFields, method: StorageMethod, args: Schema.Array(Schema.Json) },
     success: Schema.Struct({ value: Schema.optional(Schema.Json) }),
     error: Schema.Union([LeaseLost, StorageFailure])
+  }),
+  /**
+   * One call on the session's client workspace, relayed to the client serving it. Waits for a client to serve the
+   * workspace if none is connected; interrupting the stream cancels the call on the client.
+   */
+  Rpc.make("Workspace", {
+    payload: { ...leaseFields, call: WorkspaceCall },
+    success: WorkspaceEvent,
+    error: Schema.Union([LeaseLost, WorkspaceUnavailable]),
+    stream: true
   })
 ) {}
 

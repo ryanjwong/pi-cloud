@@ -1,0 +1,23 @@
+{
+  "name": "@pi-cloud/tui",
+  "version": "0.1.0",
+  "description": "pi-cloud's terminal UI: Pi's own chat components over a session channel, with the agent's tools running in your checkout.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@earendil-works/chord": "1.1.0",
+    "@earendil-works/pi-ai": "1.1.0",
+    "@earendil-works/pi-coding-agent": "1.1.0",
+    "@earendil-works/pi-durable": "1.1.0",
+    "@earendil-works/pi-tui": "1.1.0",
+    "@pi-cloud/client": "workspace:*",
+    "@pi-cloud/protocol": "workspace:*",
+    "@pi-cloud/workspace": "workspace:*",
+    "effect": "4.0.2"
+  }
+}
