@@ -1,0 +1,17 @@
+{
+  "name": "@pi-cloud/pi",
+  "version": "0.1.0",
+  "description": "Pi's coding agent on pi-cloud runners: its system prompt and subagent tool, as its durable mode runs them.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@earendil-works/chord": "1.1.0",
+    "@earendil-works/pi-ai": "1.1.0",
+    "@earendil-works/pi-coding-agent": "1.1.0",
+    "@earendil-works/pi-durable": "1.1.0",
+    "@pi-cloud/runner": "workspace:*",
+    "effect": "4.0.2"
+  }
+}

@@ -1,13 +1,11 @@
 #!/usr/bin/env node
-// pi-cloud: Pi in your terminal, with the agent on a pi-cloud server.
-//   PI_CLOUD_URL=http://127.0.0.1:8787 pi-cloud --model anthropic/claude-opus-5-5
+// pi-cloud: Pi's TUI on a session that runs entirely in the cloud.
+//   PI_CLOUD_URL=https://pi.example.com pi-cloud            (in a git checkout)
 import { NodeRuntime } from "@effect/platform-node"
 import { type CommandResult, followEvents, openChannel, PiCloud } from "@pi-cloud/client"
 import { runTui } from "@pi-cloud/tui"
 import { Deferred, Effect, Stream } from "effect"
-import { existsSync } from "node:fs"
-import { homedir, hostname } from "node:os"
-import { join } from "node:path"
+import { execFileSync } from "node:child_process"
 import { createInterface } from "node:readline/promises"
 import { parseArgs } from "node:util"
 import { makeRenderer } from "./render.ts"
@@ -28,9 +26,8 @@ const [command = "tui", ...rest] = positionals
 const write = (text: string) => void process.stdout.write(text)
 
 const usage = `pi-cloud [-c | -r <id>] [--model provider/model]
-                                              open Pi on this directory: the agent runs on the server, its
-                                              tools run here; -c continues this directory's latest session,
-                                              -r attaches to any session
+      Pi's TUI on a cloud session. In a git checkout the agent works in a cloud clone of its origin at the
+      current branch; -c continues this repository's latest session, -r attaches to any session.
 
 pi-cloud <command>
 
@@ -45,24 +42,67 @@ pi-cloud <command>
 
   PI_CLOUD_URL (default http://127.0.0.1:8787), PI_CLOUD_API_KEY`
 
-const cwd = process.cwd()
-
-/** This directory as a session's workspace: the TUI serves it, so the agent's tools run here. */
-const localWorkspace = { cwd, host: hostname(), agentDir: join(homedir(), ".pi", "agent") }
-
-const createSession = (options: { readonly workspace: boolean }) => Effect.gen(function*() {
+const createSession = Effect.gen(function*() {
   const client = yield* PiCloud
   return yield* client.sessions.create({
     payload: {
       title: flags.title,
       spec: {
-        model: parseModel(flags.model ?? process.env.PI_CLOUD_MODEL ?? "anthropic/claude-opus-5-5"),
+        model: parseModel(flags.model ?? "anthropic/claude-opus-5-5"),
         ...(flags.sandbox === undefined ? {} : { sandbox: flags.sandbox }),
-        ...(options.workspace && flags.sandbox === undefined ? { workspace: localWorkspace } : {}),
         ...(flags.instructions === undefined ? {} : { instructions: flags.instructions })
       }
     }
   })
+})
+
+/** The checkout's origin and branch, which the cloud session clones. */
+const gitOrigin = () => {
+  const git = (...args: Array<string>) => execFileSync("git", args, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim()
+  try {
+    const remote = git("remote", "get-url", "origin")
+    const branch = git("rev-parse", "--abbrev-ref", "HEAD")
+    // SSH remotes are cloned over HTTPS in the cloud, with the server's credential.
+    const url = remote.replace(/^git@([^:]+):/, "https://$1/").replace(/^ssh:\/\/git@([^/]+)\//, "https://$1/")
+    const name = url.replace(/^https?:\/\/[^/]+\//, "").replace(/\.git$/, "")
+    let unpushed = ""
+    try {
+      const ahead = Number(git("rev-list", "--count", `origin/${branch}..HEAD`))
+      const dirty = git("status", "--porcelain").length > 0
+      unpushed = [ahead > 0 ? `${ahead} unpushed commit${ahead === 1 ? "" : "s"}` : "", dirty ? "uncommitted changes" : ""]
+        .filter(Boolean).join(" and ")
+    } catch {
+      unpushed = `branch ${branch} is not on origin`
+    }
+    return { url, branch, label: `${name}@${branch}`, unpushed }
+  } catch {
+    return undefined
+  }
+}
+
+/** A session whose agent works in a cloud sandbox: a clone of this checkout's origin, or an empty directory. */
+const cloudSession = Effect.gen(function*() {
+  const client = yield* PiCloud
+  const origin = gitOrigin()
+  const provider = process.env.PI_CLOUD_SANDBOX_PROVIDER ?? "local"
+  if (origin?.unpushed) write(`Note: the cloud session works from origin; ${origin.unpushed} are not there.\n`)
+  const session = yield* client.sessions.create({
+    payload: {
+      title: flags.title ?? origin?.label,
+      spec: {
+        model: parseModel(flags.model ?? process.env.PI_CLOUD_MODEL ?? "anthropic/claude-opus-5-5"),
+        sandbox: "home",
+        sandboxes: {
+          home: origin === undefined
+            ? { provider }
+            : { provider, repository: { url: origin.url, ref: origin.branch, credential: "GITHUB_TOKEN" } }
+        },
+        ...(origin === undefined ? {} : { metadata: { origin: { url: origin.url, branch: origin.branch } } }),
+        ...(flags.instructions === undefined ? {} : { instructions: flags.instructions })
+      }
+    }
+  })
+  return { session, label: origin?.label }
 })
 
 const connection = {
@@ -154,23 +194,27 @@ const program = Effect.gen(function*() {
   const client = yield* PiCloud
   switch (command) {
     case "tui": {
-      let session
-      if (flags.resume !== undefined) session = yield* client.sessions.get({ params: { id: flags.resume as never } })
+      let target: { readonly id: string; readonly label?: string | undefined } | undefined
+      if (flags.resume !== undefined) target = { id: (yield* client.sessions.get({ params: { id: flags.resume as never } })).id }
       else if (flags.continue === true) {
-        const here = (yield* client.sessions.list()).filter((candidate) => candidate.spec.workspace?.cwd === cwd)
-        session = here.sort((a, b) => b.createdAt - a.createdAt)[0]
-        if (session === undefined) write(`No session for ${cwd} yet; starting one.\n`)
+        const origin = gitOrigin()
+        const matching = (yield* client.sessions.list()).filter((candidate) => {
+          const saved = (candidate.spec.metadata?.origin ?? undefined) as { url?: string; branch?: string } | undefined
+          return origin === undefined ? saved === undefined : saved?.url === origin.url && saved.branch === origin.branch
+        })
+        const latest = [...matching].sort((a, b) => b.createdAt - a.createdAt)[0]
+        if (latest !== undefined) target = { id: latest.id, label: origin?.label }
+        else write("No session for this repository yet; starting one.\n")
       }
-      session ??= yield* createSession({ workspace: true })
-      // Serve the session's workspace when it lives on this machine; other sessions are just attached to.
-      const served = session.spec.workspace
-      const serve = served !== undefined && existsSync(served.cwd)
-      return yield* Effect.promise(() =>
-        runTui({ ...connection, sessionId: session.id, cwd: serve ? served.cwd : cwd, serve })
-      )
+      if (target === undefined) {
+        const created = yield* cloudSession
+        target = { id: created.session.id, label: created.label }
+      }
+      const { id, label } = target
+      return yield* Effect.promise(() => runTui({ ...connection, sessionId: id, ...(label === undefined ? {} : { label }) }))
     }
     case "new": {
-      const session = yield* createSession({ workspace: false })
+      const session = yield* createSession
       return write(`${session.id}\n`)
     }
     case "ls": {
@@ -197,7 +241,7 @@ const program = Effect.gen(function*() {
       return yield* client.sessions.delete({ params: { id: rest[0] as never } })
     }
     case "chat": {
-      const id = rest[0] ?? (yield* createSession({ workspace: false })).id
+      const id = rest[0] ?? (yield* createSession).id
       write(`session ${id}  (/model provider/id, /compact, /reset [note], /abort, /quit)\n`)
       return yield* converse(id, typed(), { history: true })
     }

@@ -2,8 +2,8 @@ import { Schema } from "effect"
 import { Rpc, RpcGroup } from "effect/rpc"
 import { CommandResult, SessionCommand } from "./Commands.ts"
 import { EventBatch, Session } from "./Domain.ts"
-import { LeaseHeld, LeaseLost, SessionNotFound, StorageFailure, WorkspaceUnavailable } from "./Errors.ts"
-import { WorkspaceCall, WorkspaceEvent } from "./Workspace.ts"
+import { ViewUpdate } from "./View.ts"
+import { LeaseHeld, LeaseLost, SessionNotFound, StorageFailure } from "./Errors.ts"
 
 /**
  * The internal protocol between the control plane and runners.
@@ -43,11 +43,14 @@ const leaseFields = {
 /** Ask the runner to start a fresh event stream, beginning with a snapshot. */
 export const ResnapshotCommand = Schema.TaggedStruct("Resnapshot", {})
 
+/** Ask the runner to publish a conversation's view, because a presentation is watching it. */
+export const WatchViewCommand = Schema.TaggedStruct("WatchView", { conversationId: Schema.Number })
+
 /** Ask the runner to release its lease and stop, e.g. because the session was deleted. */
 export const ShutdownCommand = Schema.TaggedStruct("Shutdown", { reason: Schema.String })
 
 /** What runners execute: every client-facing `SessionCommand`, plus control-plane housekeeping. */
-export const RunnerCommand = Schema.Union([...SessionCommand.members, ResnapshotCommand, ShutdownCommand])
+export const RunnerCommand = Schema.Union([...SessionCommand.members, ResnapshotCommand, WatchViewCommand, ShutdownCommand])
 export type RunnerCommand = typeof RunnerCommand.Type
 
 /** First message of an attachment: the lease and what the runner is hosting. */
@@ -93,6 +96,11 @@ export class RunnerRpcs extends RpcGroup.make(
     payload: { ...leaseFields, batches: Schema.Array(EventBatch) },
     error: LeaseLost
   }),
+  /** Publish view updates: the session state and the watched conversations' views. */
+  Rpc.make("PublishView", {
+    payload: { ...leaseFields, updates: Schema.Array(ViewUpdate) },
+    error: LeaseLost
+  }),
   /**
    * One Pi Durable `Storage` call. Arguments and results are JSON; `undefined` arguments travel as `null`.
    * `commit` is fenced: it fails with `LeaseLost` unless `token` holds the lease at the moment it is applied.
@@ -101,16 +109,6 @@ export class RunnerRpcs extends RpcGroup.make(
     payload: { ...leaseFields, method: StorageMethod, args: Schema.Array(Schema.Json) },
     success: Schema.Struct({ value: Schema.optional(Schema.Json) }),
     error: Schema.Union([LeaseLost, StorageFailure])
-  }),
-  /**
-   * One call on the session's client workspace, relayed to the client serving it. Waits for a client to serve the
-   * workspace if none is connected; interrupting the stream cancels the call on the client.
-   */
-  Rpc.make("Workspace", {
-    payload: { ...leaseFields, call: WorkspaceCall },
-    success: WorkspaceEvent,
-    error: Schema.Union([LeaseLost, WorkspaceUnavailable]),
-    stream: true
   })
 ) {}
 

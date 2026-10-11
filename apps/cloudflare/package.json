@@ -16,7 +16,6 @@
     "@pi-cloud/protocol": "workspace:*",
     "@pi-cloud/runner": "workspace:*",
     "alchemy": "2.0.0-beta.81",
-    "effect": "4.0.2",
-    "@pi-cloud/workspace": "workspace:*"
+    "effect": "4.0.2"
   }
 }

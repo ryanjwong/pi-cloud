@@ -1,13 +1,10 @@
 {
   "name": "@pi-cloud/tui",
   "version": "0.1.0",
-  "description": "pi-cloud's terminal UI: Pi's own chat components over a session channel, with the agent's tools running in your checkout.",
+  "description": "Pi's own TUI as a projection of the pi-cloud API: it renders the session's view and sends commands; the agent and its tools run in the cloud.",
   "type": "module",
   "exports": {
     ".": "./src/index.ts"
-  },
-  "scripts": {
-    "test": "vitest run"
   },
   "dependencies": {
     "@earendil-works/chord": "1.1.0",
@@ -16,8 +13,6 @@
     "@earendil-works/pi-durable": "1.1.0",
     "@earendil-works/pi-tui": "1.1.0",
     "@pi-cloud/client": "workspace:*",
-    "@pi-cloud/protocol": "workspace:*",
-    "@pi-cloud/workspace": "workspace:*",
     "effect": "4.0.2"
   }
 }

@@ -8,6 +8,10 @@
   },
   "dependencies": {
     "@pi-cloud/protocol": "workspace:*",
-    "effect": "4.0.2"
+    "effect": "4.0.2",
+    "@earendil-works/chord": "1.1.0"
+  },
+  "scripts": {
+    "test": "vitest run"
   }
 }

@@ -2,10 +2,9 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context"
 import type { Storage } from "@earendil-works/pi-durable"
 import { RunnerRpcs, type StorageMethod } from "@pi-cloud/protocol"
 import { Effect, Semaphore, Stream } from "effect"
-import { ControlPlaneConfig, EventHub, LeaseManager, StateStore, storageFailure } from "@pi-cloud/core"
+import { ControlPlaneConfig, EventHub, LeaseManager, StateStore, storageFailure, ViewHub } from "@pi-cloud/core"
 import { Runners } from "../Runners.ts"
 import { toJson } from "../Sessions.ts"
-import { Workspaces } from "../Workspaces.ts"
 import { RunnerAuth } from "./Auth.ts"
 
 
@@ -21,9 +20,9 @@ export const RunnerRpcLive = RunnerRpcs.toLayer(Effect.gen(function*() {
   const leases = yield* LeaseManager
   const states = yield* StateStore
   const events = yield* EventHub
+  const views = yield* ViewHub
   const auth = yield* RunnerAuth
   const config = yield* ControlPlaneConfig
-  const workspaces = yield* Workspaces
 
   /** One commit at a time per session, checked against the lease at the moment it applies. */
   const commitLocks = new Map<string, Semaphore.Semaphore>()
@@ -60,6 +59,14 @@ export const RunnerRpcLive = RunnerRpcs.toLayer(Effect.gen(function*() {
         if (needsSnapshot) yield* runners.notify(sessionId, { _tag: "Resnapshot" })
       }),
 
+    PublishView: ({ sessionId, token, updates }, { headers }) =>
+      Effect.gen(function*() {
+        yield* auth.check(headers).pipe(Effect.orDie)
+        yield* leases.validate(sessionId, token)
+        const { needsSnapshot } = yield* views.publish(sessionId, updates)
+        if (needsSnapshot) yield* runners.notify(sessionId, { _tag: "Resnapshot" })
+      }),
+
     Storage: ({ sessionId, token, method, args }, { headers }) =>
       Effect.gen(function*() {
         yield* auth.check(headers).pipe(Effect.orDie)
@@ -70,14 +77,7 @@ export const RunnerRpcLive = RunnerRpcs.toLayer(Effect.gen(function*() {
           ? yield* commitLock(sessionId).withPermits(1)(Effect.andThen(leases.validate(sessionId, token), run))
           : yield* run
         return { value: toJson(value) as never }
-      }).pipe(Effect.withSpan("RunnerRpc.Storage", { attributes: { method, leaseTtl: config.leaseTtlMs } })),
-
-    Workspace: ({ sessionId, token, call }, { headers }) =>
-      Stream.unwrap(Effect.gen(function*() {
-        yield* auth.check(headers).pipe(Effect.orDie)
-        yield* leases.validate(sessionId, token)
-        return workspaces.call(sessionId, call)
-      }))
+      }).pipe(Effect.withSpan("RunnerRpc.Storage", { attributes: { method, leaseTtl: config.leaseTtlMs } }))
   })
 }))
 

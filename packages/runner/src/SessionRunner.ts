@@ -1,6 +1,7 @@
 import type { Context } from "@earendil-works/chord"
 import { BACKGROUND_CONTEXT, withCancel } from "@earendil-works/chord/context"
-import { createModels } from "@earendil-works/pi-ai/models"
+import { clampThinkingLevel } from "@earendil-works/pi-ai"
+import { createModels, type Models } from "@earendil-works/pi-ai/models"
 import {
   type AgentEventStream,
   type Conversation,
@@ -11,11 +12,12 @@ import {
   type HarnessSettings,
   watchEvents
 } from "@earendil-works/pi-durable"
-import type { CommandResult, EventBatch, RunnerCommand, Session, WorkspaceCall, WorkspaceEvent } from "@pi-cloud/protocol"
+import type { CommandResult, EventBatch, RunnerCommand, Session, ViewFrame } from "@pi-cloud/protocol"
 import { Cause, Deferred, Effect, Exit, Fiber, Schedule, Stream } from "effect"
 import type { ControlPlaneClient } from "./ControlPlaneClient.ts"
 import { noSecrets, type PluginParts, type RunnerPlugin, runSetup, type RunningSession, type SecretResolver } from "./Plugin.ts"
 import { LeaseLostError, RemoteStorage } from "./RemoteStorage.ts"
+import { ViewPublisher } from "./View.ts"
 
 export interface SessionRunnerOptions {
   readonly plugins: ReadonlyArray<RunnerPlugin>
@@ -54,6 +56,9 @@ interface Hosted extends RunningSession {
   readonly context: Context
   readonly cancel: () => void
   watch: AgentEventStream | undefined
+  /** Computes the view presentations render; see `View.ts`. */
+  view: ViewPublisher | undefined
+  readonly models: Models
   seq: number
   /** Publishes run one after another so batches arrive in order. */
   publishing: Promise<void>
@@ -91,6 +96,15 @@ export const hostSession = Effect.fnUntraced(function*(
     return current.publishing
   }
 
+  const publishView = (current: Hosted, conversationId: number | undefined, frame: ViewFrame) => {
+    const update = { epoch: current.epoch, seq: ++current.seq, ...(conversationId === undefined ? {} : { conversationId }), frame }
+    current.publishing = current.publishing.then(() =>
+      run(client.PublishView({ sessionId, token: current.token, updates: [toJson(update)] })).catch((error) => {
+        if ((error as { _tag?: string })._tag === "LeaseLost") stopNow("lease-lost")
+      })
+    )
+  }
+
   /** (Re)start the root conversation's event stream; it begins with a snapshot. */
   const startWatch = async (current: Hosted) => {
     const previous = current.watch
@@ -120,18 +134,9 @@ export const hostSession = Effect.fnUntraced(function*(
         throw error
       }
     })
-    const workspace = (
-      call: WorkspaceCall,
-      onEvent: (event: WorkspaceEvent) => void,
-      signal: AbortSignal | undefined
-    ) =>
-      Effect.runPromise(
-        client.Workspace({ sessionId, token, call }).pipe(Stream.runForEach((event) => Effect.sync(() => onEvent(event)))),
-        { signal }
-      )
     const parts: Array<PluginParts> = []
     for (const plugin of options.plugins) {
-      parts.push(await runSetup(plugin, { session, config: session.spec.plugins?.[plugin.name], secrets, workspace }))
+      parts.push(await runSetup(plugin, { session, config: session.spec.plugins?.[plugin.name], secrets }))
     }
     const credentials = options.modelCredentials
     const models = createModels(credentials === undefined ? undefined : {
@@ -155,7 +160,10 @@ export const hostSession = Effect.fnUntraced(function*(
         }
         return undefined
       },
-      onReport: (error) => console.warn(`[pi-cloud runner ${runnerId}] ${sessionId}:`, error)
+      onReport: (error) => {
+        console.warn(`[pi-cloud runner ${runnerId}] ${sessionId}:`, error)
+        hosted?.view?.notice("warning", error instanceof Error ? error.message : String(error))
+      }
     }, context)
     const { model, thinkingLevel, instructions } = session.spec
     const root = await harness.root(context, {
@@ -177,15 +185,21 @@ export const hostSession = Effect.fnUntraced(function*(
       context,
       cancel,
       watch: undefined,
+      view: undefined,
+      models,
       seq: 0,
       publishing: Promise.resolve()
     }
     for (const part of parts) await part.ready?.(current, context)
     await startWatch(current)
+    const view = new ViewPublisher(harness, models, context, (id, frame) => publishView(current, id, frame))
+    current.view = view
+    await view.start(root.id)
     return current
   }
 
   const close = async (current: Hosted) => {
+    current.view?.close()
     await current.watch?.stop().catch(() => {})
     await Promise.race([
       current.harness.close(current.context).catch(() => {}),
@@ -214,6 +228,7 @@ export const hostSession = Effect.fnUntraced(function*(
             ...(command.requestId === undefined ? {} : { requestId: command.requestId }),
             ...(command.whenBusy === undefined ? {} : { whenBusy: command.whenBusy })
           }, current.context)
+          current.view?.watchAnswer(submission)
           return { _tag: "Ok", value: { submissionId: submission.id, conversationId: target.id } }
         }
         case "Abort": {
@@ -222,23 +237,40 @@ export const hostSession = Effect.fnUntraced(function*(
         }
         case "Configure": {
           const target = await conversation(current, command.conversationId)
+          // A new model keeps the current thinking level, clamped to what it supports.
+          let thinkingLevel = command.thinkingLevel
+          if (command.model != null && thinkingLevel === undefined) {
+            const model = current.models.getModel(command.model.provider, command.model.modelId)
+            if (model === undefined) throw new Error(`Unknown model: ${command.model.provider}/${command.model.modelId}`)
+            const view = await target.viewState(current.context)
+            const level = (view.value.docs["pi.agent"] as { thinkingLevel?: string } | undefined)?.thinkingLevel ?? "off"
+            view.dispose()
+            thinkingLevel = clampThinkingLevel(model, level as never)
+          }
           await target.configure({
             ...(command.model === undefined ? {} : { model: command.model }),
-            ...(command.thinkingLevel === undefined ? {} : { thinkingLevel: command.thinkingLevel as never }),
+            ...(thinkingLevel === undefined ? {} : { thinkingLevel: thinkingLevel as never }),
             ...(command.instructions === undefined ? {} : { instructions: command.instructions })
           }, current.context)
           return { _tag: "Ok" }
         }
         case "Compact": {
           const target = await conversation(current, command.conversationId)
-          return { _tag: "Ok", value: { taskId: await target.compact(command.instructions, current.context) } }
+          const taskId = await target.compact(command.instructions, current.context)
+          current.view?.watchCompaction(taskId)
+          return { _tag: "Ok", value: { taskId } }
         }
         case "Reset": {
           await (await conversation(current, command.conversationId)).reset(command.handoff, current.context)
           return { _tag: "Ok" }
         }
+        case "WatchView": {
+          await current.view?.watch(command.conversationId)
+          return { _tag: "Ok" }
+        }
         case "Resnapshot": {
           await startWatch(current)
+          current.view?.resnapshot()
           return { _tag: "Ok" }
         }
         case "Shutdown": {

@@ -5,6 +5,7 @@ import { HttpApiClient, HttpApiMiddleware } from "effect/http-api"
 
 export * from "@pi-cloud/protocol"
 export * from "./Channel.ts"
+export * from "./View.ts"
 
 export interface ClientOptions {
   /** Base URL of the control plane. */

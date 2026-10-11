@@ -67,15 +67,20 @@ export const sandboxes = (options: SandboxPluginOptions): RunnerPlugin =>
       /** Template env plus resolved secrets. Secrets are resolved on the runner and never stored. */
       const environment = async (template: SandboxTemplate) => {
         const env: Record<string, string> = { ...template.env }
-        const credential = template.repository?.credential
-        const names = new Set([...(template.secrets ?? []), ...(credential === undefined ? [] : [credential])])
-        for (const name of names) {
+        for (const name of new Set(template.secrets ?? [])) {
           const value = await plugin.secrets(name)
           if (value === undefined) throw new Error(`Secret ${name} is not available on this runner`)
           env[name] = value
           mask.add(name, value)
         }
-        if (credential !== undefined) Object.assign(env, gitCredentialEnv(credential))
+        // A repository credential the runner does not have is skipped: public repositories clone without it.
+        const credential = template.repository?.credential
+        const token = credential === undefined ? undefined : await plugin.secrets(credential)
+        if (credential !== undefined && token !== undefined) {
+          env[credential] = token
+          mask.add(credential, token)
+          Object.assign(env, gitCredentialEnv(credential))
+        }
         return env
       }
 
@@ -94,6 +99,56 @@ export const sandboxes = (options: SandboxPluginOptions): RunnerPlugin =>
         return connection
       }
 
+      /**
+       * Clone the template's repository and run its setup commands, streaming their output, unless a marker file says
+       * that already happened (for the same sandbox, created again or reconnected after a restart).
+       */
+      const setup = async (
+        template: SandboxTemplate,
+        stored: StoredSandbox,
+        env: Record<string, string>,
+        output: (chunk: string) => void,
+        context: Context
+      ) => {
+        const shell = await connect(stored)
+        const marker = template.repository === undefined ? ".pi-cloud-ready" : ".git/pi-cloud-ready"
+        const ready = await shell.exec(`test -e ${marker}`, { cwd: stored.handle.cwd }, context)
+        if (ready.ok && ready.value.exitCode === 0) return
+        const repository = template.repository
+        const clone = repository === undefined
+          ? []
+          : [`git clone --quiet${repository.ref === undefined ? "" : ` --branch ${shellQuote(repository.ref)}`} ${shellQuote(repository.url)} .`]
+        for (const command of [...clone, ...(template.setup ?? [])]) {
+          output(`$ ${command}\n`)
+          const result = await shell.exec(command, { cwd: stored.handle.cwd, env, onOutput: (chunk) => output(chunk) }, context)
+          if (!result.ok) throw new Error(`Setup failed: ${String(result.error)}`)
+          if (result.value.exitCode !== 0) throw new Error(`Setup command exited with ${result.value.exitCode}: ${command}`)
+        }
+        await shell.exec(`touch ${marker}`, { cwd: stored.handle.cwd }, context)
+      }
+
+      /**
+       * The session's own sandbox (`spec.sandbox`), created the first time a tool needs an environment, so tools work
+       * from the first turn as they do with a local Pi. Creation is keyed by session, so a restarted runner finds the
+       * same sandbox; a marker file records that setup finished.
+       */
+      let preferred: Promise<{ stored: StoredSandbox; env: ExecutionEnv }> | undefined
+      const preferredSandbox = (name: string, context: Context): Promise<{ stored: StoredSandbox; env: ExecutionEnv }> => {
+        preferred ??= (async () => {
+          const template = templates[name]
+          if (template === undefined) throw new Error(`The session's sandbox template "${name}" does not exist`)
+          const env = await environment(template)
+          const handle = await Effect.runPromise(
+            provider(template.provider).create({ key: `${plugin.session.id}/${name}`, template, env })
+          )
+          const stored: StoredSandbox = { template: name, handle }
+          await setup(template, stored, env, () => {}, context)
+          return { stored, env: await connect(stored) }
+        })()
+        preferred.catch(() => (preferred = undefined))
+        return preferred
+      }
+
       const create = defineTool({
         name: "sandbox_create",
         description: "Create a sandbox from one of the session's templates and make it the active one. " +
@@ -110,6 +165,16 @@ export const sandboxes = (options: SandboxPluginOptions): RunnerPlugin =>
           if (existing !== undefined) {
             await api.commit(async (tx) => void ((await tx.doc(SandboxesDoc)).active = name), context)
             return { content: text(`Sandbox "${name}" is active (working directory ${existing.handle.cwd}).`) }
+          }
+          // The session's own sandbox may already be set up; creating it just activates it.
+          if (args.template === plugin.session.spec.sandbox && name === args.template) {
+            const { stored } = await preferredSandbox(name, context)
+            await api.commit(async (tx) => {
+              const doc = await tx.doc(SandboxesDoc)
+              doc.sandboxes[name] = stored
+              doc.active = name
+            }, context)
+            return { content: text(`Sandbox "${name}" is ready and active (working directory ${stored.handle.cwd}).`) }
           }
           const template = templates[args.template]
           if (template === undefined) {
@@ -130,23 +195,7 @@ export const sandboxes = (options: SandboxPluginOptions): RunnerPlugin =>
           }
           const stored: StoredSandbox = { template: args.template, handle }
           if ((await api.memo<boolean>("setup", context)) !== true) {
-            const shell = await connect(stored)
-            const repository = template.repository
-            const clone = repository === undefined
-              ? []
-              : [`git clone --quiet${repository.ref === undefined ? "" : ` --branch ${shellQuote(repository.ref)}`} ${shellQuote(repository.url)} .`]
-            for (const command of [...clone, ...(template.setup ?? [])]) {
-              api.output(`$ ${command}\n`)
-              const result = await shell.exec(command, {
-                cwd: handle.cwd,
-                env,
-                onOutput: (chunk) => api.output(chunk)
-              }, context)
-              if (!result.ok) throw new Error(`Setup failed: ${String(result.error)}`)
-              if (result.value.exitCode !== 0) {
-                throw new Error(`Setup command exited with ${result.value.exitCode}: ${command}`)
-              }
-            }
+            await setup(template, stored, env, (chunk) => api.output(chunk), context)
             await api.memo("setup", true, context)
           }
           await api.commit(async (tx) => {
@@ -182,16 +231,13 @@ export const sandboxes = (options: SandboxPluginOptions): RunnerPlugin =>
         if (names.length === 0) return undefined
         const state = await read.snapshot(SandboxesDoc, context)
         const lines = [
-          plugin.session.spec.workspace === undefined
-            ? "File and shell tools only work inside a sandbox. Create one with sandbox_create when you need them."
-            : "File and shell tools run in the developer's workspace. For isolated work, create a sandbox with " +
-              "sandbox_create; tools then run in it until you destroy it.",
+          "File and shell tools only work inside a sandbox. Create one with sandbox_create when you need them.",
           `Templates: ${names.map((name) => `${name} (${templates[name]!.provider})`).join(", ")}.`
         ]
         if (state?.active !== undefined) lines.push(`Active sandbox: ${state.active}.`)
-        const preferred = plugin.session.spec.sandbox
-        if (state?.active === undefined && preferred !== undefined) {
-          lines.push(`This session works in the "${preferred}" sandbox: create it with sandbox_create before anything else.`)
+        const own = plugin.session.spec.sandbox
+        if (state?.active === undefined && own !== undefined) {
+          lines[0] = `File and shell tools run in this session's "${own}" sandbox, which is set up for you.`
         }
         return lines.join("\n")
       })
@@ -210,7 +256,9 @@ export const sandboxes = (options: SandboxPluginOptions): RunnerPlugin =>
         env: async ({ read }, context) => {
           const state = await read.snapshot(SandboxesDoc, context)
           const active = state?.active === undefined ? undefined : state.sandboxes[state.active]
-          return active === undefined ? undefined : connect(active)
+          if (active !== undefined) return connect(active)
+          const own = plugin.session.spec.sandbox
+          return own === undefined ? undefined : (await preferredSandbox(own, context)).env
         },
         dispose: async () => {
           const opened = [...connections.values()]

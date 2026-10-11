@@ -5,8 +5,7 @@ import {
   type CommandResult,
   type EventBatch,
   type SessionCommand,
-  type WorkspaceCall,
-  type WorkspaceEvent
+  type ViewUpdate
 } from "@pi-cloud/protocol"
 import { type Cause, Deferred, Effect, Queue, Schema, type Scope, Stream } from "effect"
 import { Socket } from "effect/socket"
@@ -18,12 +17,13 @@ export interface SessionChannel {
   readonly events: Stream.Stream<EventBatch>
   /** Run a command and wait for its result. */
   command(command: SessionCommand): Effect.Effect<CommandResult, Socket.SocketError>
-}
-
-/** Runs workspace calls on this machine; `serveWorkspace` from `@pi-cloud/workspace` is one. */
-export interface WorkspaceHandler {
-  call(id: string, call: WorkspaceCall, emit: (event: WorkspaceEvent) => void): void
-  cancel(id: string): void
+  /** View updates of the watched conversations and the session state, until the channel closes. */
+  readonly views: Stream.Stream<ViewUpdate>
+  /** Receive a conversation's view (default: the root); see `View.ts` in `@pi-cloud/protocol`. */
+  watch(conversationId?: number): Effect.Effect<void, Socket.SocketError>
+  unwatch(conversationId?: number): Effect.Effect<void, Socket.SocketError>
+  /** Failures the server reports outside any command, e.g. a conversation that cannot be watched. */
+  readonly errors: Stream.Stream<string>
 }
 
 const decode = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelMessage))
@@ -34,12 +34,7 @@ const textDecoder = new TextDecoder()
  * key travels as `?token=` because WebSocket clients cannot always set headers.
  */
 export const openChannel = (
-  options: ClientOptions & {
-    readonly sessionId: string
-    readonly after?: string | undefined
-    /** Serve the session's workspace from this connection. */
-    readonly workspace?: WorkspaceHandler | undefined
-  }
+  options: ClientOptions & { readonly sessionId: string; readonly after?: string | undefined }
 ): Effect.Effect<SessionChannel, Socket.SocketError, Scope.Scope> =>
   Effect.gen(function*() {
     const url = new URL(channelPath(options.sessionId), options.url)
@@ -53,12 +48,9 @@ export const openChannel = (
     const writer = yield* socket.writer
     const reader = yield* socket.reader
     const events = yield* Queue.unbounded<EventBatch, Socket.SocketError | Cause.Done>()
+    const views = yield* Queue.unbounded<ViewUpdate, Socket.SocketError | Cause.Done>()
+    const errors = yield* Queue.unbounded<string, Socket.SocketError | Cause.Done>()
     const pending = new Map<string, Deferred.Deferred<CommandResult>>()
-    // Everything sent goes through one queue, so replies emitted from callbacks keep their order.
-    const outgoing = yield* Queue.unbounded<string>()
-    yield* Queue.take(outgoing).pipe(Effect.flatMap((text) => writer.write(text)), Effect.forever, Effect.ignore, Effect.forkScoped)
-    const send = (request: ChannelRequest) => Effect.asVoid(Queue.offer(outgoing, JSON.stringify(request)))
-    const workspace = options.workspace
 
     const receive = (text: string) =>
       Effect.gen(function*() {
@@ -66,23 +58,19 @@ export const openChannel = (
         switch (message._tag) {
           case "Events":
             return yield* Queue.offer(events, message.batch)
+          case "View":
+            return yield* Queue.offer(views, message.update)
           case "Result": {
             const deferred = pending.get(message.id)
             pending.delete(message.id)
             if (deferred !== undefined) yield* Deferred.succeed(deferred, message.result)
             return
           }
-          case "WorkspaceCall":
-            return workspace?.call(message.id, message.call, (event) => {
-              Queue.offerUnsafe(outgoing, JSON.stringify({ _tag: "WorkspaceReply", id: message.id, event } satisfies ChannelRequest))
-            })
-          case "WorkspaceCancel":
-            return workspace?.cancel(message.id)
           case "Error": {
             const deferred = message.id === undefined ? undefined : pending.get(message.id)
             if (deferred !== undefined) {
               yield* Deferred.succeed(deferred, { _tag: "Err", tag: "ChannelError", message: message.message })
-            }
+            } else yield* Queue.offer(errors, message.message)
             return
           }
           default:
@@ -97,14 +85,20 @@ export const openChannel = (
         })
       ),
       Effect.forever,
-      Effect.catch((error) => Queue.fail(events, error)),
+      Effect.catch((error) =>
+        Effect.all([Queue.fail(events, error), Queue.fail(views, error), Queue.fail(errors, error)])
+      ),
       Effect.forkScoped
     )
 
-    if (workspace !== undefined) yield* send({ _tag: "ServeWorkspace" })
+    const send = (request: ChannelRequest) => writer.write(JSON.stringify(request))
 
     return {
       events: Stream.fromQueue(events).pipe(Stream.catchCause(() => Stream.empty)),
+      views: Stream.fromQueue(views).pipe(Stream.catchCause(() => Stream.empty)),
+      errors: Stream.fromQueue(errors).pipe(Stream.catchCause(() => Stream.empty)),
+      watch: (conversationId) => send({ _tag: "Watch", ...(conversationId === undefined ? {} : { conversationId }) }),
+      unwatch: (conversationId) => send({ _tag: "Unwatch", ...(conversationId === undefined ? {} : { conversationId }) }),
       command: (command) =>
         Effect.gen(function*() {
           const id = crypto.randomUUID()

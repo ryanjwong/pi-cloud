@@ -2,6 +2,7 @@ import { Schema } from "effect"
 import { HttpApi, HttpApiEndpoint, HttpApiGroup, HttpApiMiddleware, HttpApiSchema, HttpApiSecurity, OpenApi } from "effect/http-api"
 import { SessionCommand, Submitted } from "./Commands.ts"
 import { EventBatch, SessionId, SessionSpec, SessionView, UserContent, WhenBusy } from "./Domain.ts"
+import { ViewUpdate } from "./View.ts"
 import { CommandFailed, ConversationBusy, RunnerUnavailable, SessionNotFound, Unauthorized } from "./Errors.ts"
 
 /**
@@ -79,6 +80,17 @@ export class SessionsApi extends HttpApiGroup.make("sessions")
       query: { after: Schema.optional(Schema.String) },
       success: HttpApiSchema.StreamSse({ data: EventBatch }),
       error: SessionNotFound
+    }),
+    /**
+     * The live view of a conversation (default: the root) and the session state, as server-sent `ViewUpdate`s:
+     * snapshots, then Chord delta operations. This is what Pi's TUI renders; the WebSocket channel's `Watch`
+     * delivers the same updates.
+     */
+    HttpApiEndpoint.get("view", "/:id/view", {
+      params: sessionParams,
+      query: { conversationId: Schema.optional(Schema.FiniteFromString) },
+      success: HttpApiSchema.StreamSse({ data: ViewUpdate }),
+      error: [SessionNotFound, RunnerUnavailable]
     }),
     // Reads below go straight to the state store: they work whether or not a runner is attached.
     HttpApiEndpoint.get("entries", "/:id/entries", {

@@ -6,7 +6,8 @@ import {
   LeaseManager,
   type RunnerDispatcher,
   SessionStore,
-  StateStore
+  StateStore,
+  ViewHub
 } from "@pi-cloud/core"
 import { PublicApi, RUNNER_RPC_PATH, RunnerRpcs } from "@pi-cloud/protocol"
 import { Layer } from "effect"
@@ -19,7 +20,6 @@ import { PublicApiHandlers } from "./http/PublicApiLive.ts"
 import { RunnerRpcLive } from "./http/RunnerRpcLive.ts"
 import { Runners } from "./Runners.ts"
 import { Sessions } from "./Sessions.ts"
-import { Workspaces } from "./Workspaces.ts"
 
 /**
  * A routes layer that builds on the control plane: it may use `Sessions` (create sessions, run commands, follow
@@ -32,7 +32,7 @@ export type Extension = Layer.Layer<never, never, HttpRouter.HttpRouter | Sessio
  * Every HTTP route of the control plane, given its services:
  *
  * - `/v1/sessions/...` the public API, with `/openapi.json` and `/docs` describing it,
- * - `/v1/sessions/:id/channel` the WebSocket session channel (which also serves client workspaces),
+ * - `/v1/sessions/:id/channel` the WebSocket session channel,
  * - `/internal/runner` the runner RPC,
  * - whatever the extensions add.
  */
@@ -69,12 +69,12 @@ export interface ControlPlaneOptions {
   readonly leases?: Layer.Layer<LeaseManager>
   /** Defaults to an in-memory hub. */
   readonly events?: Layer.Layer<EventHub>
+  /** Defaults to an in-memory hub. */
+  readonly views?: Layer.Layer<ViewHub>
   /** Defaults to bindings in memory. */
   readonly bindings?: Layer.Layer<BindingStore>
   /** Extra routes built on `Sessions`: hosted sources, event triggers, admin endpoints, ... */
   readonly extensions?: ReadonlyArray<Extension>
-  /** How long a workspace call waits for a client to serve the workspace. Default 10 minutes. */
-  readonly workspaceWaitMs?: number
 }
 
 /** The control plane's routes with every service provided. Serve it with `HttpRouter.serve` or `toWebHandler`. */
@@ -89,8 +89,8 @@ export const layer = (options: ControlPlaneOptions) => {
       options.state ?? StateStore.memory,
       options.leases ?? LeaseManager.memory({ ttlMs }),
       options.events ?? EventHub.memory({ logLimit }),
+      options.views ?? ViewHub.memory({ logLimit }),
       options.bindings ?? BindingStore.memory,
-      Workspaces.make({ waitMs: options.workspaceWaitMs }),
       RunnerAuth.sharedSecret(options.runnerSecret),
       options.clientAuth ?? ClientAuth.apiKeys(options.apiKeys),
       config

@@ -1,5 +1,6 @@
 import { parsePosition } from "@pi-cloud/core"
-import { CommandFailed, PublicApi, type SessionId, type Submitted } from "@pi-cloud/protocol"
+import { ROOT_CONVERSATION_ID } from "@earendil-works/pi-durable"
+import { CommandFailed, PublicApi, RunnerUnavailable, type SessionId, type Submitted } from "@pi-cloud/protocol"
 import { Effect, Layer } from "effect"
 import { HttpApiBuilder } from "effect/http-api"
 import { Sessions } from "../Sessions.ts"
@@ -25,6 +26,20 @@ export const SessionsApiLive = HttpApiBuilder.group(
           Effect.catchTag("ConversationBusy", (error) => Effect.fail(new CommandFailed({ message: error._tag })))
         ))
       .handle("events", ({ params, query }) => sessions.events(params.id, parsePosition(query.after)))
+      .handle("view", ({ params, query }) =>
+        Effect.gen(function*() {
+          const conversationId = query.conversationId ?? ROOT_CONVERSATION_ID
+          yield* sessions.watch(params.id, conversationId).pipe(
+            Effect.catchTags({
+              ConversationBusy: (error) => Effect.fail(new RunnerUnavailable({ sessionId: params.id, message: error._tag })),
+              CommandFailed: (error) => Effect.fail(new RunnerUnavailable({ sessionId: params.id, message: error.message }))
+            })
+          )
+          return yield* sessions.views(
+            params.id,
+            (update) => update.conversationId === undefined || update.conversationId === conversationId
+          )
+        }))
       .handle("entries", ({ params, query }) =>
         sessions.entries(params.id, query).pipe(Effect.map((page) => page as { entries: Array<never>; next?: string })))
       .handle("conversations", ({ params }) =>

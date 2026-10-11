@@ -178,7 +178,7 @@ describe("repository sandboxes", () => {
       )
       const results = entries.filter((entry: any) => entry.kind === "pi.tool-result").map((entry) => entryText(entry as never))
 
-      expect(prompt).toContain(`This session works in the \\"api\\" sandbox`)
+      expect(prompt).toContain(`run in this session's \\"api\\" sandbox, which is set up for you`)
       expect(results[0]).toContain("ready and active")
       expect(results[1]).toContain("feature")
       expect(results[1]).toContain("from the repository")

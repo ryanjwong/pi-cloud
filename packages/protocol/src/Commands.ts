@@ -21,7 +21,10 @@ export const PromptCommand = Schema.TaggedStruct("Prompt", {
 /** Abort the conversation's running turn and its queued inputs. */
 export const AbortCommand = Schema.TaggedStruct("Abort", { ...target })
 
-/** Change the conversation's agent: model, thinking level, instructions. `null` clears a field. */
+/**
+ * Change the conversation's agent: model, thinking level, instructions. `null` clears a field. A new model without
+ * a thinking level keeps the current level, clamped to what the new model supports.
+ */
 export const ConfigureCommand = Schema.TaggedStruct("Configure", {
   ...target,
   model: Schema.optional(Schema.NullOr(ModelRef)),
