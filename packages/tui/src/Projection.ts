@@ -1,8 +1,17 @@
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context"
 import type { ConversationId, ConversationView, ModelRef } from "@earendil-works/pi-durable"
-import type { ClientOptions, CommandResult, SessionChannel, SessionCommand, ViewNotice } from "@pi-cloud/client"
-import { openChannel, ViewReplica } from "@pi-cloud/client"
-import { Effect, Fiber, Stream } from "effect"
-import { agentOf, type DurableController, type DurableView, type DurableViewSource } from "./pi/View.ts"
+import {
+  type AttachedSession,
+  type ClientOptions,
+  type Conversation,
+  Conversations,
+  connectServices,
+  Models,
+  Notices,
+  type ServiceConnection,
+  Tasks
+} from "@pi-cloud/client"
+import type { ConversationSummary, DurableController, DurableView, DurableViewSource, Notice } from "./pi/View.ts"
 
 /** Pi Durable's root conversation. */
 const ROOT = 1 as ConversationId
@@ -16,84 +25,78 @@ export interface ProjectionOptions extends ClientOptions {
 export interface Projection {
   readonly source: DurableViewSource
   readonly controller: DurableController
-  /** Resolves once the session state and the root conversation's view have arrived. */
+  /** Resolves once the session's services have their state. */
   readonly ready: Promise<void>
   close(): Promise<void>
 }
 
 /**
- * Pi's durable TUI contract (`DurableViewSource`, `DurableController`) implemented on the public API alone: the view
- * comes from the session channel's `Watch`, every action is a session command. Nothing runs locally but rendering;
- * the session stays connected across drops.
+ * Pi's durable TUI contract (`DurableViewSource`, `DurableController`) projected from the service API: every value
+ * is a Chord replicated state of a session service, every action a service call. Nothing runs locally but
+ * rendering.
  */
 export const project = (options: ProjectionOptions): Projection => {
-  const replica = new ViewReplica()
   const listeners = new Set<() => void>()
   const notify = () => listeners.forEach((listener) => listener())
-  replica.subscribe(notify)
-
-  let channel: SessionChannel | undefined
+  const conversations = new Map<number, Conversation>()
   let shown: ConversationId = ROOT
   let showTasks = true
-  let local: Array<ViewNotice> = []
+  let local: Array<Notice> = []
   let nextLocal = 1_000_000
-  const notice = (level: ViewNotice["level"], message: string) => {
+  const notice = (level: Notice["level"], message: string) => {
     local = [...local, { id: nextLocal++, level, message }].slice(-20)
     notify()
   }
 
-  let markReady: () => void = () => {}
-  const ready = new Promise<void>((resolve) => (markReady = resolve))
-  const checkReady = () => {
-    if (replica.session !== undefined && replica.conversation(ROOT) !== undefined) markReady()
-  }
-  replica.subscribe(checkReady)
+  let connection: ServiceConnection | undefined
+  let attached: AttachedSession | undefined
+  const unsubscribes: Array<() => void> = []
+  const watch = (state: { subscribe(listener: () => void): () => void }) => unsubscribes.push(state.subscribe(() => notify()))
 
-  // Stay attached: reconnect after drops and watch again what was watched.
-  const connection = Effect.scoped(Effect.gen(function*() {
-    const opened = yield* openChannel({ url: options.url, apiKey: options.apiKey, sessionId: options.sessionId })
-    yield* opened.errors.pipe(Stream.runForEach((message) => Effect.sync(() => notice("error", message))), Effect.forkScoped)
-    const views = yield* opened.views.pipe(Stream.runForEach((update) => Effect.sync(() => replica.apply(update))), Effect.forkScoped)
-    yield* opened.watch(ROOT)
-    if (shown !== ROOT) yield* opened.watch(shown)
-    channel = opened
-    yield* Fiber.join(views)
-  })).pipe(
-    Effect.catchCause(() => Effect.void),
-    Effect.andThen(Effect.sync(() => {
-      channel = undefined
-    })),
-    Effect.andThen(Effect.sleep(1_000)),
-    Effect.forever
-  )
-  const fiber = Effect.runFork(connection)
+  const ready = (async () => {
+    connection = await connectServices({ url: options.url, apiKey: options.apiKey })
+    attached = await connection.attach(options.sessionId)
+    const services = attached.services
+    watch(services.use(Models).state)
+    watch(services.use(Notices).state)
+    watch(services.use(Tasks).state)
+    // One instance per conversation; a re-subscription after a runner change delivers fresh instances.
+    unsubscribes.push(services.observe(Conversations, (conversation) => {
+      const id = conversation.summary.value?.id
+      if (id === undefined) return
+      conversations.set(id, conversation)
+      watch(conversation.summary)
+      watch(conversation.state)
+      notify()
+    }))
+    await services.ready(BACKGROUND_CONTEXT)
+    while (conversations.get(ROOT)?.state.value === undefined) await new Promise((resolve) => setTimeout(resolve, 20))
+  })()
 
-  const run = (command: SessionCommand): Promise<void> => {
-    const current = channel
-    if (current === undefined) {
-      notice("error", "Not connected to the session; retrying.")
-      return Promise.resolve()
-    }
-    return Effect.runPromise(current.command(command)).then(
-      (result: CommandResult) => {
-        if (result._tag === "Err") notice("error", result.message)
-      },
-      (error) => notice("error", `Failed to send: ${error}`)
-    )
-  }
-
-  const shownView = () => replica.conversation<ConversationView>(shown) ?? replica.conversation<ConversationView>(ROOT)!
+  const current = (): Conversation => conversations.get(shown) ?? conversations.get(ROOT)!
 
   const source: DurableViewSource = {
     current: (): DurableView => {
-      const session = replica.session ?? { conversations: [], models: [], notices: [] }
+      const services = attached!.services
+      const models = services.use(Models).state.value
+      const tasks = services.use(Tasks).state.value
+      const summaries: Array<ConversationSummary> = [...conversations.values()]
+        .map((conversation) => conversation.summary.value!)
+        .filter((summary) => summary !== undefined)
+        .sort((a, b) => a.id - b.id)
+        .map((summary) => ({ id: summary.id as ConversationId, label: summary.label, ...(summary.title === null ? {} : { title: summary.title }) }))
       return {
         session: { id: options.sessionId, directory: "", cwd: options.label ?? options.sessionId },
-        conversation: shownView(),
-        conversations: session.conversations,
-        models: session.models,
-        notices: [...session.notices, ...local],
-        ...(showTasks && session.tasks !== undefined ? { tasks: session.tasks as never } : {})
+        conversation: current().state.value as ConversationView,
+        conversations: summaries,
+        models: (models?.catalog.availableModels ?? []).map((model) => ({
+          provider: model.provider,
+          modelId: model.modelId,
+          name: model.name,
+          contextWindow: model.contextWindow ?? 0
+        })),
+        notices: [...(services.use(Notices).state.value?.notices ?? []), ...local],
+        ...(showTasks && tasks !== undefined ? { tasks } : {})
       }
     },
     subscribe: (listener) => {
@@ -102,45 +105,32 @@ export const project = (options: ProjectionOptions): Projection => {
     }
   }
 
+  const act = (operation: (conversation: Conversation) => Promise<unknown>): Promise<void> =>
+    operation(current()).then(
+      (response) => {
+        const error = (response as { accepted?: boolean; error?: { message: string } } | undefined)?.error
+        if (error != null) notice("error", error.message)
+      },
+      (error) => notice("error", error instanceof Error ? error.message : String(error))
+    )
+
   const controller: DurableController = {
-    submit: (text, whenBusy) => run({ _tag: "Prompt", conversationId: shown, content: text, whenBusy }),
-    compact: (instructions) =>
-      run({ _tag: "Compact", conversationId: shown, ...(instructions === undefined ? {} : { instructions }) }),
-    abort: () => run({ _tag: "Abort", conversationId: shown }),
-    // The levels come from the session state's model list, so cycling needs no extra round trip.
-    cycleThinking: async () => {
-      const agent = agentOf(shownView())
-      const model = replica.session?.models.find((candidate) =>
-        candidate.provider === agent.model?.provider && candidate.modelId === agent.model?.modelId
-      )
-      if (model === undefined) return notice("error", agent.model === undefined ? "No model selected" : "Current model is unavailable")
-      if (model.thinkingLevels.length <= 1) return notice("error", "Current model does not support thinking")
-      const levels = model.thinkingLevels
-      const next = levels[(levels.indexOf(agent.thinkingLevel ?? "off") + 1) % levels.length] ?? "off"
-      return run({ _tag: "Configure", conversationId: shown, thinkingLevel: next })
-    },
-    // The runner keeps the thinking level, clamped to the new model.
-    setModel: (model: ModelRef) => run({ _tag: "Configure", conversationId: shown, model }),
+    submit: (text, whenBusy) =>
+      act((conversation) =>
+        whenBusy === "steer"
+          ? conversation.steer({ message: text, images: null }, BACKGROUND_CONTEXT)
+          : conversation.followUp({ message: text, images: null }, BACKGROUND_CONTEXT)
+      ),
+    compact: (instructions) => act((conversation) => conversation.compact({ customInstructions: instructions ?? null }, BACKGROUND_CONTEXT)),
+    abort: () => act((conversation) => conversation.abort(BACKGROUND_CONTEXT)),
+    cycleThinking: () => act((conversation) => conversation.cycleThinking(BACKGROUND_CONTEXT)),
+    setModel: (model: ModelRef) => act((conversation) => conversation.selectModel(model, BACKGROUND_CONTEXT)),
     toggleTasks: async () => {
       showTasks = !showTasks
       notify()
     },
     switchConversation: async (id) => {
-      const current = channel
-      if (current === undefined) return notice("error", "Not connected to the session; retrying.")
-      if (replica.conversation(id) === undefined) {
-        await Effect.runPromise(current.watch(id)).catch(() => {})
-        await new Promise<void>((resolve) => {
-          const timer = setTimeout(done, 10_000)
-          const unsubscribe = replica.subscribe(() => replica.conversation(id) !== undefined && done())
-          function done() {
-            clearTimeout(timer)
-            unsubscribe()
-            resolve()
-          }
-        })
-        if (replica.conversation(id) === undefined) return notice("error", `Conversation ${id} did not load`)
-      }
+      if (!conversations.has(id)) return notice("error", `Conversation ${id} is not available`)
       shown = id
       notify()
     }
@@ -150,6 +140,10 @@ export const project = (options: ProjectionOptions): Projection => {
     source,
     controller,
     ready,
-    close: () => Effect.runPromise(Fiber.interrupt(fiber)).then(() => {})
+    close: async () => {
+      for (const unsubscribe of unsubscribes) unsubscribe()
+      await attached?.detach().catch(() => {})
+      await connection?.close().catch(() => {})
+    }
   }
 }

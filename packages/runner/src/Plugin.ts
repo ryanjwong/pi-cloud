@@ -1,4 +1,4 @@
-import type { Context } from "@earendil-works/chord"
+import type { Context, Facet } from "@earendil-works/chord"
 import type { Provider } from "@earendil-works/pi-ai"
 import type { MutableModels } from "@earendil-works/pi-ai/models"
 import type {
@@ -57,6 +57,11 @@ export interface PluginParts {
   readonly settings?: HarnessSettings
   /** Named custom commands. */
   readonly commands?: Readonly<Record<string, CommandHandler>>
+  /**
+   * Chord facets serving more session services to attached presentations (see `Services.ts` in
+   * `@pi-cloud/protocol`), next to the built-in ones.
+   */
+  readonly facets?: ReadonlyArray<Facet>
   /** Runs once the harness is open and the root conversation exists. */
   readonly ready?: (api: RunningSession, context: Context) => void | Promise<void>
   /** Runs when the runner stops hosting the session. */

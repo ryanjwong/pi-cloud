@@ -4,8 +4,7 @@ import {
   channelPath,
   type CommandResult,
   type EventBatch,
-  type SessionCommand,
-  type ViewUpdate
+  type SessionCommand
 } from "@pi-cloud/protocol"
 import { type Cause, Deferred, Effect, Queue, Schema, type Scope, Stream } from "effect"
 import { Socket } from "effect/socket"
@@ -17,13 +16,6 @@ export interface SessionChannel {
   readonly events: Stream.Stream<EventBatch>
   /** Run a command and wait for its result. */
   command(command: SessionCommand): Effect.Effect<CommandResult, Socket.SocketError>
-  /** View updates of the watched conversations and the session state, until the channel closes. */
-  readonly views: Stream.Stream<ViewUpdate>
-  /** Receive a conversation's view (default: the root); see `View.ts` in `@pi-cloud/protocol`. */
-  watch(conversationId?: number): Effect.Effect<void, Socket.SocketError>
-  unwatch(conversationId?: number): Effect.Effect<void, Socket.SocketError>
-  /** Failures the server reports outside any command, e.g. a conversation that cannot be watched. */
-  readonly errors: Stream.Stream<string>
 }
 
 const decode = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelMessage))
@@ -48,8 +40,6 @@ export const openChannel = (
     const writer = yield* socket.writer
     const reader = yield* socket.reader
     const events = yield* Queue.unbounded<EventBatch, Socket.SocketError | Cause.Done>()
-    const views = yield* Queue.unbounded<ViewUpdate, Socket.SocketError | Cause.Done>()
-    const errors = yield* Queue.unbounded<string, Socket.SocketError | Cause.Done>()
     const pending = new Map<string, Deferred.Deferred<CommandResult>>()
 
     const receive = (text: string) =>
@@ -58,8 +48,6 @@ export const openChannel = (
         switch (message._tag) {
           case "Events":
             return yield* Queue.offer(events, message.batch)
-          case "View":
-            return yield* Queue.offer(views, message.update)
           case "Result": {
             const deferred = pending.get(message.id)
             pending.delete(message.id)
@@ -70,7 +58,7 @@ export const openChannel = (
             const deferred = message.id === undefined ? undefined : pending.get(message.id)
             if (deferred !== undefined) {
               yield* Deferred.succeed(deferred, { _tag: "Err", tag: "ChannelError", message: message.message })
-            } else yield* Queue.offer(errors, message.message)
+            }
             return
           }
           default:
@@ -85,9 +73,7 @@ export const openChannel = (
         })
       ),
       Effect.forever,
-      Effect.catch((error) =>
-        Effect.all([Queue.fail(events, error), Queue.fail(views, error), Queue.fail(errors, error)])
-      ),
+      Effect.catch((error) => Queue.fail(events, error)),
       Effect.forkScoped
     )
 
@@ -95,10 +81,6 @@ export const openChannel = (
 
     return {
       events: Stream.fromQueue(events).pipe(Stream.catchCause(() => Stream.empty)),
-      views: Stream.fromQueue(views).pipe(Stream.catchCause(() => Stream.empty)),
-      errors: Stream.fromQueue(errors).pipe(Stream.catchCause(() => Stream.empty)),
-      watch: (conversationId) => send({ _tag: "Watch", ...(conversationId === undefined ? {} : { conversationId }) }),
-      unwatch: (conversationId) => send({ _tag: "Unwatch", ...(conversationId === undefined ? {} : { conversationId }) }),
       command: (command) =>
         Effect.gen(function*() {
           const id = crypto.randomUUID()

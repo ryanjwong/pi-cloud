@@ -12,12 +12,13 @@ import {
   type HarnessSettings,
   watchEvents
 } from "@earendil-works/pi-durable"
-import type { CommandResult, EventBatch, RunnerCommand, Session, ViewFrame } from "@pi-cloud/protocol"
+import type { CommandResult, EventBatch, RunnerCommand, Session } from "@pi-cloud/protocol"
+import { RemoteServiceError } from "@earendil-works/chord"
 import { Cause, Deferred, Effect, Exit, Fiber, Schedule, Stream } from "effect"
 import type { ControlPlaneClient } from "./ControlPlaneClient.ts"
 import { noSecrets, type PluginParts, type RunnerPlugin, runSetup, type RunningSession, type SecretResolver } from "./Plugin.ts"
 import { LeaseLostError, RemoteStorage } from "./RemoteStorage.ts"
-import { ViewPublisher } from "./View.ts"
+import { openSessionServices, type SessionServices } from "./Services.ts"
 
 export interface SessionRunnerOptions {
   readonly plugins: ReadonlyArray<RunnerPlugin>
@@ -56,8 +57,8 @@ interface Hosted extends RunningSession {
   readonly context: Context
   readonly cancel: () => void
   watch: AgentEventStream | undefined
-  /** Computes the view presentations render; see `View.ts`. */
-  view: ViewPublisher | undefined
+  /** The session's Chord services, for attached presentations; see `Services.ts`. */
+  services: SessionServices | undefined
   readonly models: Models
   seq: number
   /** Publishes run one after another so batches arrive in order. */
@@ -96,12 +97,13 @@ export const hostSession = Effect.fnUntraced(function*(
     return current.publishing
   }
 
-  const publishView = (current: Hosted, conversationId: number | undefined, frame: ViewFrame) => {
-    const update = { epoch: current.epoch, seq: ++current.seq, ...(conversationId === undefined ? {} : { conversationId }), frame }
+  /** Relay a subscription update of an attached presentation to the control plane, in order. */
+  const publishService = (current: Hosted, attachmentId: string, subscriptionId: string, update: unknown) => {
     current.publishing = current.publishing.then(() =>
-      run(client.PublishView({ sessionId, token: current.token, updates: [toJson(update)] })).catch((error) => {
-        if ((error as { _tag?: string })._tag === "LeaseLost") stopNow("lease-lost")
-      })
+      run(client.ServiceUpdate({ sessionId, token: current.token, attachmentId, subscriptionId, update: toJson(update) as never }))
+        .catch((error) => {
+          if ((error as { _tag?: string })._tag === "LeaseLost") stopNow("lease-lost")
+        })
     )
   }
 
@@ -162,7 +164,7 @@ export const hostSession = Effect.fnUntraced(function*(
       },
       onReport: (error) => {
         console.warn(`[pi-cloud runner ${runnerId}] ${sessionId}:`, error)
-        hosted?.view?.notice("warning", error instanceof Error ? error.message : String(error))
+        hosted?.services?.notice("warning", error instanceof Error ? error.message : String(error))
       }
     }, context)
     const { model, thinkingLevel, instructions } = session.spec
@@ -185,21 +187,25 @@ export const hostSession = Effect.fnUntraced(function*(
       context,
       cancel,
       watch: undefined,
-      view: undefined,
+      services: undefined,
       models,
       seq: 0,
       publishing: Promise.resolve()
     }
     for (const part of parts) await part.ready?.(current, context)
     await startWatch(current)
-    const view = new ViewPublisher(harness, models, context, (id, frame) => publishView(current, id, frame))
-    current.view = view
-    await view.start(root.id)
+    current.services = await openSessionServices({
+      harness,
+      root,
+      models,
+      facets: parts.flatMap((part) => part.facets ?? []),
+      context
+    })
     return current
   }
 
   const close = async (current: Hosted) => {
-    current.view?.close()
+    await current.services?.dispose().catch(() => {})
     await current.watch?.stop().catch(() => {})
     await Promise.race([
       current.harness.close(current.context).catch(() => {}),
@@ -228,7 +234,7 @@ export const hostSession = Effect.fnUntraced(function*(
             ...(command.requestId === undefined ? {} : { requestId: command.requestId }),
             ...(command.whenBusy === undefined ? {} : { whenBusy: command.whenBusy })
           }, current.context)
-          current.view?.watchAnswer(submission)
+          current.services?.watchAnswer(submission)
           return { _tag: "Ok", value: { submissionId: submission.id, conversationId: target.id } }
         }
         case "Abort": {
@@ -257,20 +263,37 @@ export const hostSession = Effect.fnUntraced(function*(
         case "Compact": {
           const target = await conversation(current, command.conversationId)
           const taskId = await target.compact(command.instructions, current.context)
-          current.view?.watchCompaction(taskId)
+          current.services?.watchCompaction(taskId)
           return { _tag: "Ok", value: { taskId } }
         }
         case "Reset": {
           await (await conversation(current, command.conversationId)).reset(command.handoff, current.context)
           return { _tag: "Ok" }
         }
-        case "WatchView": {
-          await current.view?.watch(command.conversationId)
+        case "ServiceCall": {
+          const services = current.services
+          if (services === undefined) return { _tag: "Err", tag: "service_not_found", message: "The session is not open" }
+          try {
+            const value = await services.invoke(command.attachmentId, command.callId, command.call, (subscriptionId, update) =>
+              publishService(current, command.attachmentId, subscriptionId, update))
+            return value === undefined ? { _tag: "Ok" } : { _tag: "Ok", value: toJson(value) as never }
+          } catch (error) {
+            // Chord errors keep their code; anything else is an internal error, as with Pi's own server.
+            return error instanceof RemoteServiceError
+              ? { _tag: "Err", tag: error.code, message: error.message }
+              : { _tag: "Err", tag: "internal_error", message: error instanceof Error ? error.message : String(error) }
+          }
+        }
+        case "ServiceCancel": {
+          current.services?.cancel(command.callId)
+          return { _tag: "Ok" }
+        }
+        case "ServiceRelease": {
+          current.services?.release(command.attachmentId)
           return { _tag: "Ok" }
         }
         case "Resnapshot": {
           await startWatch(current)
-          current.view?.resnapshot()
           return { _tag: "Ok" }
         }
         case "Shutdown": {
@@ -348,7 +371,9 @@ export const hostSession = Effect.fnUntraced(function*(
     const current = hosted
     if (current === undefined) return
     const inspection = yield* Effect.promise(() => current.harness.inspect(current.context))
-    const busy = inspection.submissions.length > 0 || inspection.tasks.some((task) => task.state.kind !== "blocked")
+    // Attached presentations keep the session hosted, as Pi's server keeps a worker while presentations demand it.
+    const busy = inspection.submissions.length > 0 || inspection.tasks.some((task) => task.state.kind !== "blocked") ||
+      (current.services?.attachments ?? 0) > 0
     if (busy) lastActive = Date.now()
     else if (Date.now() - lastActive > idleMs) yield* stop("idle")
   }).pipe(

@@ -35,6 +35,15 @@ export class Runners extends Context.Service<Runners, {
   shutdown(sessionId: string, reason: string): Effect.Effect<void>
   /** Whether a runner start has been requested and has not attached yet. */
   starting(sessionId: string): Effect.Effect<boolean>
+  /**
+   * The session's live runner, waking one if needed: its lease token, and an effect that completes when that runner
+   * stops hosting the session (released, replaced, or its lease abandoned).
+   */
+  host(session: Session): Effect.Effect<{ readonly token: string; readonly ended: Effect.Effect<void> }, RunnerUnavailable>
+  /** Send a command to the runner holding `token`, with no deadline. Fails once that runner is gone. */
+  call(sessionId: string, token: string, command: RunnerCommand): Effect.Effect<CommandResult, RunnerUnavailable>
+  /** The runner holding `token` released the session. */
+  released(sessionId: string, token: string): Effect.Effect<void>
 }>()("@pi-cloud/control-plane/Runners") {
   static readonly layer: Layer.Layer<
     Runners,
@@ -54,6 +63,8 @@ export class Runners extends Context.Service<Runners, {
         /** Replaced on every re-attach, so only the newest connection reads commands. */
         queue: Queue.Queue<Envelope, Cause.Done>
         readonly pending: Map<string, Deferred.Deferred<CommandResult>>
+        /** Completes when this lease's runner stops hosting the session. */
+        readonly closed: Deferred.Deferred<void>
       }
       const channels = new Map<string, Channel>()
       /** Requests waiting for a woken runner to attach. */
@@ -61,6 +72,7 @@ export class Runners extends Context.Service<Runners, {
 
       const closeChannel = Effect.fnUntraced(function*(sessionId: string, channel: Channel, message: string) {
         if (channels.get(sessionId) === channel) channels.delete(sessionId)
+        yield* Deferred.succeed(channel.closed, undefined)
         yield* Queue.end(channel.queue)
         for (const deferred of channel.pending.values()) {
           yield* Deferred.succeed(deferred, { _tag: "Err", tag: "LeaseLost", message })
@@ -90,7 +102,12 @@ export class Runners extends Context.Service<Runners, {
             channel = undefined
           }
           if (channel === undefined) {
-            channel = { token: lease.token, queue: yield* Queue.unbounded<Envelope, Cause.Done>(), pending: new Map() }
+            channel = {
+              token: lease.token,
+              queue: yield* Queue.unbounded<Envelope, Cause.Done>(),
+              pending: new Map(),
+              closed: yield* Deferred.make<void>()
+            }
             channels.set(input.sessionId, channel)
           } else {
             // The same runner reconnected. End its previous stream and carry over commands it never took.
@@ -183,6 +200,8 @@ export class Runners extends Context.Service<Runners, {
       // session so a new runner reopens its state and Pi resumes whatever was unfinished.
       yield* Effect.gen(function*() {
         for (const sessionId of yield* leases.takeAbandoned()) {
+          const stale = channels.get(sessionId)
+          if (stale !== undefined) yield* closeChannel(sessionId, stale, "The runner's lease expired")
           const exists = yield* sessions.get(sessionId as Session["id"]).pipe(Effect.orElseSucceed(() => Option.none()))
           if (Option.isNone(exists) || waiters.has(sessionId)) continue
           yield* Effect.logInfo("Waking session after its runner's lease expired", { sessionId })
@@ -199,6 +218,25 @@ export class Runners extends Context.Service<Runners, {
         reply,
         notify,
         shutdown: (sessionId, reason) => notify(sessionId, { _tag: "Shutdown", reason }),
+        host: Effect.fnUntraced(function*(session) {
+          const channel = (yield* liveChannel(session.id)) ?? (yield* awaitRunner(session.id))
+          return { token: channel.token, ended: Deferred.await(channel.closed) }
+        }),
+        call: Effect.fnUntraced(function*(sessionId, token, command) {
+          const channel = channels.get(sessionId)
+          if (channel === undefined || channel.token !== token) {
+            return yield* new RunnerUnavailable({ sessionId, message: "The session's runner is gone" })
+          }
+          const commandId = crypto.randomUUID()
+          const reply = yield* Deferred.make<CommandResult>()
+          channel.pending.set(commandId, reply)
+          yield* Queue.offer(channel.queue, { commandId, command })
+          return yield* Deferred.await(reply).pipe(Effect.ensuring(Effect.sync(() => channel.pending.delete(commandId))))
+        }),
+        released: Effect.fnUntraced(function*(sessionId, token) {
+          const channel = channels.get(sessionId)
+          if (channel !== undefined && channel.token === token) yield* closeChannel(sessionId, channel, "The runner released the session")
+        }),
         starting: (sessionId) => Effect.sync(() => waiters.has(sessionId))
       })
     })

@@ -15,8 +15,7 @@ import {
   SessionStore,
   StateStore,
   storageFailure,
-  type StreamPosition,
-  ViewHub
+  type StreamPosition
 } from "@pi-cloud/core"
 import {
   CommandFailed,
@@ -29,8 +28,7 @@ import {
   SessionNotFound,
   type SessionCommand,
   type SessionSpec,
-  type SessionView,
-  type ViewUpdate
+  type SessionView
 } from "@pi-cloud/protocol"
 import { Clock, Context, Effect, Layer, Option, Semaphore, type Stream } from "effect"
 import { Runners } from "./Runners.ts"
@@ -74,14 +72,6 @@ export class Sessions extends Context.Service<Sessions, {
   }): Effect.Effect<{ readonly entries: ReadonlyArray<unknown>; readonly next?: string | undefined }, SessionNotFound>
   conversations(id: string): Effect.Effect<ReadonlyArray<unknown>, SessionNotFound>
   /**
-   * Have the session's runner publish a conversation's view. When the view has never been published (e.g. after a
-   * restart), this starts a runner and waits until it publishes; otherwise it asks in the background, so watching
-   * an idle session shows its last view at once.
-   */
-  watch(id: string, conversationId: number): Effect.Effect<void, CommandError>
-  /** View updates `select` accepts (see `View.ts`): buffered, then live. */
-  views(id: string, select: (update: ViewUpdate) => boolean): Effect.Effect<Stream.Stream<ViewUpdate>, SessionNotFound>
-  /**
    * The session bound to an external key (a pull request, a chat thread, ...), creating and binding one on first
    * use. Calls for the same key are serialized, so concurrent events cannot create two sessions.
    */
@@ -91,7 +81,7 @@ export class Sessions extends Context.Service<Sessions, {
   static readonly layer: Layer.Layer<
     Sessions,
     never,
-    SessionStore | StateStore | LeaseManager | EventHub | ViewHub | BindingStore | Runners
+    SessionStore | StateStore | LeaseManager | EventHub | BindingStore | Runners
   > = Layer.effect(
     Sessions,
     Effect.gen(function*() {
@@ -100,7 +90,6 @@ export class Sessions extends Context.Service<Sessions, {
       const leases = yield* LeaseManager
       const runners = yield* Runners
       const hub = yield* EventHub
-      const viewHub = yield* ViewHub
       const bindings = yield* BindingStore
       const keyLocks = new Map<string, Semaphore.Semaphore>()
       const keyLock = (key: string) => {
@@ -188,7 +177,6 @@ export class Sessions extends Context.Service<Sessions, {
           yield* runners.shutdown(id, "The session was deleted")
           yield* leases.remove(id)
           yield* hub.remove(id)
-          yield* viewHub.remove(id)
           yield* states.remove(id).pipe(Effect.orDie)
           yield* store.remove(id as SessionId).pipe(Effect.orDie)
           for (const binding of yield* bindings.list().pipe(Effect.orDie)) {
@@ -200,16 +188,6 @@ export class Sessions extends Context.Service<Sessions, {
           return yield* settle(session.id, yield* runners.send(session, command))
         }),
         events: (id, after) => Effect.map(find(id), () => hub.subscribe(id, after)),
-        watch: Effect.fnUntraced(function*(id, conversationId) {
-          const session = yield* find(id)
-          const ask = Effect.flatMap(
-            runners.send(session, { _tag: "WatchView", conversationId }),
-            (result) => settle(session.id, result)
-          )
-          if (yield* viewHub.has(id, conversationId)) yield* Effect.forkDetach(Effect.ignore(ask))
-          else yield* ask
-        }),
-        views: (id, select) => Effect.map(find(id), () => viewHub.subscribe(id, select)),
         entries: (id, query) =>
           read(id, async (storage) => {
             const conversationId = (query.conversationId ?? ROOT_CONVERSATION_ID) as ConversationId

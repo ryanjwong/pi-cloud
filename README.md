@@ -77,8 +77,8 @@ The workspace is a stack of small libraries, each building on the ones below it,
 | | `@pi-cloud/tool-github` | GitHub tools for the agent (`github_comment`, `github_open_pull_request`), run by the runner so the token stays out of sandboxes. |
 | | `@pi-cloud/source-slack` | Slack: each thread is a session; mentions and thread replies go in, answers are posted in the thread. |
 | | `@pi-cloud/storage-sqlite` | SQLite `StateStore` (Pi's own SQLite storage, one file per session), `SessionStore` and `BindingStore`, for Node. |
-| Clients | `@pi-cloud/client` | Typed REST client derived from the API, `followEvents` (reconnecting event stream), and `openChannel` (the WebSocket channel). |
-| | `@pi-cloud/tui` | Pi's own durable TUI, as a projection of the API: it renders the session's view and sends commands, nothing else. |
+| Clients | `@pi-cloud/client` | Typed REST client derived from the API, `followEvents`, `openChannel` (the WebSocket channel), and `connectServices` (the service API, with Pi's client). |
+| | `@pi-cloud/tui` | Pi's own durable TUI as a projection of the service API: it renders service states and calls services, nothing else. |
 | | `@pi-cloud/cli` | `pi-cloud`: the TUI by default; `new`, `ls`, `chat` (line mode), `send`, `tail`, `rm` for scripts. |
 | Apps | `apps/local` | Control plane and runner in one process (`main.ts`), or split (`control-plane.ts`, `runner.ts`). The end-to-end tests live here. |
 | | `apps/cloudflare` | Runner host on Cloudflare: a Worker routes wake requests to one Durable Object per session. Deployed with Alchemy. |
@@ -100,26 +100,42 @@ plugin). Every surface reads the same Pi agent events (`message_start`, `message
 - **OpenAPI** at `/openapi.json`, browsable docs at `/docs`, generated from the same definition the server and the
   typed client use. The channel's message schemas live in `@pi-cloud/protocol` (`Channel.ts`).
 
-### The view
+### Services
 
-Events say what happened; the **view** is what a presentation shows. It is part of the API (`View.ts` in
-`@pi-cloud/protocol`), computed by the session's runner in the cloud and kept in sync by the control plane:
+Presentations that render a session (TUIs, web UIs, dashboards) use the **service API**: Chord services served
+with Pi's own server protocol, so they connect with Pi's own client. pi-cloud runs Pi's server
+(`@earendil-works/pi-server`) in the control plane, over a WebSocket at `/v1/pi` (`GET /v1/server` gives the
+server id clients verify), and each session's services are served by the runner hosting it, in the cloud. This is
+how Pi's own experimental client/server split works, with pi-cloud's control plane as the server and its runners
+as the session workers.
 
-- the **session state**: the session's conversations (the main one and its subagents'), the models the runner has
-  credentials for (with their thinking levels), notices (a prompt that ended without an answer, a compaction's
-  outcome, runner warnings), and the live task graph;
-- one **conversation view** per watched conversation: Pi Durable's `Conversation.viewState()`, the transcript of
-  the active context with the documents for the streaming message, running tools, queued input, the agent's
-  model and thinking level, and usage.
+| Service | Scope | What it is |
+|---|---|---|
+| `pi.session-directory`, `pi.session-management` | server | Pi's: the sessions, live; create, remove, attach, detach |
+| `pi-cloud.sessions` | server | each session's title, spec and runner state, live; create with a spec |
+| `pi.transcript` | session | Pi's: the root conversation's durable view (entries, streaming message, running tools, queue, agent, usage) |
+| `pi.agent-controller` | session | Pi's: prompt, steer, follow up, cancel queued input, abort, compact, wait for an answer |
+| `pi.models` | session | Pi's: the models the runner can use and the selected model and thinking level; select, cycle |
+| `pi-cloud.conversation` | session, keyed | one instance per conversation (the root and each subagent's): its view and the same controls |
+| `pi-cloud.tasks` | session | Pi Durable's live task graph; abort a task |
+| `pi-cloud.notices` | session | prompts that ended unanswered, compaction outcomes, runner warnings |
 
-Each state arrives as a snapshot followed by Chord delta operations. On the channel, send `{"_tag":"Watch",
-"conversationId"}` and receive `{"_tag":"View","update"}`; over HTTP, `GET /v1/sessions/{id}/view?conversationId=`
-streams the same updates as server-sent events. Watching a session that no runner hosts starts one; a client that
-attaches late gets the current state at once. `ViewReplica` in `@pi-cloud/client` keeps a local copy.
+State members are Chord replicated states (a snapshot, then delta operations, with hydration, ordering and gap
+detection handled by Chord); the rest are calls. Runner plugins can serve more session services as Chord facets
+(`PluginParts.facets`). An attached presentation keeps the session's runner alive; if the runner dies, Pi's server
+ends the attachment and `connectServices` attaches again, now served by the new runner, with the same durable
+state.
 
-Pi's TUI is built from exactly this: it renders the view, and every key press is a command. `Prompt` with
-`whenBusy` for submit, steer and follow-up; `Abort`; `Compact`; `Configure` for the model picker (the runner keeps
-the thinking level, clamped to the new model) and the thinking key (the levels come from the session state).
+```ts
+const connection = await connectServices({ url, apiKey })          // @pi-cloud/client, on @earendil-works/pi-client
+const session = await connection.attach(sessionId)
+const transcript = session.services.use(Transcript)                  // transcript.state: ReplicatedState<ConversationView>
+const agent = session.services.use(AgentController)
+const { operationId } = await agent.prompt({ message: "hi", images: null }, context)
+```
+
+Pi's TUI is a projection of exactly these services (`@pi-cloud/tui`): it renders their states and calls them.
+REST, server-sent events and the session channel remain for scripts and for clients in other languages.
 
 ## Sources and triggers
 

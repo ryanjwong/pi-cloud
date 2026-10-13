@@ -2,7 +2,6 @@ import { Schema } from "effect"
 import { Rpc, RpcGroup } from "effect/rpc"
 import { CommandResult, SessionCommand } from "./Commands.ts"
 import { EventBatch, Session } from "./Domain.ts"
-import { ViewUpdate } from "./View.ts"
 import { LeaseHeld, LeaseLost, SessionNotFound, StorageFailure } from "./Errors.ts"
 
 /**
@@ -43,14 +42,35 @@ const leaseFields = {
 /** Ask the runner to start a fresh event stream, beginning with a snapshot. */
 export const ResnapshotCommand = Schema.TaggedStruct("Resnapshot", {})
 
-/** Ask the runner to publish a conversation's view, because a presentation is watching it. */
-export const WatchViewCommand = Schema.TaggedStruct("WatchView", { conversationId: Schema.Number })
+/**
+ * A Chord service call from a presentation attached to the session (see `Services.ts`), relayed by the control
+ * plane. Each attachment has its own endpoint on the runner; subscription updates come back over `ServiceUpdate`.
+ * The reply is the call's result, or an error whose tag is a Chord error code.
+ */
+export const ServiceCallCommand = Schema.TaggedStruct("ServiceCall", {
+  attachmentId: Schema.String,
+  callId: Schema.String,
+  call: Schema.Json
+})
+
+/** The presentation stopped waiting for a call. */
+export const ServiceCancelCommand = Schema.TaggedStruct("ServiceCancel", { callId: Schema.String })
+
+/** The attachment ended: drop its endpoint and subscriptions. */
+export const ServiceReleaseCommand = Schema.TaggedStruct("ServiceRelease", { attachmentId: Schema.String })
 
 /** Ask the runner to release its lease and stop, e.g. because the session was deleted. */
 export const ShutdownCommand = Schema.TaggedStruct("Shutdown", { reason: Schema.String })
 
 /** What runners execute: every client-facing `SessionCommand`, plus control-plane housekeeping. */
-export const RunnerCommand = Schema.Union([...SessionCommand.members, ResnapshotCommand, WatchViewCommand, ShutdownCommand])
+export const RunnerCommand = Schema.Union([
+  ...SessionCommand.members,
+  ResnapshotCommand,
+  ServiceCallCommand,
+  ServiceCancelCommand,
+  ServiceReleaseCommand,
+  ShutdownCommand
+])
 export type RunnerCommand = typeof RunnerCommand.Type
 
 /** First message of an attachment: the lease and what the runner is hosting. */
@@ -96,9 +116,9 @@ export class RunnerRpcs extends RpcGroup.make(
     payload: { ...leaseFields, batches: Schema.Array(EventBatch) },
     error: LeaseLost
   }),
-  /** Publish view updates: the session state and the watched conversations' views. */
-  Rpc.make("PublishView", {
-    payload: { ...leaseFields, updates: Schema.Array(ViewUpdate) },
+  /** A Chord subscription update for one attachment's subscription. */
+  Rpc.make("ServiceUpdate", {
+    payload: { ...leaseFields, attachmentId: Schema.String, subscriptionId: Schema.String, update: Schema.Json },
     error: LeaseLost
   }),
   /**

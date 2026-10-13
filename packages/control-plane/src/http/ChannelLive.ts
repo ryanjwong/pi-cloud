@@ -1,7 +1,6 @@
 import { parsePosition } from "@pi-cloud/core"
-import { ChannelMessage, ChannelRequest, type CommandResult, type ViewUpdate } from "@pi-cloud/protocol"
+import { ChannelMessage, ChannelRequest, type CommandResult } from "@pi-cloud/protocol"
 import { Effect, Fiber, Layer, Schema, Stream } from "effect"
-import { ROOT_CONVERSATION_ID } from "@earendil-works/pi-durable"
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http"
 import { type CommandError, Sessions, toJson } from "../Sessions.ts"
 import { ClientAuth } from "./Auth.ts"
@@ -57,54 +56,12 @@ export const ChannelRoute = Layer.effectDiscard(Effect.gen(function*() {
       Effect.forkChild
     )
 
-    // The view: the session state once anything is watched, plus each watched conversation's view.
-    const sessionId = id ?? ""
-    const watched = new Map<number, Fiber.Fiber<unknown>>()
-    let sessionState: Fiber.Fiber<unknown> | undefined
-    let epoch: number | undefined
-    const forward = (select: (update: ViewUpdate) => boolean, onUpdate: (update: ViewUpdate) => Effect.Effect<void> = () => Effect.void) =>
-      sessions.views(sessionId, select).pipe(
-        Effect.flatMap(Stream.runForEach((update) => Effect.andThen(onUpdate(update), send({ _tag: "View", update })))),
-        Effect.ignore,
-        Effect.forkChild
-      )
-    const ensureWatched = (conversationId: number) =>
-      sessions.watch(sessionId, conversationId).pipe(
-        Effect.catch((error) => send({ _tag: "Error", message: `Cannot watch conversation ${conversationId}: ${error._tag}` })),
-        Effect.forkChild,
-        Effect.asVoid
-      )
-    const watch = (conversationId: number) =>
-      Effect.gen(function*() {
-        // A new runner publishes only the root; ask it again for the other conversations being watched.
-        sessionState ??= yield* forward((update) => update.conversationId === undefined, (update) =>
-          Effect.gen(function*() {
-            if (update.frame._tag !== "Snapshot" || update.epoch === epoch) return
-            const restarted = epoch !== undefined
-            epoch = update.epoch
-            if (restarted) {
-              for (const other of watched.keys()) if (other !== ROOT_CONVERSATION_ID) yield* ensureWatched(other)
-            }
-          }))
-        if (watched.has(conversationId)) return
-        watched.set(conversationId, yield* forward((update) => update.conversationId === conversationId))
-        yield* ensureWatched(conversationId)
-      })
-    const unwatch = (conversationId: number) =>
-      Effect.gen(function*() {
-        const fiber = watched.get(conversationId)
-        watched.delete(conversationId)
-        if (fiber !== undefined) yield* Fiber.interrupt(fiber)
-      })
-
     const handle = (text: string) =>
       decode(text).pipe(
         Effect.matchEffect({
           onFailure: (error) => send({ _tag: "Error", message: `Invalid request: ${error.message}` }),
           onSuccess: (message) => {
             if (message._tag === "Ping") return send({ _tag: "Pong", id: message.id })
-            if (message._tag === "Watch") return watch(message.conversationId ?? ROOT_CONVERSATION_ID)
-            if (message._tag === "Unwatch") return unwatch(message.conversationId ?? ROOT_CONVERSATION_ID)
             return sessions.command(id ?? "", message.command).pipe(
               Effect.map((value): CommandResult => ({ _tag: "Ok", value: toJson(value) as never })),
               Effect.catch((error) => Effect.succeed(resultOf(error))),
@@ -127,7 +84,6 @@ export const ChannelRoute = Layer.effectDiscard(Effect.gen(function*() {
       Effect.ignore
     )
     yield* Fiber.interrupt(pump)
-    yield* Fiber.interruptAll([...watched.values(), ...(sessionState === undefined ? [] : [sessionState])])
     return HttpServerResponse.empty()
   }))
 }))

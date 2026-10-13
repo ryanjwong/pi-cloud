@@ -2,8 +2,9 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context"
 import type { Storage } from "@earendil-works/pi-durable"
 import { RunnerRpcs, type StorageMethod } from "@pi-cloud/protocol"
 import { Effect, Semaphore, Stream } from "effect"
-import { ControlPlaneConfig, EventHub, LeaseManager, StateStore, storageFailure, ViewHub } from "@pi-cloud/core"
+import { ControlPlaneConfig, EventHub, LeaseManager, StateStore, storageFailure } from "@pi-cloud/core"
 import { Runners } from "../Runners.ts"
+import { PiServer } from "../services/PiServer.ts"
 import { toJson } from "../Sessions.ts"
 import { RunnerAuth } from "./Auth.ts"
 
@@ -20,9 +21,9 @@ export const RunnerRpcLive = RunnerRpcs.toLayer(Effect.gen(function*() {
   const leases = yield* LeaseManager
   const states = yield* StateStore
   const events = yield* EventHub
-  const views = yield* ViewHub
   const auth = yield* RunnerAuth
   const config = yield* ControlPlaneConfig
+  const piServer = yield* PiServer
 
   /** One commit at a time per session, checked against the lease at the moment it applies. */
   const commitLocks = new Map<string, Semaphore.Semaphore>()
@@ -46,7 +47,18 @@ export const RunnerRpcLive = RunnerRpcs.toLayer(Effect.gen(function*() {
       ),
 
     Release: ({ sessionId, token }, { headers }) =>
-      auth.check(headers).pipe(Effect.orDie, Effect.andThen(leases.release(sessionId, token))),
+      auth.check(headers).pipe(
+        Effect.orDie,
+        Effect.andThen(leases.release(sessionId, token)),
+        Effect.andThen(runners.released(sessionId, token))
+      ),
+
+    ServiceUpdate: ({ sessionId, token, attachmentId, subscriptionId, update }, { headers }) =>
+      Effect.gen(function*() {
+        yield* auth.check(headers).pipe(Effect.orDie)
+        yield* leases.validate(sessionId, token)
+        yield* piServer.publish(attachmentId, subscriptionId, update)
+      }),
 
     Reply: ({ sessionId, token, commandId, result }, { headers }) =>
       auth.check(headers).pipe(Effect.orDie, Effect.andThen(runners.reply(sessionId, token, commandId, result))),
@@ -56,14 +68,6 @@ export const RunnerRpcLive = RunnerRpcs.toLayer(Effect.gen(function*() {
         yield* auth.check(headers).pipe(Effect.orDie)
         yield* leases.validate(sessionId, token)
         const { needsSnapshot } = yield* events.publish(sessionId, batches)
-        if (needsSnapshot) yield* runners.notify(sessionId, { _tag: "Resnapshot" })
-      }),
-
-    PublishView: ({ sessionId, token, updates }, { headers }) =>
-      Effect.gen(function*() {
-        yield* auth.check(headers).pipe(Effect.orDie)
-        yield* leases.validate(sessionId, token)
-        const { needsSnapshot } = yield* views.publish(sessionId, updates)
         if (needsSnapshot) yield* runners.notify(sessionId, { _tag: "Resnapshot" })
       }),
 

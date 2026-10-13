@@ -9,9 +9,8 @@
   "dependencies": {
     "@pi-cloud/protocol": "workspace:*",
     "effect": "4.0.2",
-    "@earendil-works/chord": "1.1.0"
-  },
-  "scripts": {
-    "test": "vitest run"
+    "@earendil-works/chord": "1.1.0",
+    "@earendil-works/pi-client": "1.1.0",
+    "@earendil-works/pi-protocol": "1.1.0"
   }
 }

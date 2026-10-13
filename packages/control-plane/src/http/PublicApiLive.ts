@@ -1,8 +1,8 @@
 import { parsePosition } from "@pi-cloud/core"
-import { ROOT_CONVERSATION_ID } from "@earendil-works/pi-durable"
-import { CommandFailed, PublicApi, RunnerUnavailable, type SessionId, type Submitted } from "@pi-cloud/protocol"
+import { CommandFailed, PublicApi, type SessionId, type Submitted } from "@pi-cloud/protocol"
 import { Effect, Layer } from "effect"
 import { HttpApiBuilder } from "effect/http-api"
+import { PiServer, SERVICES_PATH } from "../services/PiServer.ts"
 import { Sessions } from "../Sessions.ts"
 
 /** The REST surface: a thin mapping from `PublicApi` endpoints onto the `Sessions` service. */
@@ -26,20 +26,6 @@ export const SessionsApiLive = HttpApiBuilder.group(
           Effect.catchTag("ConversationBusy", (error) => Effect.fail(new CommandFailed({ message: error._tag })))
         ))
       .handle("events", ({ params, query }) => sessions.events(params.id, parsePosition(query.after)))
-      .handle("view", ({ params, query }) =>
-        Effect.gen(function*() {
-          const conversationId = query.conversationId ?? ROOT_CONVERSATION_ID
-          yield* sessions.watch(params.id, conversationId).pipe(
-            Effect.catchTags({
-              ConversationBusy: (error) => Effect.fail(new RunnerUnavailable({ sessionId: params.id, message: error._tag })),
-              CommandFailed: (error) => Effect.fail(new RunnerUnavailable({ sessionId: params.id, message: error.message }))
-            })
-          )
-          return yield* sessions.views(
-            params.id,
-            (update) => update.conversationId === undefined || update.conversationId === conversationId
-          )
-        }))
       .handle("entries", ({ params, query }) =>
         sessions.entries(params.id, query).pipe(Effect.map((page) => page as { entries: Array<never>; next?: string })))
       .handle("conversations", ({ params }) =>
@@ -49,7 +35,11 @@ export const SessionsApiLive = HttpApiBuilder.group(
   })
 )
 
-export const SystemApiLive = HttpApiBuilder.group(PublicApi, "system", (handlers) =>
-  Effect.succeed(handlers.handle("health", () => Effect.void)))
+export const SystemApiLive = HttpApiBuilder.group(PublicApi, "system", Effect.fn(function*(handlers) {
+  const piServer = yield* PiServer
+  return handlers
+    .handle("health", () => Effect.void)
+    .handle("server", () => Effect.succeed({ serverId: piServer.serverId, servicesPath: SERVICES_PATH }))
+}))
 
 export const PublicApiHandlers = Layer.mergeAll(SessionsApiLive, SystemApiLive)

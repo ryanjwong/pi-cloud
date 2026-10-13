@@ -158,13 +158,6 @@ describe("Pi's TUI on a cloud session", () => {
       await reattached
     }
 
-    // Any client can read the same view over server-sent events.
-    const response = await fetch(`${url}/v1/sessions/${session.id}/view`, { headers: { accept: "text/event-stream" } })
-    const reader = response.body!.getReader()
-    let text = ""
-    while (!text.includes("The readme says hello.")) text += new TextDecoder().decode((await reader.read()).value)
-    await reader.cancel()
-    expect(text).toContain('"_tag":"Snapshot"')
   }, 60_000)
 
   it("switches thinking levels and models through the API", async () => {
