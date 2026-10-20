@@ -13,6 +13,7 @@
     "@pi-cloud/client": "workspace:*",
     "@effect/platform-node": "4.0.2",
     "effect": "4.0.2",
-    "@pi-cloud/tui": "workspace:*"
+    "@pi-cloud/tui": "workspace:*",
+    "@earendil-works/pi-ai": "1.1.0"
   }
 }

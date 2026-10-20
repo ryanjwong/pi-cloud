@@ -1,5 +1,4 @@
-import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic"
-import { openaiProvider } from "@earendil-works/pi-ai/providers/openai"
+import { builtinProviders } from "@earendil-works/pi-ai/providers/all"
 import { CodingTools } from "@earendil-works/pi-durable/tools"
 import type { RunnerEnv } from "@pi-cloud/config"
 import { SandboxTemplate } from "@pi-cloud/protocol"
@@ -26,13 +25,15 @@ export const loadTemplates = (file: string | undefined): Record<string, SandboxT
 }
 
 /**
- * The plugin set of a Node runner: Anthropic and OpenAI models, Pi's coding agent (its tools, system prompt and
+ * The plugin set of a Node runner: every pi-ai model provider (API keys or `pi-cloud login` subscriptions), Pi's coding agent (its tools, system prompt and
  * subagents), local sandboxes with the configured templates, and GitHub tools when `GITHUB_TOKEN` is set. Swap or
  * extend freely.
  */
 export const defaultPlugins = (env: RunnerEnv): ReadonlyArray<RunnerPlugin> => {
   const plugins: Array<RunnerPlugin> = [
-    modelProviders(anthropicProvider, openaiProvider),
+    // Every built-in provider: each is usable once it has a credential, an API key in the runner's environment or a
+    // login stored with `pi-cloud login` (ChatGPT/Codex, Claude Pro/Max, GitHub Copilot, ...).
+    modelProviders(...builtinProviders()),
     extensions("coding", CodingTools),
     piAgent(),
     sandboxes({

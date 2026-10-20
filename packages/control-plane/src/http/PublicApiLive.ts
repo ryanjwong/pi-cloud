@@ -1,6 +1,6 @@
-import { parsePosition } from "@pi-cloud/core"
-import { CommandFailed, PublicApi, type SessionId, type Submitted } from "@pi-cloud/protocol"
-import { Effect, Layer } from "effect"
+import { CredentialStore, parsePosition, type VersionedCredential } from "@pi-cloud/core"
+import { CommandFailed, type CredentialInfo, PublicApi, type SessionId, type Submitted } from "@pi-cloud/protocol"
+import { Effect, Layer, Option } from "effect"
 import { HttpApiBuilder } from "effect/http-api"
 import { PiServer, SERVICES_PATH } from "../services/PiServer.ts"
 import { Sessions } from "../Sessions.ts"
@@ -35,6 +35,27 @@ export const SessionsApiLive = HttpApiBuilder.group(
   })
 )
 
+/** What the API shows of a stored credential: never the secret. */
+const infoOf = (entry: VersionedCredential): CredentialInfo => ({
+  providerId: entry.providerId,
+  type: entry.credential.type,
+  ...(entry.credential.type === "oauth" ? { expires: entry.credential.expires } : {}),
+  updatedAt: entry.updatedAt
+})
+
+export const CredentialsApiLive = HttpApiBuilder.group(PublicApi, "credentials", Effect.fn(function*(handlers) {
+  const credentials = yield* CredentialStore
+  return handlers
+    .handle("list", () => credentials.list().pipe(Effect.orDie, Effect.map((all) => all.map(infoOf))))
+    .handle("put", ({ params, payload }) =>
+      Effect.gen(function*() {
+        yield* credentials.put(params.providerId, payload)
+        const stored = yield* credentials.get(params.providerId)
+        return infoOf(Option.getOrThrow(stored))
+      }).pipe(Effect.orDie))
+    .handle("delete", ({ params }) => credentials.remove(params.providerId).pipe(Effect.orDie))
+}))
+
 export const SystemApiLive = HttpApiBuilder.group(PublicApi, "system", Effect.fn(function*(handlers) {
   const piServer = yield* PiServer
   return handlers
@@ -42,4 +63,4 @@ export const SystemApiLive = HttpApiBuilder.group(PublicApi, "system", Effect.fn
     .handle("server", () => Effect.succeed({ serverId: piServer.serverId, servicesPath: SERVICES_PATH }))
 }))
 
-export const PublicApiHandlers = Layer.mergeAll(SessionsApiLive, SystemApiLive)
+export const PublicApiHandlers = Layer.mergeAll(SessionsApiLive, CredentialsApiLive, SystemApiLive)

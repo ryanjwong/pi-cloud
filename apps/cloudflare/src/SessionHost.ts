@@ -1,5 +1,6 @@
 import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic"
 import { openaiProvider } from "@earendil-works/pi-ai/providers/openai"
+import { openaiCodexProvider } from "@earendil-works/pi-ai/providers/openai-codex"
 import { modelCredentialLookup, WorkerRunnerEnv } from "@pi-cloud/config"
 import type { WakeRequest } from "@pi-cloud/protocol"
 import { modelProviders, RunnerHost } from "@pi-cloud/runner"
@@ -26,7 +27,7 @@ export default class SessionHost extends Cloudflare.DurableObject<SessionHost>()
         controlPlaneUrl: env.controlPlaneUrl,
         secret: Redacted.value(env.runnerSecret),
         modelCredentials: modelCredentialLookup(env),
-        plugins: [modelProviders(anthropicProvider, openaiProvider)]
+        plugins: [modelProviders(anthropicProvider, openaiProvider, openaiCodexProvider)]
       })
       const keepAlive = state.storage.setAlarm(Date.now() + KEEPALIVE_MS)
 

@@ -23,6 +23,7 @@ export const SETTINGS: ReadonlyArray<Setting> = [
   { name: "RUNNER_URL", secret: false, components: ["control-plane"], description: "Runner host wake endpoint, for split deployments" },
   { name: "PI_CLOUD_API_KEYS", secret: true, components: ["control-plane"], description: "Comma-separated API keys; unset accepts every client" },
   { name: "PI_CLOUD_RUNNER_SECRET", secret: true, components: ["control-plane", "runner"], description: "Shared secret between control plane and runners" },
+  { name: "PI_CLOUD_CREDENTIAL_KEY", secret: true, components: ["control-plane"], description: "Encrypts stored model credentials (subscription logins, API keys) at rest" },
   { name: "PI_CLOUD_MODEL", secret: false, components: ["control-plane"], description: "Model for sessions created by triggers and sources", default: "anthropic/claude-opus-5-5" },
   { name: "GITHUB_WEBHOOK_SECRET", secret: true, components: ["control-plane"], description: "Enables the GitHub trigger" },
   { name: "GITHUB_MENTION", secret: false, components: ["control-plane"], description: "Only react to GitHub activity mentioning this, e.g. @pi" },

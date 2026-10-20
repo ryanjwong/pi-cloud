@@ -2,6 +2,7 @@ import {
   BindingStore,
   ControlPlaneConfig,
   type ControlPlaneSettings,
+  CredentialStore,
   EventHub,
   LeaseManager,
   type RunnerDispatcher,
@@ -76,6 +77,8 @@ export interface ControlPlaneOptions {
   readonly events?: Layer.Layer<EventHub>
   /** Defaults to bindings in memory. */
   readonly bindings?: Layer.Layer<BindingStore>
+  /** Model provider credentials (API keys, subscription logins). Defaults to memory. */
+  readonly credentials?: Layer.Layer<CredentialStore>
   /** Extra routes built on `Sessions`: hosted sources, event triggers, admin endpoints, ... */
   readonly extensions?: ReadonlyArray<Extension>
   /** The service API's logical server id, a UUID v4. Defaults to a new one per start. */
@@ -95,6 +98,7 @@ export const layer = (options: ControlPlaneOptions) => {
       options.leases ?? LeaseManager.memory({ ttlMs }),
       options.events ?? EventHub.memory({ logLimit }),
       options.bindings ?? BindingStore.memory,
+      options.credentials ?? CredentialStore.memory,
       RunnerAuth.sharedSecret(options.runnerSecret),
       options.clientAuth ?? ClientAuth.apiKeys(options.apiKeys),
       config

@@ -1,8 +1,8 @@
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context"
 import type { Storage } from "@earendil-works/pi-durable"
 import { RunnerRpcs, type StorageMethod } from "@pi-cloud/protocol"
-import { Effect, Semaphore, Stream } from "effect"
-import { ControlPlaneConfig, EventHub, LeaseManager, StateStore, storageFailure } from "@pi-cloud/core"
+import { Effect, Option, Semaphore, Stream } from "effect"
+import { ControlPlaneConfig, CredentialStore, EventHub, LeaseManager, StateStore, storageFailure } from "@pi-cloud/core"
 import { Runners } from "../Runners.ts"
 import { PiServer } from "../services/PiServer.ts"
 import { toJson } from "../Sessions.ts"
@@ -24,6 +24,7 @@ export const RunnerRpcLive = RunnerRpcs.toLayer(Effect.gen(function*() {
   const auth = yield* RunnerAuth
   const config = yield* ControlPlaneConfig
   const piServer = yield* PiServer
+  const credentials = yield* CredentialStore
 
   /** One commit at a time per session, checked against the lease at the moment it applies. */
   const commitLocks = new Map<string, Semaphore.Semaphore>()
@@ -52,6 +53,32 @@ export const RunnerRpcLive = RunnerRpcs.toLayer(Effect.gen(function*() {
         Effect.andThen(leases.release(sessionId, token)),
         Effect.andThen(runners.released(sessionId, token))
       ),
+
+    CredentialGet: ({ sessionId, token, providerId }, { headers }) =>
+      Effect.gen(function*() {
+        yield* auth.check(headers).pipe(Effect.orDie)
+        yield* leases.validate(sessionId, token)
+        const found = yield* credentials.get(providerId).pipe(Effect.orDie)
+        return Option.match(found, {
+          onNone: () => ({ version: 0 }),
+          onSome: (entry) => ({ credential: entry.credential, version: entry.version })
+        })
+      }),
+
+    CredentialList: ({ sessionId, token }, { headers }) =>
+      Effect.gen(function*() {
+        yield* auth.check(headers).pipe(Effect.orDie)
+        yield* leases.validate(sessionId, token)
+        const all = yield* credentials.list().pipe(Effect.orDie)
+        return all.map((entry) => ({ providerId: entry.providerId, type: entry.credential.type }))
+      }),
+
+    CredentialPut: ({ sessionId, token, providerId, version, credential }, { headers }) =>
+      Effect.gen(function*() {
+        yield* auth.check(headers).pipe(Effect.orDie)
+        yield* leases.validate(sessionId, token)
+        return yield* credentials.put(providerId, credential, version).pipe(Effect.orDie)
+      }),
 
     ServiceUpdate: ({ sessionId, token, attachmentId, subscriptionId, update }, { headers }) =>
       Effect.gen(function*() {

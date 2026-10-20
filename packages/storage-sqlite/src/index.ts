@@ -1,5 +1,13 @@
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node"
-import { type Binding, BindingStore, SessionStore, StateStore } from "@pi-cloud/core"
+import {
+  type Binding,
+  BindingStore,
+  CredentialStore,
+  credentialSealer,
+  SessionStore,
+  StateStore,
+  type VersionedCredential
+} from "@pi-cloud/core"
 import { Session, SessionId, StorageFailure } from "@pi-cloud/protocol"
 import { Effect, Layer, Option, Schema } from "effect"
 import { mkdirSync } from "node:fs"
@@ -90,6 +98,68 @@ export const sqliteBindings = (options: { readonly file: string }): Layer.Layer<
         put: (binding) => attempt(() => void put.run(binding.key, binding.source ?? null, JSON.stringify(binding))),
         list: (source) => attempt(() => (source === undefined ? all.all() : bySource.all(source)).map(parse)),
         remove: (key) => attempt(() => void remove.run(key))
+      })
+    }))
+  )
+
+/**
+ * Credentials in SQLite, sealed with AES-256-GCM when `key` is given (see `credentialSealer`). Writes are
+ * compare-and-swap on the version, inside one transaction.
+ */
+export const sqliteCredentials = (options: { readonly file: string; readonly key?: string | undefined }): Layer.Layer<CredentialStore> =>
+  Layer.effect(
+    CredentialStore,
+    Effect.acquireRelease(
+      Effect.sync(() => {
+        mkdirSync(dirname(options.file), { recursive: true })
+        const db = new DatabaseSync(options.file)
+        db.exec("PRAGMA journal_mode = WAL")
+        db.exec("PRAGMA busy_timeout = 5000")
+        db.exec(
+          "CREATE TABLE IF NOT EXISTS credentials (provider_id TEXT PRIMARY KEY, sealed TEXT NOT NULL, version INTEGER NOT NULL, updated_at INTEGER NOT NULL)"
+        )
+        return db
+      }),
+      (db) => Effect.sync(() => db.close())
+    ).pipe(Effect.map((db) => {
+      const sealer = credentialSealer(options.key)
+      const attempt = <A>(f: () => A) =>
+        Effect.try({ try: f, catch: (cause) => new StorageFailure({ message: String(cause) }) })
+      const get = db.prepare("SELECT provider_id, sealed, version, updated_at FROM credentials WHERE provider_id = ?")
+      const all = db.prepare("SELECT provider_id, sealed, version, updated_at FROM credentials ORDER BY provider_id")
+      const insert = db.prepare("INSERT INTO credentials (provider_id, sealed, version, updated_at) VALUES (?, ?, ?, ?)")
+      const update = db.prepare("UPDATE credentials SET sealed = ?, version = ?, updated_at = ? WHERE provider_id = ? AND version = ?")
+      const remove = db.prepare("DELETE FROM credentials WHERE provider_id = ?")
+      type Row = { provider_id: string; sealed: string; version: number; updated_at: number }
+      const parse = (row: Row): VersionedCredential => ({
+        providerId: row.provider_id,
+        credential: sealer.open(row.sealed),
+        version: row.version,
+        updatedAt: row.updated_at
+      })
+      return CredentialStore.of({
+        get: (providerId) => attempt(() => Option.fromUndefinedOr(get.get(providerId) as Row | undefined).pipe(Option.map(parse))),
+        list: () => attempt(() => (all.all() as Array<Row>).map(parse)),
+        put: (providerId, credential, expectedVersion) =>
+          attempt(() => {
+            db.exec("BEGIN IMMEDIATE")
+            try {
+              const current = (get.get(providerId) as Row | undefined)?.version ?? 0
+              if (expectedVersion !== undefined && expectedVersion !== current) {
+                db.exec("COMMIT")
+                return { stored: false, version: current }
+              }
+              const now = Date.now()
+              if (current === 0) insert.run(providerId, sealer.seal(credential), 1, now)
+              else update.run(sealer.seal(credential), current + 1, now, providerId, current)
+              db.exec("COMMIT")
+              return { stored: true, version: current + 1 }
+            } catch (error) {
+              db.exec("ROLLBACK")
+              throw error
+            }
+          }),
+        remove: (providerId) => attempt(() => void remove.run(providerId))
       })
     }))
   )

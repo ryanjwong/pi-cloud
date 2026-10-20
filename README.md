@@ -260,9 +260,30 @@ services.pi-cloud = {
 };
 ```
 
+**Subscription logins.** Instead of API keys, sessions can use a subscription: ChatGPT Plus/Pro (`openai-codex`),
+Claude Pro/Max (`anthropic`), GitHub Copilot, and the other logins pi-ai supports. Sign in once from your machine;
+the login flow is Pi's own, in your browser, and the tokens go to the control plane, which stores them encrypted
+(`PI_CLOUD_CREDENTIAL_KEY`). Every runner uses them through the runner RPC and refreshes them when they expire;
+writes are compare-and-swap, so runners refreshing at the same time do not lose each other's tokens.
+
+```sh
+pi-cloud login openai-codex          # ChatGPT Plus/Pro, in the browser (or device code on a headless machine)
+pi-cloud login anthropic             # Claude Pro/Max
+pi-cloud login --from-codex          # reuse the login of `codex login` (~/.codex/auth.json)
+pi-cloud login --from-pi anthropic   # reuse a login made with Pi (~/.pi/agent/auth.json)
+pi-cloud auth                        # what is stored (never the tokens)
+pi-cloud logout anthropic
+```
+
+Two cautions. A subscription's terms are the provider's: Anthropic, for one, restricts using Claude Pro/Max logins
+outside its own apps, so check what yours allows before relying on it. And an imported login is shared with the
+tool it came from: when one side refreshes the token, providers that rotate refresh tokens sign the other out;
+`pi-cloud login` makes a separate login instead.
+
 **Where each secret goes.**
 
 - Model keys go to the model providers explicitly (`modelCredentials`); pi-ai does not read the environment.
+  Stored credentials (`pi-cloud login`) come from the control plane; they never reach a sandbox or the transcript.
 - `GITHUB_TOKEN` is used by the runner's GitHub tools. It reaches a sandbox only if listed in `SANDBOX_SECRETS`.
 - Sandboxes get only what their template asks for, and only names the operator listed in `SANDBOX_SECRETS`.
   Everything else in the runner's environment (model keys, the runner secret) never reaches a sandbox: local

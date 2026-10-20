@@ -1,7 +1,7 @@
 // All-in-one: control plane and runner in one process, state in SQLite under DATA_DIR.
 //   sops exec-env secrets.yaml 'node src/main.ts'
 import { ControlPlaneEnv, modelCredentialLookup, RunnerEnv, sandboxSecretLookup } from "@pi-cloud/config"
-import { sqliteBindings, sqliteSessions, sqliteState } from "@pi-cloud/storage-sqlite"
+import { sqliteBindings, sqliteCredentials, sqliteSessions, sqliteState } from "@pi-cloud/storage-sqlite"
 import { Option, Redacted } from "effect"
 import { join, resolve } from "node:path"
 import { connectors } from "./connectors.ts"
@@ -22,6 +22,7 @@ const deployment = await startLocal({
   sessions: sqliteSessions({ file: join(dataDir, "sessions.sqlite") }),
   state: sqliteState({ directory: join(dataDir, "state") }),
   bindings: sqliteBindings({ file: join(dataDir, "sessions.sqlite") }),
+  credentials: sqliteCredentials({ file: join(dataDir, "credentials.sqlite"), key: secret(control.credentialKey) }),
   extensions: connectors(control),
   runner: {
     plugins: defaultPlugins(runner),

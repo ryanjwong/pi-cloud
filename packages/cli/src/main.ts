@@ -8,6 +8,7 @@ import { Deferred, Effect, Stream } from "effect"
 import { execFileSync } from "node:child_process"
 import { createInterface } from "node:readline/promises"
 import { parseArgs } from "node:util"
+import { importFromCodex, importFromPi, listCredentials, login, loginProviders, logout } from "./login.ts"
 import { makeRenderer } from "./render.ts"
 
 const { values: flags, positionals } = parseArgs({
@@ -19,6 +20,8 @@ const { values: flags, positionals } = parseArgs({
     sandbox: { type: "string" },
     continue: { type: "boolean", short: "c" },
     resume: { type: "string", short: "r" },
+    "from-pi": { type: "boolean" },
+    "from-codex": { type: "boolean" },
     url: { type: "string" }
   }
 })
@@ -28,6 +31,12 @@ const write = (text: string) => void process.stdout.write(text)
 const usage = `pi-cloud [-c | -r <id>] [--model provider/model]
       Pi's TUI on a cloud session. In a git checkout the agent works in a cloud clone of its origin at the
       current branch; -c continues this repository's latest session, -r attaches to any session.
+
+pi-cloud login [provider] [--from-pi | --from-codex]
+      sign in to a model provider (ChatGPT/Codex: openai-codex, Claude Pro/Max: anthropic, ...) in your browser and
+      store the login on the server, for every session; --from-pi / --from-codex import an existing Pi or Codex login
+pi-cloud logout <provider>                    remove a stored credential
+pi-cloud auth                                 list stored credentials
 
 pi-cloud <command>
 
@@ -213,6 +222,29 @@ const program = Effect.gen(function*() {
       const { id, label } = target
       return yield* Effect.promise(() => runTui({ ...connection, sessionId: id, ...(label === undefined ? {} : { label }) }))
     }
+    case "login": {
+      const attempt = (run: () => Promise<void>) =>
+        Effect.promise(() =>
+          run().catch((error) => {
+            process.exitCode = 1
+            write(`Login failed: ${error instanceof Error ? error.message : String(error)}\n`)
+          })
+        )
+      const provider = rest[0]
+      if (flags["from-codex"] === true) return yield* attempt(() => importFromCodex(connection))
+      if (flags["from-pi"] === true) return yield* attempt(() => importFromPi(connection, rest))
+      if (provider === undefined) {
+        write(`pi-cloud login <provider>\n\n${loginProviders().map((entry) => `  ${entry.id.padEnd(16)} ${entry.name}`).join("\n")}\n`)
+        return
+      }
+      return yield* attempt(() => login(connection, provider))
+    }
+    case "logout": {
+      if (rest[0] === undefined) return write(`${usage}\n`)
+      return yield* Effect.promise(() => logout(connection, rest[0]!))
+    }
+    case "auth":
+      return yield* Effect.promise(() => listCredentials(connection))
     case "new": {
       const session = yield* createSession
       return write(`${session.id}\n`)

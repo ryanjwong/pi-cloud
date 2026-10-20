@@ -1,6 +1,7 @@
 import { Schema } from "effect"
 import { Rpc, RpcGroup } from "effect/rpc"
 import { CommandResult, SessionCommand } from "./Commands.ts"
+import { StoredCredential } from "./Credentials.ts"
 import { EventBatch, Session } from "./Domain.ts"
 import { LeaseHeld, LeaseLost, SessionNotFound, StorageFailure } from "./Errors.ts"
 
@@ -114,6 +115,29 @@ export class RunnerRpcs extends RpcGroup.make(
   }),
   Rpc.make("Publish", {
     payload: { ...leaseFields, batches: Schema.Array(EventBatch) },
+    error: LeaseLost
+  }),
+  /**
+   * A stored model credential, with its version for `CredentialPut`. Runners read credentials through the control
+   * plane, so every runner uses (and refreshes) the same subscription login.
+   */
+  Rpc.make("CredentialGet", {
+    payload: { ...leaseFields, providerId: Schema.String },
+    success: Schema.Struct({ credential: Schema.optional(StoredCredential), version: Schema.Number }),
+    error: LeaseLost
+  }),
+  Rpc.make("CredentialList", {
+    payload: leaseFields,
+    success: Schema.Array(Schema.Struct({ providerId: Schema.String, type: Schema.Literals(["api_key", "oauth"]) })),
+    error: LeaseLost
+  }),
+  /**
+   * Replace a credential if it is still at `version` (a refreshed OAuth token, typically). Concurrent refreshes from
+   * several runners cannot lose one another's tokens: the loser reads the winner's and uses it.
+   */
+  Rpc.make("CredentialPut", {
+    payload: { ...leaseFields, providerId: Schema.String, version: Schema.Number, credential: StoredCredential },
+    success: Schema.Struct({ stored: Schema.Boolean, version: Schema.Number }),
     error: LeaseLost
   }),
   /** A Chord subscription update for one attachment's subscription. */

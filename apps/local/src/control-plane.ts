@@ -4,7 +4,7 @@ import { NodeRuntime } from "@effect/platform-node"
 import { ControlPlaneEnv } from "@pi-cloud/config"
 import { serve } from "@pi-cloud/control-plane/node"
 import { RunnerDispatcher } from "@pi-cloud/core"
-import { sqliteBindings, sqliteSessions, sqliteState } from "@pi-cloud/storage-sqlite"
+import { sqliteBindings, sqliteCredentials, sqliteSessions, sqliteState } from "@pi-cloud/storage-sqlite"
 import { Layer, Option, Redacted } from "effect"
 import { FetchHttpClient } from "effect/http"
 import { join, resolve } from "node:path"
@@ -25,6 +25,7 @@ Layer.launch(serve({
   sessions: sqliteSessions({ file: join(dataDir, "sessions.sqlite") }),
   state: sqliteState({ directory: join(dataDir, "state") }),
   bindings: sqliteBindings({ file: join(dataDir, "sessions.sqlite") }),
+  credentials: sqliteCredentials({ file: join(dataDir, "credentials.sqlite"), key: Option.getOrUndefined(Option.map(env.credentialKey, Redacted.value)) }),
   extensions: connectors(env),
   dispatcher: RunnerDispatcher.http({ url: runnerUrl, secret: runnerSecret }).pipe(Layer.provide(FetchHttpClient.layer))
 })).pipe(NodeRuntime.runMain)

@@ -2,6 +2,7 @@ import { Schema } from "effect"
 import { HttpApi, HttpApiEndpoint, HttpApiGroup, HttpApiMiddleware, HttpApiSchema, HttpApiSecurity, OpenApi } from "effect/http-api"
 import { SessionCommand, Submitted } from "./Commands.ts"
 import { EventBatch, SessionId, SessionSpec, SessionView, UserContent, WhenBusy } from "./Domain.ts"
+import { CredentialInfo, StoredCredential } from "./Credentials.ts"
 import { CommandFailed, ConversationBusy, RunnerUnavailable, SessionNotFound, Unauthorized } from "./Errors.ts"
 
 /**
@@ -119,6 +120,31 @@ export const ServerInfo = Schema.Struct({
   servicesPath: Schema.String
 })
 
+export class CredentialsApi extends HttpApiGroup.make("credentials")
+  .add(
+    HttpApiEndpoint.get("list", "/", { success: Schema.Array(CredentialInfo) }),
+    /**
+     * Store a provider credential: an API key, or a subscription login's OAuth tokens (as `pi-cloud login` uploads
+     * them). Runners use it for that provider's models and refresh OAuth tokens as needed.
+     */
+    HttpApiEndpoint.put("put", "/:providerId", {
+      params: { providerId: Schema.String },
+      payload: StoredCredential,
+      success: CredentialInfo
+    }),
+    HttpApiEndpoint.delete("delete", "/:providerId", {
+      params: { providerId: Schema.String },
+      success: HttpApiSchema.NoContent
+    })
+  )
+  .middleware(ApiAuth)
+  .prefix("/v1/credentials")
+  .annotateMerge(OpenApi.annotations({
+    title: "Credentials",
+    description: "Model provider credentials, stored encrypted by the control plane and used by runners."
+  }))
+{}
+
 export class SystemApi extends HttpApiGroup.make("system", { topLevel: true }).add(
   HttpApiEndpoint.get("health", "/health", { success: HttpApiSchema.NoContent }),
   HttpApiEndpoint.get("server", "/v1/server", { success: ServerInfo })
@@ -126,6 +152,7 @@ export class SystemApi extends HttpApiGroup.make("system", { topLevel: true }).a
 
 export class PublicApi extends HttpApi.make("pi-cloud")
   .add(SessionsApi)
+  .add(CredentialsApi)
   .add(SystemApi)
   .annotateMerge(OpenApi.annotations({ title: "pi-cloud control plane" }))
 {}

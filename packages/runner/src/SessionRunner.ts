@@ -18,6 +18,7 @@ import { Cause, Deferred, Effect, Exit, Fiber, Schedule, Stream } from "effect"
 import type { ControlPlaneClient } from "./ControlPlaneClient.ts"
 import { noSecrets, type PluginParts, type RunnerPlugin, runSetup, type RunningSession, type SecretResolver } from "./Plugin.ts"
 import { LeaseLostError, RemoteStorage } from "./RemoteStorage.ts"
+import { RemoteCredentialStore } from "./RemoteCredentials.ts"
 import { openSessionServices, type SessionServices } from "./Services.ts"
 
 export interface SessionRunnerOptions {
@@ -140,9 +141,20 @@ export const hostSession = Effect.fnUntraced(function*(
     for (const plugin of options.plugins) {
       parts.push(await runSetup(plugin, { session, config: session.spec.plugins?.[plugin.name], secrets }))
     }
+    // Stored credentials (API keys, subscription logins) come from the control plane; environment keys from the
+    // runner's configuration. pi-ai refreshes OAuth tokens through the store, for every runner at once.
     const credentials = options.modelCredentials
-    const models = createModels(credentials === undefined ? undefined : {
-      authContext: { env: async (name) => credentials(name), fileExists: async () => false }
+    const store = new RemoteCredentialStore({
+      get: (providerId) => run(client.CredentialGet({ sessionId, token, providerId })) as never,
+      list: () => run(client.CredentialList({ sessionId, token })) as never,
+      put: (providerId, version, credential) =>
+        run(client.CredentialPut({ sessionId, token, providerId, version, credential: credential as never }))
+    })
+    const models = createModels({
+      credentials: store,
+      ...(credentials === undefined
+        ? {}
+        : { authContext: { env: async (name: string) => credentials(name), fileExists: async () => false } })
     })
     const registry = createRegistry()
     let settings: HarnessSettings = { ...options.settings }
