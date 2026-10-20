@@ -32,7 +32,9 @@
     "@pi-cloud/triggers": "workspace:*",
     "effect": "4.0.2",
     "@pi-cloud/pi": "workspace:*",
-    "@pi-cloud/tui": "workspace:*"
+    "@pi-cloud/tui": "workspace:*",
+    "@pi-cloud/sandbox-docker": "workspace:*",
+    "@pi-cloud/sandbox-daytona": "workspace:*"
   },
   "devDependencies": {
     "@xterm/headless": "5.5.0"

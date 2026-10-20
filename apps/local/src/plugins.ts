@@ -4,6 +4,8 @@ import type { RunnerEnv } from "@pi-cloud/config"
 import { SandboxTemplate } from "@pi-cloud/protocol"
 import { extensions, modelProviders, type RunnerPlugin } from "@pi-cloud/runner"
 import { sandboxes } from "@pi-cloud/sandbox"
+import { daytonaSandboxes } from "@pi-cloud/sandbox-daytona"
+import { dockerSandboxes } from "@pi-cloud/sandbox-docker"
 import { localSandboxes } from "@pi-cloud/sandbox-local"
 import { piAgent } from "@pi-cloud/pi"
 import { githubTools } from "@pi-cloud/tool-github"
@@ -26,8 +28,8 @@ export const loadTemplates = (file: string | undefined): Record<string, SandboxT
 
 /**
  * The plugin set of a Node runner: every pi-ai model provider (API keys or `pi-cloud login` subscriptions), Pi's coding agent (its tools, system prompt and
- * subagents), local sandboxes with the configured templates, and GitHub tools when `GITHUB_TOKEN` is set. Swap or
- * extend freely.
+ * subagents), sandboxes with the configured templates (`local` directories, `docker` containers, and `daytona` when
+ * `DAYTONA_API_KEY` is set), and GitHub tools when `GITHUB_TOKEN` is set. Swap or extend freely.
  */
 export const defaultPlugins = (env: RunnerEnv): ReadonlyArray<RunnerPlugin> => {
   const plugins: Array<RunnerPlugin> = [
@@ -37,7 +39,14 @@ export const defaultPlugins = (env: RunnerEnv): ReadonlyArray<RunnerPlugin> => {
     extensions("coding", CodingTools),
     piAgent(),
     sandboxes({
-      providers: [localSandboxes({ root: join(resolve(env.dataDir), "sandboxes") })],
+      providers: [
+        localSandboxes({ root: join(resolve(env.dataDir), "sandboxes") }),
+        dockerSandboxes(),
+        ...Option.match(env.daytonaApiKey, {
+          onNone: () => [],
+          onSome: (apiKey) => [daytonaSandboxes({ apiKey: Redacted.value(apiKey) })]
+        })
+      ],
       templates: loadTemplates(Option.getOrUndefined(env.templatesFile))
     })
   ]

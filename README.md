@@ -68,11 +68,13 @@ The workspace is a stack of small libraries, each building on the ones below it,
 | Primitives | `@pi-cloud/core` | The interfaces everything else builds on (`SessionStore`, `StateStore`, `LeaseManager`, `EventHub`, `RunnerDispatcher`, `BindingStore`) with in-memory reference implementations. No I/O. |
 | Control plane | `@pi-cloud/control-plane` | Composes `core` into `Sessions` (the one programmatic API) and serves it as REST, the WebSocket channel, and the runner RPC. `./node` serves it on Node; `ControlPlane.toWebHandler` on fetch-style runtimes. |
 | Runtime | `@pi-cloud/runner` | Hosts Pi Durable against the control plane: `RemoteStorage`, the session runner, `RunnerHost` with a fetch-style wake handler, and the plugin API. Uses only `fetch`. |
-| Capabilities | `@pi-cloud/sandbox` | The `SandboxProvider` interface and the agent's `sandbox_create`/`sandbox_destroy` tools, as a runner plugin. |
+| Capabilities | `@pi-cloud/sandbox` | The `SandboxProvider` interface, the agent's `sandbox_create`/`sandbox_destroy` tools as a runner plugin, and `shellEnv`, Pi's file and shell interface over any remote shell. |
 | | `@pi-cloud/triggers` | One-way events: the `Trigger` interface, a generic signed JSON webhook, and the extension that mounts triggers. |
 | | `@pi-cloud/pi` | Pi's coding agent for runners: its system prompt (tools, rules, `AGENTS.md`, skills) and `subagent` tool, as Pi's durable mode runs them. |
 | | `@pi-cloud/sources` | Two-way connections: the `Source` interface (receive messages, deliver replies) and the extension that runs them. |
-| Adapters | `@pi-cloud/sandbox-local` | Sandboxes as directories on the runner's machine. |
+| Adapters | `@pi-cloud/sandbox-local` | Sandboxes as directories on the runner's machine. No isolation. |
+| | `@pi-cloud/sandbox-docker` | One Docker container per sandbox, kept across runner restarts; secrets passed per command, never baked in. |
+| | `@pi-cloud/sandbox-daytona` | One Daytona sandbox (an isolated VM) per sandbox; persists while stopped and restarts on the next command. |
 | | `@pi-cloud/trigger-github` | GitHub webhooks: issues, comments, pull requests and reviews reach the session of their thread. |
 | | `@pi-cloud/tool-github` | GitHub tools for the agent (`github_comment`, `github_open_pull_request`), run by the runner so the token stays out of sandboxes. |
 | | `@pi-cloud/source-slack` | Slack: each thread is a session; mentions and thread replies go in, answers are posted in the thread. |
@@ -362,6 +364,20 @@ interface SandboxProvider {
 }
 ```
 
+A provider that is not on the runner's machine implements only a `RemoteShell` (run a `sh` script, optionally
+upload a file natively) and returns `shellEnv(shell, { cwd, env })`: every file operation Pi's tools use is then done
+with POSIX utilities in the sandbox, commands run in their own session so an abort or timeout kills the whole
+process tree, and large output spills to a file in the sandbox. The Docker and Daytona providers are each under
+200 lines on top of it.
+
+```jsonc
+// SANDBOX_TEMPLATES_FILE
+{
+  "api": { "provider": "docker", "image": "node:22-bookworm", "repository": { "url": "https://github.com/acme/api.git", "credential": "GITHUB_TOKEN" }, "options": { "memory": "4g", "cpus": "2" } },
+  "big": { "provider": "daytona", "image": "node:22-bookworm", "options": { "cpu": 4, "memory": 8 } }
+}
+```
+
 A template names a `provider`, an optional `repository` to clone (`url`, `ref`, and a `credential` secret name),
 `setup` commands, `env`, and `secrets` by name. The operator defines templates once in a JSON file
 (`SANDBOX_TEMPLATES_FILE`, or `services.pi-cloud.sandboxTemplates` on NixOS), and every session can use them next to
@@ -397,9 +413,12 @@ renderer; a web UI or Slack bot is another renderer over `followEvents`.
   prompt templates, images, `/login`. It loads Pi internals from the installed `@earendil-works/pi-coding-agent`
   1.1.0 by file path, so upgrading Pi needs a check.
 - **Pi's agent needs a Node runner.** `@pi-cloud/pi` builds Pi's system prompt from the runner's `~/.pi/agent` and
-  the sandbox's files, so it needs a sandbox on the runner's filesystem (the local provider); the Cloudflare runner
-  has Pi Durable's tools but no Pi prompt and no sandbox yet.
-- **Not yet built:** a Postgres state store, a shared lease manager, Modal and Cloudflare sandbox providers,
+  the sandbox: `AGENTS.md`/`CLAUDE.md` files are read through the sandbox, wherever it runs, but project skills
+  (`.pi/skills`) load only from sandboxes on the runner's filesystem. The Cloudflare runner has Pi Durable's tools
+  but no Pi prompt and no sandbox yet.
+- **Remote sandboxes do not report file changes** (`watch` is not supported), and file names containing newlines
+  are not listed correctly. The Daytona provider is tested against a stand-in for its API, not the live service.
+- **Not yet built:** a Postgres state store, a shared lease manager, E2B, Modal and Cloudflare sandbox providers,
   hosting the control plane itself on Cloudflare, and real authentication (today: static API keys and a shared
   runner secret). The Cloudflare app typechecks but has not been deployed. The local sandbox provider has no
-  isolation. Pi Durable is experimental, so pin versions.
+  isolation; use `docker` or `daytona` for code you do not trust. Pi Durable is experimental, so pin versions.

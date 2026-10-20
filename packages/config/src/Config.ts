@@ -62,6 +62,7 @@ export const RunnerEnv = Config.all({
   modelCredentials: ModelCredentials,
   githubToken: Config.option(Config.Redacted("GITHUB_TOKEN")),
   templatesFile: Config.option(Config.String("SANDBOX_TEMPLATES_FILE")),
+  daytonaApiKey: Config.option(Config.Redacted("DAYTONA_API_KEY")),
   /**
    * Secrets sandbox templates may request: each name listed in `SANDBOX_SECRETS`, read like any other secret.
    * A listed secret that cannot be read is a startup error; an unlisted one can never reach a sandbox.

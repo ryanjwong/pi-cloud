@@ -36,7 +36,8 @@ export const SETTINGS: ReadonlyArray<Setting> = [
   { name: "OPENAI_API_KEY", secret: true, components: ["runner"], description: "OpenAI models" },
   { name: "GITHUB_TOKEN", secret: true, components: ["runner"], description: "GitHub tools (comment, open pull requests); list it in SANDBOX_SECRETS to also clone and push" },
   { name: "SANDBOX_SECRETS", secret: false, components: ["runner"], description: "Comma-separated secret names sandbox templates may request, each read like any other secret" },
-  { name: "SANDBOX_TEMPLATES_FILE", secret: false, components: ["runner"], description: "JSON file of sandbox templates by name, available to every session" }
+  { name: "SANDBOX_TEMPLATES_FILE", secret: false, components: ["runner"], description: "JSON file of sandbox templates by name, available to every session" },
+  { name: "DAYTONA_API_KEY", secret: true, components: ["runner"], description: "Daytona sandboxes (templates with provider \"daytona\")" }
 ]
 
 /** Model provider credentials, by the variable name pi-ai looks them up under. */

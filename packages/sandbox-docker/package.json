@@ -1,0 +1,13 @@
+{
+  "name": "@pi-cloud/sandbox-docker",
+  "version": "0.1.0",
+  "description": "Sandbox provider that runs each sandbox in its own Docker container.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@pi-cloud/sandbox": "workspace:*",
+    "effect": "4.0.2"
+  }
+}
