@@ -34,6 +34,23 @@ export const StorageMethod = Schema.Literals([
 ])
 export type StorageMethod = typeof StorageMethod.Type
 
+/** A SQLite value in a dump: blobs travel as base64. */
+export const DumpValue = Schema.Union([Schema.Null, Schema.Number, Schema.String, Schema.Struct({ base64: Schema.String })])
+
+/**
+ * A session's Pi Durable SQLite tables, as one consistent copy: the schema statements, then every row. A runner
+ * loads it into a local database and reads from there (see `ReplicatedStorage`).
+ */
+export const StorageDump = Schema.Struct({
+  schema: Schema.Array(Schema.String),
+  tables: Schema.Array(Schema.Struct({
+    name: Schema.String,
+    columns: Schema.Array(Schema.String),
+    rows: Schema.Array(Schema.Array(DumpValue))
+  }))
+})
+export type StorageDump = typeof StorageDump.Type
+
 const leaseFields = {
   sessionId: Schema.String,
   /** The fencing token issued with the lease. Every write carries it. */
@@ -126,6 +143,15 @@ export class RunnerRpcs extends RpcGroup.make(
     payload: { ...leaseFields, providerId: Schema.String, version: Schema.Number, credential: StoredCredential },
     success: Schema.Struct({ stored: Schema.Boolean, version: Schema.Number }),
     error: LeaseLost
+  }),
+  /**
+   * A consistent copy of the session's storage, taken between commits, when the state store keeps it in SQLite.
+   * Absent otherwise: the runner then reads through `Storage`.
+   */
+  Rpc.make("StorageDump", {
+    payload: leaseFields,
+    success: Schema.Struct({ dump: Schema.optional(StorageDump) }),
+    error: Schema.Union([LeaseLost, StorageFailure])
   }),
   /** Chord frames from the session's host to the control plane's, on the link numbered `link`. */
   Rpc.make("Frames", {

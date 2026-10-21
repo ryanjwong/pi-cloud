@@ -3,6 +3,7 @@
 // Any machine, container, or platform that can run this and reach the control plane can host sessions.
 import { modelCredentialLookup, RunnerEnv, sandboxSecretLookup } from "@pi-cloud/config"
 import { RunnerHost } from "@pi-cloud/runner"
+import { memoryReplica } from "@pi-cloud/runner/node"
 import { Option, Redacted } from "effect"
 import { createServer } from "node:http"
 import { Readable } from "node:stream"
@@ -15,7 +16,9 @@ const host = new RunnerHost({
   secret: Option.getOrUndefined(Option.map(env.runnerSecret, Redacted.value)),
   controlPlaneUrl: Option.getOrUndefined(env.controlPlaneUrl),
   modelCredentials: modelCredentialLookup(env),
-  secrets: sandboxSecretLookup(env)
+  secrets: sandboxSecretLookup(env),
+  // Reads from a local copy of each session; commits still go through the control plane.
+  replica: memoryReplica
 })
 
 createServer(async (req, res) => {

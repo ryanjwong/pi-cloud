@@ -101,6 +101,16 @@ export const RunnerRpcLive = RunnerRpcs.toLayer(Effect.gen(function*() {
         if (needsSnapshot) yield* runners.notify(sessionId, { _tag: "Resnapshot" })
       }),
 
+    StorageDump: ({ sessionId, token }, { headers }) =>
+      Effect.gen(function*() {
+        yield* auth.check(headers).pipe(Effect.orDie)
+        // Between commits, so the copy and the runner's later commits line up.
+        const dump = yield* commitLock(sessionId).withPermits(1)(
+          Effect.andThen(leases.validate(sessionId, token), states.dump(sessionId))
+        )
+        return dump === undefined ? {} : { dump }
+      }),
+
     Storage: ({ sessionId, token, method, args, requestId }, { headers }) =>
       Effect.gen(function*() {
         yield* auth.check(headers).pipe(Effect.orDie)

@@ -18,6 +18,7 @@ import { Cause, Deferred, Effect, Exit, Fiber, Schedule, Stream } from "effect"
 import type { ControlPlaneClient } from "./ControlPlaneClient.ts"
 import { noSecrets, type PluginParts, type RunnerPlugin, runSetup, type RunningSession, type SecretResolver } from "./Plugin.ts"
 import { LeaseLostError, RemoteStorage, StorageBackendError } from "./RemoteStorage.ts"
+import { type ReplicaDatabase, ReplicatedStorage } from "./ReplicatedStorage.ts"
 import { RemoteCredentialStore } from "./RemoteCredentials.ts"
 import { openSessionServices, type SessionServices } from "./Services.ts"
 
@@ -36,6 +37,12 @@ export interface SessionRunnerOptions {
    * from the process environment or disk; when omitted it falls back to its ambient lookup.
    */
   readonly modelCredentials?: (name: string) => string | undefined
+  /**
+   * A local database for each session's read replica (see `ReplicatedStorage`): reads are served from it instead
+   * of the control plane, when the control plane's state store is SQLite. `memoryReplica` from
+   * `@pi-cloud/runner/node` on Node. Omitted: every read is a call to the control plane.
+   */
+  readonly replica?: ReplicaDatabase
 }
 
 /**
@@ -54,7 +61,7 @@ const errorResult = (error: unknown): CommandResult => ({
 
 /** Everything that belongs to one lease. */
 interface Hosted extends RunningSession {
-  readonly storage: RemoteStorage
+  readonly storage: ReplicatedStorage
   readonly token: string
   readonly epoch: number
   readonly parts: ReadonlyArray<PluginParts>
@@ -119,7 +126,7 @@ export const hostSession = Effect.fnUntraced(function*(
 
   const open = async (session: Session, token: string, epoch: number): Promise<Hosted> => {
     const { context, cancel } = withCancel(BACKGROUND_CONTEXT)
-    const storage = new RemoteStorage(async (method, args, requestId) => {
+    const remote = new RemoteStorage(async (method, args, requestId) => {
       try {
         const { value } = await run(client.Storage({
           sessionId,
@@ -141,6 +148,17 @@ export const hostSession = Effect.fnUntraced(function*(
         }
         throw error
       }
+    })
+    const dump = options.replica === undefined
+      ? undefined
+      : (await run(client.StorageDump({ sessionId, token })).catch((error) => {
+        if ((error as { _tag?: string })._tag === "LeaseLost") throw new LeaseLostError(sessionId)
+        console.warn(`[pi-cloud runner ${runnerId}] ${sessionId}: no replica, reading through the control plane:`, error)
+        return { dump: undefined }
+      })).dump
+    const storage = await ReplicatedStorage.open(remote, dump, options.replica, (reason) => {
+      console.warn(`[pi-cloud runner ${runnerId}] ${sessionId}: dropped the read replica: ${reason}`)
+      hosted?.services?.notice("warning", `Reads go to the control plane again: ${reason}`)
     })
     const parts: Array<PluginParts> = []
     for (const plugin of options.plugins) {

@@ -48,8 +48,12 @@ Local commits and changes are not in the cloud: push first (the CLI says when th
 2. `POST /v1/sessions/:id/messages` needs a runner. If none holds the session's lease, the control plane asks its
    `RunnerDispatcher` to start one and waits for it to **attach**.
 3. The runner attaches over the runner RPC and receives a **lease** (a fencing token plus the session spec), then a
-   stream of commands. It opens Pi Durable on `RemoteStorage`: every Pi storage call goes to the control plane,
-   and every commit is checked against the lease when it is applied. A runner that lost its lease cannot write.
+   stream of commands. It opens Pi Durable on the control plane's storage: every commit goes to the control plane
+   and is checked against the lease when it is applied, so a runner that lost its lease cannot write. Reads come
+   from a **read replica**: with the SQLite state store, the runner loads a copy of the session's tables when it
+   takes the lease and applies each commit to it after the control plane has. It is the only writer while it holds
+   the lease, so the copy is never behind; both copies must number every commit the same, or the replica is dropped
+   and reads go to the control plane. One turn with a tool call is 14 round trips (its commits) instead of 61.
 4. The runner publishes Pi's per-commit agent events; the control plane fans them out to
    `GET /v1/sessions/:id/events`. Reads such as `GET /v1/sessions/:id/entries` come straight from the state store
    and work with no runner at all.
@@ -402,8 +406,10 @@ renderer; a web UI or Slack bot is another renderer over `followEvents`.
 - **Event replay is bounded.** A client that joins late gets the newest snapshot and the batches since it. A
   reconnect with `?after=<epoch>:<seq>` resumes without a snapshot while the gap is still buffered. For the full
   history, read `/entries`.
-- **Latency.** Every commit is a round trip to the control plane. Keep runners close to it, and consider raising
-  Pi's `settings.progress` intervals, which control how often streaming output is committed.
+- **Latency.** Every commit is a round trip to the control plane (reads are local with a replica). Keep runners
+  close to it, and consider raising Pi's `settings.progress` intervals, which control how often streaming output
+  is committed. A replica needs the SQLite state store and a local SQLite (`memoryReplica` on Node); the Cloudflare
+  runner reads through the control plane for now. Loading the copy costs one transfer of the session per wake.
 - **The TUI is Pi's durable TUI.** It is the experimental durable mode Pi 1.1.0 shipped (vendored, MIT; Pi 1.3
   removed it from `pi-coding-agent`), with its feature set: prompting, steering, follow-ups, abort, the model picker,
   thinking levels, `/compact`, `/agents`, `/tasks`. Not there: a session picker, forks and tree navigation,

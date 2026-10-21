@@ -1,6 +1,6 @@
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context"
 import { MemoryStorage, type Storage } from "@earendil-works/pi-durable"
-import type { StorageFailure } from "@pi-cloud/protocol"
+import type { StorageDump, StorageFailure } from "@pi-cloud/protocol"
 import { Context, Effect, Layer } from "effect"
 import { storageFailure } from "./SessionStore.ts"
 
@@ -18,11 +18,17 @@ export class StateStore extends Context.Service<StateStore, {
   open(sessionId: string): Effect.Effect<Storage, StorageFailure>
   /** Close and delete the session's state. */
   remove(sessionId: string): Effect.Effect<void, StorageFailure>
+  /**
+   * A consistent copy of the session's SQLite tables, for runners to read from locally; undefined when the backend
+   * is not SQLite. Called with the session's commits held off.
+   */
+  dump(sessionId: string): Effect.Effect<StorageDump | undefined, StorageFailure>
 }>()("@pi-cloud/control-plane/StateStore") {
   /** Build a `StateStore` from a function that opens one session's storage. Opened stores close with the layer. */
   static readonly fromOpener = (options: {
     readonly open: (sessionId: string) => Promise<Storage>
     readonly remove?: (sessionId: string) => Promise<void>
+    readonly dump?: (sessionId: string) => Promise<StorageDump>
   }): Layer.Layer<StateStore> =>
     Layer.effect(
       StateStore,
@@ -56,7 +62,17 @@ export class StateStore extends Context.Service<StateStore, {
             },
             catch: storageFailure
           })
-        return StateStore.of({ open, remove })
+        const dump = (sessionId: string) =>
+          Effect.tryPromise({
+            try: async () => {
+              if (options.dump === undefined) return undefined
+              // The session's storage exists before its tables can be copied.
+              await open(sessionId).pipe(Effect.runPromise)
+              return options.dump(sessionId)
+            },
+            catch: storageFailure
+          })
+        return StateStore.of({ open, remove, dump })
       })
     )
 

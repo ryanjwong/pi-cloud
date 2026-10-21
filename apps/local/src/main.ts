@@ -5,6 +5,7 @@ import { sqliteBindings, sqliteCredentials, sqliteSessions, sqliteState } from "
 import { Option, Redacted } from "effect"
 import { join, resolve } from "node:path"
 import { connectors } from "./connectors.ts"
+import { memoryReplica } from "@pi-cloud/runner/node"
 import { load } from "./env.ts"
 import { startLocal } from "./index.ts"
 import { defaultPlugins } from "./plugins.ts"
@@ -27,7 +28,9 @@ const deployment = await startLocal({
   runner: {
     plugins: defaultPlugins(runner),
     modelCredentials: modelCredentialLookup(runner),
-    secrets: sandboxSecretLookup(runner)
+    secrets: sandboxSecretLookup(runner),
+    // Reads from a local copy of each session; commits still go through the control plane.
+    replica: memoryReplica
   }
 })
 

@@ -8,7 +8,7 @@ import {
   StateStore,
   type VersionedCredential
 } from "@pi-cloud/core"
-import { Session, SessionId, StorageFailure } from "@pi-cloud/protocol"
+import { Session, SessionId, type StorageDump, StorageFailure } from "@pi-cloud/protocol"
 import { Effect, Layer, Option, Schema } from "effect"
 import { mkdirSync } from "node:fs"
 import { rm } from "node:fs/promises"
@@ -24,11 +24,45 @@ const fileName = (sessionId: string) => `${sessionId.replace(/[^a-zA-Z0-9_-]/g, 
 export const sqliteState = (options: { readonly directory: string }): Layer.Layer<StateStore> =>
   StateStore.fromOpener({
     open: (sessionId) => openNodeSqliteStorage(join(options.directory, fileName(sessionId))),
+    dump: async (sessionId) => dumpSqlite(join(options.directory, fileName(sessionId))),
     remove: async (sessionId) => {
       const base = join(options.directory, fileName(sessionId))
       await Promise.all(["", "-wal", "-shm"].map((suffix) => rm(base + suffix, { force: true })))
     }
   })
+
+/**
+ * Every table of a SQLite file, read in one transaction (a consistent snapshot next to the writer, thanks to WAL):
+ * the schema statements, then the rows.
+ */
+export const dumpSqlite = (file: string): StorageDump => {
+  const db = new DatabaseSync(file, { readOnly: true })
+  try {
+    db.exec("BEGIN")
+    const objects = db.prepare(
+      "SELECT type, name, sql FROM sqlite_master WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' ORDER BY type = 'table' DESC, rowid"
+    ).all() as Array<{ type: string; name: string; sql: string }>
+    const tables = objects.filter((object) => object.type === "table").map(({ name }) => {
+      const rows = db.prepare(`SELECT * FROM "${name.replaceAll('"', '""')}"`).all() as Array<Record<string, unknown>>
+      const columns = rows.length === 0 ? [] : Object.keys(rows[0]!)
+      return {
+        name,
+        columns,
+        rows: rows.map((row) =>
+          columns.map((column) => {
+            const value = row[column]
+            if (value instanceof Uint8Array) return { base64: Buffer.from(value).toString("base64") }
+            return typeof value === "bigint" ? Number(value) : (value as null | number | string)
+          })
+        )
+      }
+    })
+    db.exec("COMMIT")
+    return { schema: objects.map((object) => object.sql), tables }
+  } finally {
+    db.close()
+  }
+}
 
 const encodeSession = Schema.encodeSync(Session)
 const decodeSession = Schema.decodeUnknownSync(Session)
