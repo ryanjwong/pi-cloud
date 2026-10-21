@@ -38,7 +38,7 @@ export const loginProviders = () =>
     .filter((provider) => provider.auth.oauth !== undefined)
     .map((provider) => ({ id: provider.id, name: provider.auth.oauth!.loginLabel ?? provider.auth.oauth!.name }))
 
-const openBrowser = (url: string) => {
+export const openBrowser = (url: string) => {
   const command = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open"
   try {
     spawn(command, [url], { stdio: "ignore", detached: true }).on("error", () => {}).unref()

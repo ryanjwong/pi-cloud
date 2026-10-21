@@ -8,6 +8,7 @@ import { Deferred, Effect, Stream } from "effect"
 import { execFileSync } from "node:child_process"
 import { createInterface } from "node:readline/promises"
 import { parseArgs } from "node:util"
+import { githubAppCommand } from "./github-app.ts"
 import { importFromCodex, importFromPi, listCredentials, login, loginProviders, logout } from "./login.ts"
 import { makeRenderer } from "./render.ts"
 
@@ -22,7 +23,12 @@ const { values: flags, positionals } = parseArgs({
     resume: { type: "string", short: "r" },
     "from-pi": { type: "boolean" },
     "from-codex": { type: "boolean" },
-    url: { type: "string" }
+    url: { type: "string" },
+    org: { type: "string" },
+    name: { type: "string" },
+    secrets: { type: "string" },
+    print: { type: "boolean" },
+    manifest: { type: "boolean" }
   }
 })
 const [command = "tui", ...rest] = positionals
@@ -35,6 +41,9 @@ const usage = `pi-cloud [-c | -r <id>] [--model provider/model]
 pi-cloud login [provider] [--from-pi | --from-codex]
       sign in to a model provider (ChatGPT/Codex: openai-codex, Claude Pro/Max: anthropic, ...) in your browser and
       store the login on the server, for every session; --from-pi / --from-codex import an existing Pi or Codex login
+pi-cloud github-app --url <public control plane URL> [--org acme] [--name pi-cloud] [--secrets secrets.yaml]
+      create pi-cloud's GitHub App from its manifest in your browser (one click on GitHub), and store its ID,
+      private key and webhook secret in the SOPS file; --print prints them instead, --manifest prints the manifest
 pi-cloud logout <provider>                    remove a stored credential
 pi-cloud auth                                 list stored credentials
 
@@ -282,7 +291,15 @@ const program = Effect.gen(function*() {
   }
 })
 
-program.pipe(
-  Effect.provide(PiCloud.layer(connection)),
-  NodeRuntime.runMain
-)
+if (command === "github-app") {
+  // Talks to GitHub only; the control plane picks the secrets up on its next start.
+  await githubAppCommand(flags, write).catch((error) => {
+    process.exitCode = 1
+    write(`${error instanceof Error ? error.message : String(error)}\n`)
+  })
+} else {
+  program.pipe(
+    Effect.provide(PiCloud.layer(connection)),
+    NodeRuntime.runMain
+  )
+}

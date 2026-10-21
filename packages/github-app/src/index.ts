@@ -1,4 +1,7 @@
 import type { Session } from "@pi-cloud/protocol"
+import { APP_PERMISSIONS } from "./manifest.ts"
+
+export * from "./manifest.ts"
 
 export interface GithubAppOptions {
   /** The App's ID (or client ID), from its settings page. */
@@ -31,7 +34,6 @@ export interface GithubApp {
   installationToken(repositories: ReadonlyArray<string>): Promise<InstallationToken>
 }
 
-const DEFAULT_PERMISSIONS = { contents: "write", issues: "write", pull_requests: "write", metadata: "read" } as const
 /** Tokens are reused until this long before they expire, so whoever holds one has time to use it. */
 const REUSE_MARGIN_MS = 5 * 60_000
 
@@ -78,7 +80,7 @@ export const githubApp = (options: GithubAppOptions): GithubApp => {
   const apiUrl = (options.apiUrl ?? "https://api.github.com").replace(/\/$/, "")
   const request = options.fetch ?? globalThis.fetch
   const now = options.now ?? Date.now
-  const permissions = options.permissions ?? DEFAULT_PERMISSIONS
+  const permissions = options.permissions ?? APP_PERMISSIONS
   const key = importKey(options.privateKey)
   // Fail at startup, not at the first token, when the key is unusable.
   key.catch(() => {})

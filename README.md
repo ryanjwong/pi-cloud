@@ -186,10 +186,20 @@ sandbox: a clone of the repository (provider from `GITHUB_SANDBOX_PROVIDER`). Wi
 the sandbox. The sandbox clones and pushes with the same token, which git gets through a credential helper, never
 in a command, URL or `.git/config`; any output that contains it is masked.
 
-**GitHub App (recommended).** Create a GitHub App with contents, issues and pull requests (write) and metadata
-(read), subscribe it to issues, issue comments, pull requests and reviews, point its webhook at
-`/v1/triggers/github` with `GITHUB_WEBHOOK_SECRET`, and install it on your repositories. Set `GITHUB_APP_ID` and
-`GITHUB_APP_PRIVATE_KEY` on the control plane, and nothing GitHub-related on runners. Then:
+**GitHub App (recommended).** One command creates it from pi-cloud's manifest and stores its credentials:
+
+```sh
+pi-cloud github-app --url https://pi.example.com --org acme   # in the directory with secrets.yaml / .sops.yaml
+```
+
+It opens GitHub with the App filled in (private; contents, issues and pull requests write, metadata read; the
+trigger's events; its webhook at `<url>/v1/triggers/github`), you click Create, and GitHub's redirect back to the
+command hands over the App's ID, private key and webhook secret, which go straight into `secrets.yaml` as
+`GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY` and `GITHUB_WEBHOOK_SECRET` through `sops edit` (never on a command line or
+in a plaintext file). Then install the App on your repositories from the link it prints, and restart the control
+plane. GitHub has no API that creates an App without that click, so this is a command rather than an infrastructure
+resource. `--manifest` prints the manifest, `--print` prints the credentials instead of storing them, and without a
+public `--url` the App has no webhook (tokens only). Runners need nothing GitHub-related. Then:
 
 - a session's `GITHUB_TOKEN` is an installation token for the repositories its spec names (the trigger's thread and
   its sandboxes' GitHub repositories, of one account), with just those permissions, for an hour. A session about no

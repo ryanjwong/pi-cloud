@@ -167,6 +167,9 @@ importers:
       '@pi-cloud/client':
         specifier: workspace:*
         version: link:../client
+      '@pi-cloud/github-app':
+        specifier: workspace:*
+        version: link:../github-app
       '@pi-cloud/tui':
         specifier: workspace:*
         version: link:../tui
