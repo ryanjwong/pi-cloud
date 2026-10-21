@@ -11,6 +11,8 @@ export interface RunnerHostOptions extends SessionRunnerOptions {
    * endpoint is reachable by anyone but the control plane.
    */
   readonly controlPlaneUrl?: string
+  /** How requests reach the control plane: a Durable Object stub's `fetch`, for instance. Default: `fetch`. */
+  readonly fetch?: typeof globalThis.fetch
   /** Called when a session stops being hosted here. */
   readonly onStop?: (sessionId: string, reason: StopReason) => void
 }
@@ -89,7 +91,7 @@ export class RunnerHost {
   private client(url: string): Promise<ControlPlaneClient> {
     let client = this.clients.get(url)
     if (client === undefined) {
-      client = Effect.runPromise(Scope.provide(this.scope)(makeClient({ url, secret: this.options.secret })))
+      client = Effect.runPromise(Scope.provide(this.scope)(makeClient({ url, secret: this.options.secret, fetch: this.options.fetch })))
       this.clients.set(url, client)
     }
     return client

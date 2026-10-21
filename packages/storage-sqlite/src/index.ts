@@ -1,6 +1,5 @@
 import type { SqliteDatabase, SqliteExecutor } from "@earendil-works/pi-durable/storage/sqlite"
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite"
-import { openNodeSqliteDatabase } from "@earendil-works/pi-durable/storage/sqlite/node"
 import {
   type Binding,
   BindingStore,
@@ -12,22 +11,21 @@ import {
 } from "@pi-cloud/core"
 import { Session, SessionId, type StorageDump, StorageFailure } from "@pi-cloud/protocol"
 import { Context, Effect, Layer, Option, Schema } from "effect"
-import { mkdirSync } from "node:fs"
-import { dirname } from "node:path"
 
 /**
- * The control plane's database: one SQLite file and one connection, shared by every store. Pi's Node adapter
- * queues each operation behind any open transaction, so the stores never interleave with a commit, and the file
- * is the whole state of the control plane: copy it, or stream it to object storage with Litestream.
+ * The control plane's database: one SQLite database and one connection, shared by every store, through Pi's async
+ * SQLite adapter (Node's `node:sqlite`, a Durable Object's storage, ...). The adapter queues each operation behind any
+ * open transaction, so the stores never interleave with a commit, and the database is the whole state of the control
+ * plane.
  */
 export class SqliteFile extends Context.Service<SqliteFile, SqliteDatabase>()("@pi-cloud/storage-sqlite/SqliteFile") {
-  static readonly layer = (file: string): Layer.Layer<SqliteFile> =>
+  /** The database `open` returns, with pi-cloud's tables created; closed with the layer. */
+  static readonly layer = (open: () => Promise<SqliteDatabase>): Layer.Layer<SqliteFile> =>
     Layer.effect(
       SqliteFile,
       Effect.acquireRelease(
         Effect.promise(async () => {
-          mkdirSync(dirname(file), { recursive: true })
-          const db = await openNodeSqliteDatabase(file, { busyTimeoutMs: 5_000 })
+          const db = await open()
           await db.exec(SCHEMA)
           return db
         }),
@@ -58,6 +56,12 @@ const borrowed = (db: SqliteDatabase): SqliteDatabase => ({
   close: async () => {}
 })
 
+const toBase64 = (bytes: Uint8Array) => {
+  let binary = ""
+  for (let index = 0; index < bytes.length; index += 0x2000) binary += String.fromCharCode(...bytes.subarray(index, index + 0x2000))
+  return btoa(binary)
+}
+
 const quoteName = (name: string) => `"${name.replaceAll('"', '""')}"`
 const escapeLike = (prefix: string) => prefix.replace(/[\\%_]/g, (c) => `\\${c}`)
 
@@ -82,7 +86,7 @@ export const dumpSqlite = (db: SqliteDatabase, prefix: string): Promise<StorageD
         rows: rows.map((row) =>
           columns.map((column) => {
             const value = row[column]
-            if (value instanceof Uint8Array) return { base64: Buffer.from(value).toString("base64") }
+            if (value instanceof Uint8Array || value instanceof ArrayBuffer) return { base64: toBase64(new Uint8Array(value)) }
             return typeof value === "bigint" ? Number(value) : (value as null | number | string)
           })
         )
@@ -198,12 +202,16 @@ const credentials = (key: string | undefined): Layer.Layer<CredentialStore, neve
   }))
 
 /**
- * Every control-plane store in one SQLite file: the session registry, each session's Pi state (tables prefixed
+ * Every control-plane store in one SQLite database: the session registry, each session's Pi state (tables prefixed
  * per session), bindings, and credentials. The layers share one connection when built together, as
- * `ControlPlane.layer` builds its stores.
+ * `ControlPlane.layer` builds its stores. `sqliteStores` in `./node` opens a file; on Cloudflare, pass a Durable
+ * Object's storage (`new DurableObjectSqliteDatabase(ctx.storage)`).
  */
-export const sqliteStores = (options: { readonly file: string; readonly credentialKey?: string | undefined }) => {
-  const database = SqliteFile.layer(options.file)
+export const sqliteStoresOn = (
+  open: () => Promise<SqliteDatabase>,
+  options: { readonly credentialKey?: string | undefined } = {}
+) => {
+  const database = SqliteFile.layer(open)
   return {
     sessions: sessions.pipe(Layer.provide(database)),
     state: state.pipe(Layer.provide(database)),

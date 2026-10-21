@@ -1,7 +1,7 @@
 // All-in-one: control plane and runner in one process, state in SQLite under DATA_DIR.
 //   sops exec-env secrets.yaml 'node src/main.ts'
 import { ControlPlaneEnv, modelCredentialLookup, RunnerEnv, sandboxSecretLookup } from "@pi-cloud/config"
-import { sqliteStores } from "@pi-cloud/storage-sqlite"
+import { sqliteStores } from "@pi-cloud/storage-sqlite/node"
 import { Option, Redacted } from "effect"
 import { join, resolve } from "node:path"
 import { connectors } from "./connectors.ts"

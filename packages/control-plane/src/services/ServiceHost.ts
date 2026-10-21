@@ -114,6 +114,16 @@ export class ServiceHost extends EffectContext.Service<ServiceHost, {
       )
       if (!authorized) return HttpServerResponse.text("Unauthorized", { status: 401 })
 
+      // Cloudflare: accept one end of a socket pair here and answer 101 with the other.
+      const WebSocketPair = (globalThis as { WebSocketPair?: new () => Record<0 | 1, WebSocketLike & { accept(): void }> })
+        .WebSocketPair
+      if (WebSocketPair !== undefined) {
+        const pair = new WebSocketPair()
+        pair[1].accept()
+        host.accept(webSocketLink(pair[1], { acceptPacked: false }), { principal: { kind: "client" }, kind: "client" })
+        return HttpServerResponse.raw(new Response(null, { status: 101, webSocket: pair[0] } as ResponseInit))
+      }
+
       const socket = yield* Effect.orDie(request.upgrade)
       const writer = yield* socket.writer
       const reader = yield* socket.reader

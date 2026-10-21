@@ -2,12 +2,12 @@
   "name": "@pi-cloud/cloudflare",
   "version": "0.1.0",
   "private": true,
-  "description": "Runner host on Cloudflare: one Durable Object per session, deployed with Alchemy.",
+  "description": "pi-cloud on Cloudflare: the control plane as one Durable Object holding the central SQLite, a Durable Object per session as its runner.",
   "type": "module",
   "scripts": {
-    "deploy": "alchemy deploy",
-    "dev": "alchemy dev",
-    "destroy": "alchemy destroy"
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
+    "test": "vitest run"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "1.3.0",
@@ -15,7 +15,15 @@
     "@pi-cloud/config": "workspace:*",
     "@pi-cloud/protocol": "workspace:*",
     "@pi-cloud/runner": "workspace:*",
-    "alchemy": "2.0.0-beta.81",
-    "effect": "4.0.2"
+    "effect": "4.0.2",
+    "@pi-cloud/control-plane": "workspace:*",
+    "@pi-cloud/core": "workspace:*",
+    "@pi-cloud/storage-sqlite": "workspace:*"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20261009.1",
+    "wrangler": "4.148.0",
+    "@pi-cloud/client": "workspace:*",
+    "vitest": "^5.0.3"
   }
 }

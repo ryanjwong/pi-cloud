@@ -5,8 +5,8 @@ Clients talk to one API. Each session's durable state lives in a store the contr
 itself runs in a **runner** that can live anywhere with outbound HTTP: a Node process, a container, a Cloudflare
 Durable Object, a Modal function. Sandboxes for the agent's tools are pluggable in the same way.
 
-Written in TypeScript with [Effect](https://effect.website) 4; the Cloudflare deployment uses
-[Alchemy](https://alchemy.run).
+Written in TypeScript with [Effect](https://effect.website) 4. It runs on Node (one process, or a control plane
+and runner hosts apart) or entirely on Cloudflare Durable Objects.
 
 For a developer it is Pi: `pi-cloud` in a checkout opens Pi's own TUI (its editor, keybindings, theme, model
 picker, `/agents`, task panel). Everything else runs in the cloud: the agent, its model credentials, and its tools,
@@ -87,7 +87,7 @@ The workspace is a stack of small libraries, each building on the ones below it,
 | | `@pi-cloud/tui` | Pi's own durable TUI as a projection of the service API: it renders objects' state and calls their methods, nothing else. |
 | | `@pi-cloud/cli` | `pi-cloud`: the TUI by default; `new`, `ls`, `chat` (line mode), `send`, `tail`, `rm` for scripts. |
 | Apps | `apps/local` | Control plane and runner in one process (`main.ts`), or split (`control-plane.ts`, `runner.ts`). The end-to-end tests live here. |
-| | `apps/cloudflare` | Runner host on Cloudflare: a Worker routes wake requests to one Durable Object per session. Deployed with Alchemy. |
+| | `apps/cloudflare` | pi-cloud on Cloudflare: the control plane as one Durable Object holding the central SQLite, one Durable Object per session as its runner. Deployed with Wrangler. |
 
 ## Talking to a session
 
@@ -219,8 +219,23 @@ litestream restore -config litestream.yml -if-db-not-exists -if-replica-exists .
 sops exec-env secrets.yaml 'litestream replicate -config litestream.yml -exec "pnpm start"'
 ```
 
-On Cloudflare (`apps/cloudflare`): `sops exec-env secrets.yaml 'pnpm --filter @pi-cloud/cloudflare run deploy'`, then
-point the control plane's `RUNNER_URL` at the printed Worker URL.
+**On Cloudflare** (`apps/cloudflare`), everything runs on Durable Objects, in the same architecture:
+
+- the **control plane is one Durable Object**. Its SQLite is the central store, laid out exactly like
+  `pi-cloud.sqlite` (the registry, bindings, credentials, and every session's Pi tables), with Cloudflare's
+  point-in-time recovery instead of Litestream;
+- **each session's runner is its own Durable Object**. It loads the session's read replica into its own SQLite and
+  commits through the control plane object, fenced by the lease, over the object's stub rather than the internet;
+- a Worker routes every public request (REST, the service API's WebSocket) to the control plane object; the runner
+  RPC is not reachable from outside.
+
+```sh
+cd apps/cloudflare
+pnpm exec wrangler secret put PI_CLOUD_API_KEYS          # and PI_CLOUD_CREDENTIAL_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY
+pnpm run deploy                                          # wrangler deploy
+pnpm run dev                                             # the same, in a local workerd
+PI_CLOUD_URL=https://pi-cloud.<you>.workers.dev pi-cloud # Pi's TUI against it
+```
 
 ## Credentials
 
@@ -228,7 +243,7 @@ Single tenant, so the model is simple: the operator's secrets live in one SOPS-e
 them through one typed schema, and nothing else ever reads the environment.
 
 **One catalogue.** `@pi-cloud/config` lists every setting and secret (`SETTINGS`) and builds the two schemas from
-it: `ControlPlaneEnv` and `RunnerEnv` (`WorkerRunnerEnv` on Cloudflare). Secrets are `Redacted`, so they never
+it: `ControlPlaneEnv` and `RunnerEnv` (`CloudflareEnv` on Cloudflare). Secrets are `Redacted`, so they never
 print. A missing or malformed value stops startup with one line naming it. `pi-cloud-config` (or
 `node apps/local/src/config.ts`) shows what is set and where from, never the values.
 
@@ -249,7 +264,7 @@ sops secrets.yaml                                # edit later
 | Development | `sops exec-env secrets.yaml '<command>'`: decrypted into that process's environment only. |
 | NixOS | sops-nix decrypts to `/run/secrets/*`; the `nixosModules.default` service receives them with systemd `LoadCredential`, and the config reads `$CREDENTIALS_DIRECTORY`. Nothing in the Nix store or the environment. |
 | Containers / other | Mount files named after each setting and set `PI_CLOUD_SECRETS_DIR`. |
-| Cloudflare | `sops exec-env secrets.yaml 'alchemy deploy'`: the Worker loads `WorkerRunnerEnv` at startup, so Alchemy binds every key in it as an encrypted Worker secret. |
+| Cloudflare | `wrangler secret put <NAME>` for each secret in `CloudflareEnv`; the Worker reads them from its bindings. |
 
 ```nix
 # NixOS, with sops-nix
@@ -424,8 +439,8 @@ renderer; a web UI or Slack bot is another renderer over `followEvents`.
   history, read `/entries`.
 - **Latency.** Every commit is a round trip to the control plane (reads are local with a replica). Keep runners
   close to it, and consider raising Pi's `settings.progress` intervals, which control how often streaming output
-  is committed. A replica needs the SQLite state store and a local SQLite (`memoryReplica` on Node); the Cloudflare
-  runner reads through the control plane for now. Loading the copy costs one transfer of the session per wake.
+  is committed. A replica needs the SQLite state store and a local SQLite (`memoryReplica` on Node, the session
+  object's own SQLite on Cloudflare). Loading the copy costs one transfer of the session per wake.
 - **The TUI is Pi's durable TUI.** It is the experimental durable mode Pi 1.1.0 shipped (vendored, MIT; Pi 1.3
   removed it from `pi-coding-agent`), with its feature set: prompting, steering, follow-ups, abort, the model picker,
   thinking levels, `/compact`, `/agents`, `/tasks`. Not there: a session picker, forks and tree navigation,
@@ -433,12 +448,16 @@ renderer; a web UI or Slack bot is another renderer over `followEvents`.
   `@earendil-works/pi-coding-agent` (1.3.0) by file path, so upgrading Pi needs a check.
 - **Pi's agent needs a Node runner.** `@pi-cloud/pi` builds Pi's system prompt from the runner's `~/.pi/agent` and
   the sandbox: `AGENTS.md`/`CLAUDE.md` files are read through the sandbox, wherever it runs, but project skills
-  (`.pi/skills`) load only from sandboxes on the runner's filesystem. The Cloudflare runner has Pi Durable's tools
-  but no Pi prompt and no sandbox yet.
+  (`.pi/skills`) load only from sandboxes on the runner's filesystem.
+- **On Cloudflare, so far:** runners have the model providers (Anthropic, OpenAI, ChatGPT/Codex logins) but no Pi
+  prompt, coding tools or sandbox; GitHub and Slack connectors are not wired; the WebSocket session channel
+  (`/v1/sessions/:id/channel`) is Node-only, while the service API and REST work. Leases, event buffers and the
+  service API's state live in the control plane object's memory: they last while anything talks to it (runners
+  renew every few seconds), and clients reconnect if it is evicted. One object is one thread and 10 GB.
+  Tested in a local workerd (`apps/cloudflare/test`), not yet on a Cloudflare account.
 - **Remote sandboxes poll for file changes** (`watch` compares snapshots every second, `mode: "polling"`), and file
   names containing newlines are not listed correctly. `shellEnv` passes Pi Durable's environment conformance suite
   over a local shell; the Daytona provider is tested against a stand-in for its API, not the live service.
 - **Not yet built:** a Postgres state store, a shared lease manager, E2B, Modal and Cloudflare sandbox providers,
-  hosting the control plane itself on Cloudflare, and real authentication (today: static API keys and a shared
-  runner secret). The Cloudflare app typechecks but has not been deployed. The local sandbox provider has no
+  and real authentication (today: static API keys and a shared runner secret). The local sandbox provider has no
   isolation; use `docker` or `daytona` for code you do not trust. Pi Durable is experimental, so pin versions.

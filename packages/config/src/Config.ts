@@ -42,15 +42,15 @@ export const ModelCredentials = Config.all(
 ) as Config.Config<Record<string, Option.Option<Redacted.Redacted<string>>>>
 
 /**
- * Settings of a runner hosted on Cloudflare. The Worker loads this at startup, which makes Alchemy bind every key
- * in it to the Worker (secrets as encrypted Worker secrets) from the deploy environment.
+ * Settings of the Cloudflare deployment, one Worker hosting the control plane and the runners, read from its
+ * bindings (`wrangler secret put` for the secrets).
  */
-export const WorkerRunnerEnv = Config.all({
-  controlPlaneUrl: Config.String("CONTROL_PLANE_URL"),
-  runnerSecret: Config.Redacted("PI_CLOUD_RUNNER_SECRET"),
+export const CloudflareEnv = Config.all({
+  apiKeys: secretList("PI_CLOUD_API_KEYS"),
+  credentialKey: Config.option(Config.Redacted("PI_CLOUD_CREDENTIAL_KEY")),
   modelCredentials: ModelCredentials
 })
-export type WorkerRunnerEnv = Config.Success<typeof WorkerRunnerEnv>
+export type CloudflareEnv = Config.Success<typeof CloudflareEnv>
 
 /** Settings of a runner host. */
 export const RunnerEnv = Config.all({

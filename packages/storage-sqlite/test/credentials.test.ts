@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
-import { sqliteStores } from "../src/index.ts"
+import { sqliteStores } from "../src/node.ts"
 
 describe("sqliteCredentials", () => {
   it("seals credentials at rest and writes compare-and-swap", async () => {

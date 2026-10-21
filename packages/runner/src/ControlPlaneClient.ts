@@ -10,6 +10,8 @@ export interface ControlPlaneConnection {
   readonly url: string
   /** Shared runner secret, sent as a bearer token. */
   readonly secret?: string | undefined
+  /** How requests reach the control plane: a Durable Object stub's `fetch`, for instance. Default: `fetch`. */
+  readonly fetch?: typeof globalThis.fetch | undefined
 }
 
 /** The runner RPC client over plain HTTP: fetch is the only thing the substrate has to provide. */
@@ -22,6 +24,11 @@ export const makeClient = (connection: ControlPlaneConnection) =>
           connection.secret === undefined
             ? client
             : HttpClient.mapRequest(client, HttpClientRequest.bearerToken(connection.secret!))
-      }).pipe(Layer.provide([RpcSerialization.layerNdjson, FetchHttpClient.layer]))
+      }).pipe(Layer.provide([
+        RpcSerialization.layerNdjson,
+        FetchHttpClient.layer.pipe(
+          Layer.provide(connection.fetch === undefined ? Layer.empty : Layer.succeed(FetchHttpClient.Fetch, connection.fetch))
+        )
+      ]))
     )
   )

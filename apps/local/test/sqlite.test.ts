@@ -1,7 +1,7 @@
 import { fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai/providers/faux"
 import { entryText, PiCloud } from "@pi-cloud/client"
 import { modelProviders } from "@pi-cloud/runner"
-import { sqliteStores } from "@pi-cloud/storage-sqlite"
+import { sqliteStores } from "@pi-cloud/storage-sqlite/node"
 import { Effect } from "effect"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
