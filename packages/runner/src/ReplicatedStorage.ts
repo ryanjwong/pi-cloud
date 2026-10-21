@@ -84,7 +84,8 @@ export class ReplicatedStorage implements Storage {
     const db = await database()
     try {
       await load(db, dump)
-      return new ReplicatedStorage(remote, await SqliteStorage.open(db), onDrop)
+      const local = await SqliteStorage.open(db, dump.prefix === undefined ? {} : { prefix: dump.prefix })
+      return new ReplicatedStorage(remote, local, onDrop)
     } catch (error) {
       await db.close().catch(() => {})
       onDrop(`the replica could not be loaded: ${error instanceof Error ? error.message : String(error)}`)

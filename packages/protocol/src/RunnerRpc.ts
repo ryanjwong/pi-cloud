@@ -42,6 +42,8 @@ export const DumpValue = Schema.Union([Schema.Null, Schema.Number, Schema.String
  * loads it into a local database and reads from there (see `ReplicatedStorage`).
  */
 export const StorageDump = Schema.Struct({
+  /** The prefix of the session's tables (Pi's `SqliteStorage` option), when they share a database. */
+  prefix: Schema.optional(Schema.String),
   schema: Schema.Array(Schema.String),
   tables: Schema.Array(Schema.Struct({
     name: Schema.String,

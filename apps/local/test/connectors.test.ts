@@ -3,7 +3,7 @@ import { entryText, PiCloud } from "@pi-cloud/client"
 import { modelProviders } from "@pi-cloud/runner"
 import { slackSource } from "@pi-cloud/source-slack"
 import { sources } from "@pi-cloud/sources"
-import { sqliteBindings, sqliteSessions, sqliteState } from "@pi-cloud/storage-sqlite"
+import { sqliteStores } from "@pi-cloud/storage-sqlite"
 import { hmacSha256Hex, triggers, webhookTrigger } from "@pi-cloud/triggers"
 import { Effect } from "effect"
 import { mkdtemp, rm } from "node:fs/promises"
@@ -166,9 +166,7 @@ describe("Slack source", () => {
     const start = () =>
       startLocal({
         port: base,
-        sessions: sqliteSessions({ file: join(dir!, "sessions.sqlite") }),
-        state: sqliteState({ directory: join(dir!, "state") }),
-        bindings: sqliteBindings({ file: join(dir!, "sessions.sqlite") }),
+        ...sqliteStores({ file: join(dir!, "pi-cloud.sqlite") }),
         runner: { plugins: [modelProviders(faux.provider)], idleMs: 300 },
         extensions: [sources([slackSource({ signingSecret: "s", botToken: "t", apiUrl: `http://127.0.0.1:${base + 1}/api`, spec: { model } })])]
       })

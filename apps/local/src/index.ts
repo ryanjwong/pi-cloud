@@ -36,7 +36,8 @@ export const startLocal = async (options: LocalOptions): Promise<LocalDeployment
   )
   const fiber = Effect.runFork(Layer.launch(server))
   for (let attempt = 0; ; attempt++) {
-    const ready = await fetch(`${url}/health`).then((response) => response.ok, () => false)
+    // A request that arrives while the routes are still being built may never be answered: probe with a timeout.
+    const ready = await fetch(`${url}/health`, { signal: AbortSignal.timeout(500) }).then((response) => response.ok, () => false)
     if (ready) break
     if (attempt > 100) throw new Error(`Control plane did not start on ${url}`)
     await new Promise((resolve) => setTimeout(resolve, 50))

@@ -1,14 +1,15 @@
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context"
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai/providers/faux"
 import { type ConversationView, StorageRequestError } from "@earendil-works/pi-durable"
-import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node"
+import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite"
+import { openNodeSqliteDatabase } from "@earendil-works/pi-durable/storage/sqlite/node"
 import { registerStorageConformance } from "@earendil-works/pi-durable/testing"
 import { CodingTools } from "@earendil-works/pi-durable/tools"
 import { connectServices, follow } from "@pi-cloud/client"
 import { piAgent } from "@pi-cloud/pi"
 import { extensions, modelProviders, RemoteStorage, ReplicatedStorage, StorageBackendError } from "@pi-cloud/runner"
 import { memoryReplica } from "@pi-cloud/runner/node"
-import { dumpSqlite, sqliteState } from "@pi-cloud/storage-sqlite"
+import { dumpSqlite, sqliteStores } from "@pi-cloud/storage-sqlite"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -18,8 +19,10 @@ import { type LocalDeployment, startLocal } from "../src/index.ts"
 // Pi Durable's storage suite through a replica: reads from the local copy, commits to SQLite first, as on a runner.
 registerStorageConformance({ describe, expect, it }, "ReplicatedStorage over SQLite", async (use) => {
   const dir = await mkdtemp(join(tmpdir(), "pi-cloud-replica-"))
-  const file = join(dir, "session.sqlite")
-  const backend = await openNodeSqliteStorage(file)
+  // A session's prefixed tables in a shared file, as the control plane keeps them.
+  const db = await openNodeSqliteDatabase(join(dir, "pi-cloud.sqlite"))
+  const prefix = "s_test_"
+  const backend = await SqliteStorage.open(db, { prefix })
   const remote = new RemoteStorage(async (method, args) => {
     const decoded = JSON.parse(JSON.stringify(args)).map((arg: unknown) => arg === null ? undefined : arg)
     try {
@@ -31,7 +34,7 @@ registerStorageConformance({ describe, expect, it }, "ReplicatedStorage over SQL
     }
   })
   const drops: Array<string> = []
-  const storage = await ReplicatedStorage.open(remote, dumpSqlite(file), memoryReplica, (reason) => drops.push(reason))
+  const storage = await ReplicatedStorage.open(remote, await dumpSqlite(db, prefix), memoryReplica, (reason) => drops.push(reason))
   try {
     expect(storage.replicated).toBe(true)
     await use(storage)
@@ -78,7 +81,7 @@ describe("read replicas", () => {
       deployment = await startLocal({
         port: 41_000 + Math.floor(Math.random() * 10_000),
         settings: { leaseTtlMs: 1_500, recoveryIntervalMs: 250, attachTimeoutMs: 5_000 },
-        state: sqliteState({ directory: root }),
+        ...sqliteStores({ file: join(root, "pi-cloud.sqlite") }),
         runner: {
           idleMs: 5_000,
           replica: memoryReplica,

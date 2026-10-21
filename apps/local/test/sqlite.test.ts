@@ -1,7 +1,7 @@
 import { fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai/providers/faux"
 import { entryText, PiCloud } from "@pi-cloud/client"
 import { modelProviders } from "@pi-cloud/runner"
-import { sqliteSessions, sqliteState } from "@pi-cloud/storage-sqlite"
+import { sqliteStores } from "@pi-cloud/storage-sqlite"
 import { Effect } from "effect"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -37,8 +37,7 @@ describe("sqlite stores", () => {
     const start = () =>
       startLocal({
         port,
-        sessions: sqliteSessions({ file: join(dir!, "sessions.sqlite") }),
-        state: sqliteState({ directory: join(dir!, "state") }),
+        ...sqliteStores({ file: join(dir!, "pi-cloud.sqlite") }),
         runner: { plugins: [modelProviders(faux.provider)], idleMs: 300 }
       })
 

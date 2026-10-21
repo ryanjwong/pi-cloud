@@ -4,7 +4,7 @@ import { NodeRuntime } from "@effect/platform-node"
 import { ControlPlaneEnv } from "@pi-cloud/config"
 import { serve } from "@pi-cloud/control-plane/node"
 import { RunnerDispatcher } from "@pi-cloud/core"
-import { sqliteBindings, sqliteCredentials, sqliteSessions, sqliteState } from "@pi-cloud/storage-sqlite"
+import { sqliteStores } from "@pi-cloud/storage-sqlite"
 import { Layer, Option, Redacted } from "effect"
 import { FetchHttpClient } from "effect/http"
 import { join, resolve } from "node:path"
@@ -22,10 +22,8 @@ Layer.launch(serve({
   settings: { publicUrl: Option.getOrElse(env.publicUrl, () => `http://${env.host}:${env.port}`) },
   apiKeys: env.apiKeys.map((key) => Redacted.value(key)),
   runnerSecret,
-  sessions: sqliteSessions({ file: join(dataDir, "sessions.sqlite") }),
-  state: sqliteState({ directory: join(dataDir, "state") }),
-  bindings: sqliteBindings({ file: join(dataDir, "sessions.sqlite") }),
-  credentials: sqliteCredentials({ file: join(dataDir, "credentials.sqlite"), key: Option.getOrUndefined(Option.map(env.credentialKey, Redacted.value)) }),
+  // Everything the control plane keeps, in one file: back it up by copying it, or stream it with Litestream.
+  ...sqliteStores({ file: join(dataDir, "pi-cloud.sqlite"), credentialKey: Option.getOrUndefined(Option.map(env.credentialKey, Redacted.value)) }),
   extensions: connectors(env),
   dispatcher: RunnerDispatcher.http({ url: runnerUrl, secret: runnerSecret }).pipe(Layer.provide(FetchHttpClient.layer))
 })).pipe(NodeRuntime.runMain)

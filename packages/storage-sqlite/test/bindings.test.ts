@@ -4,7 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
-import { sqliteBindings, sqliteSessions } from "../src/index.ts"
+import { sqliteStores } from "../src/index.ts"
 
 let dir: string | undefined
 afterEach(async () => {
@@ -16,7 +16,8 @@ describe("sqliteBindings", () => {
     dir = await mkdtemp(join(tmpdir(), "pi-cloud-bindings-"))
     const file = join(dir, "sessions.sqlite")
     // Shares its file with the session store, as the local servers do.
-    const layer = Layer.merge(sqliteBindings({ file }), sqliteSessions({ file }))
+    const stores = sqliteStores({ file })
+    const layer = Layer.merge(stores.bindings, stores.sessions)
     const use = <A>(f: (store: BindingStore["Service"]) => Effect.Effect<A, unknown>) =>
       Effect.runPromise(BindingStore.use(f).pipe(Effect.provide(layer)) as Effect.Effect<A>)
 

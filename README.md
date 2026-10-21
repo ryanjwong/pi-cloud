@@ -82,7 +82,7 @@ The workspace is a stack of small libraries, each building on the ones below it,
 | | `@pi-cloud/trigger-github` | GitHub webhooks: issues, comments, pull requests and reviews reach the session of their thread. |
 | | `@pi-cloud/tool-github` | GitHub tools for the agent (`github_comment`, `github_open_pull_request`), run by the runner so the token stays out of sandboxes. |
 | | `@pi-cloud/source-slack` | Slack: each thread is a session; mentions and thread replies go in, answers are posted in the thread. |
-| | `@pi-cloud/storage-sqlite` | SQLite `StateStore` (Pi's own SQLite storage, one file per session), `SessionStore` and `BindingStore`, for Node. |
+| | `@pi-cloud/storage-sqlite` | Every control-plane store in one SQLite file (`sqliteStores`): the session registry, each session's Pi state (Pi's own SQLite storage, tables prefixed per session), bindings, and credentials. For Node. |
 | Clients | `@pi-cloud/client` | Typed REST client derived from the API, `followEvents`, `openChannel` (the WebSocket channel), and `connectServices` (the service API: a Chord client host). |
 | | `@pi-cloud/tui` | Pi's own durable TUI as a projection of the service API: it renders objects' state and calls their methods, nothing else. |
 | | `@pi-cloud/cli` | `pi-cloud`: the TUI by default; `new`, `ls`, `chat` (line mode), `send`, `tail`, `rm` for scripts. |
@@ -156,7 +156,7 @@ sent once even across restarts.
 ```ts
 ControlPlane.layer({
   // ...
-  bindings: sqliteBindings({ file: "data/sessions.sqlite" }),
+  ...sqliteStores({ file: "data/pi-cloud.sqlite" }),   // sessions, state, bindings, credentials
   extensions: [
     triggers([githubTrigger({
       secret,
@@ -209,6 +209,16 @@ sops exec-env secrets.yaml 'node apps/local/src/runner.ts'          # on the run
 sops exec-env secrets.yaml 'node apps/local/src/control-plane.ts'   # on the control plane machine
 ```
 
+**Backups.** Everything the control plane keeps is one file, `DATA_DIR/pi-cloud.sqlite`. Run the server under
+[Litestream](https://litestream.io) and every change is streamed to object storage (S3, Cloudflare R2, GCS, ...)
+within a second; a host that starts without the file restores it from there (see `litestream.example.yml`, or set
+`services.pi-cloud.backup` on NixOS). Runners keep nothing.
+
+```sh
+litestream restore -config litestream.yml -if-db-not-exists -if-replica-exists .data/pi-cloud.sqlite
+sops exec-env secrets.yaml 'litestream replicate -config litestream.yml -exec "pnpm start"'
+```
+
 On Cloudflare (`apps/cloudflare`): `sops exec-env secrets.yaml 'pnpm --filter @pi-cloud/cloudflare run deploy'`, then
 point the control plane's `RUNNER_URL` at the printed Worker URL.
 
@@ -256,6 +266,12 @@ services.pi-cloud = {
   secrets = {
     ANTHROPIC_API_KEY = config.sops.secrets.ANTHROPIC_API_KEY.path;
     GITHUB_TOKEN = config.sops.secrets.GITHUB_TOKEN.path;
+  };
+  backup = {   # Litestream: pi-cloud.sqlite streamed to R2, restored on a fresh host
+    enable = true;
+    url = "s3://my-bucket/pi-cloud";
+    endpoint = "https://<account-id>.r2.cloudflarestorage.com";
+    environmentFile = config.sops.templates.litestream.path;   # LITESTREAM_ACCESS_KEY_ID, LITESTREAM_SECRET_ACCESS_KEY
   };
 };
 ```

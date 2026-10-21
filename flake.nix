@@ -85,7 +85,7 @@
 
       devShells = forAllSystems (pkgs: {
         default = pkgs.mkShell {
-          packages = [ pkgs.nodejs_22 pkgs.pnpm_10 pkgs.nixpkgs-fmt pkgs.sops pkgs.age pkgs.ssh-to-age ];
+          packages = [ pkgs.nodejs_22 pkgs.pnpm_10 pkgs.nixpkgs-fmt pkgs.sops pkgs.age pkgs.ssh-to-age pkgs.litestream ];
           shellHook = ''
             echo "pi-cloud dev shell: node $(node --version), pnpm $(pnpm --version), $(sops --version | head -1)"
             echo "run with secrets: sops exec-env secrets.yaml 'pnpm start'"
@@ -102,6 +102,15 @@
         let
           cfg = config.services.pi-cloud;
           programs = { all-in-one = "pi-cloud-server"; control-plane = "pi-cloud-control"; runner = "pi-cloud-runner"; };
+          # Runners keep no state; only a control plane has a database to back up.
+          backup = cfg.backup.enable && cfg.role != "runner";
+          database = "/var/lib/pi-cloud/pi-cloud.sqlite";
+          litestreamConfig = pkgs.writeText "pi-cloud-litestream.yml" (builtins.toJSON {
+            dbs = [{
+              path = database;
+              replicas = [ ({ url = cfg.backup.url; } // lib.optionalAttrs (cfg.backup.endpoint != null) { endpoint = cfg.backup.endpoint; }) ];
+            }];
+          });
         in
         {
           options.services.pi-cloud = {
@@ -141,6 +150,29 @@
               example = lib.literalExpression ''{ ANTHROPIC_API_KEY = config.sops.secrets.ANTHROPIC_API_KEY.path; }'';
               description = "Secret files by setting name, e.g. paths from sops-nix.";
             };
+            backup = {
+              enable = lib.mkEnableOption ''
+                streaming backups of the control plane's database with Litestream: every change to pi-cloud.sqlite
+                is shipped to object storage within a second, and a host that starts without the file restores it
+              '';
+              url = lib.mkOption {
+                type = lib.types.str;
+                example = "s3://my-bucket/pi-cloud";
+                description = "Litestream replica URL (S3, R2, GCS, Azure, SFTP, ...).";
+              };
+              endpoint = lib.mkOption {
+                type = lib.types.nullOr lib.types.str;
+                default = null;
+                example = "https://<account-id>.r2.cloudflarestorage.com";
+                description = "S3-compatible endpoint, e.g. Cloudflare R2.";
+              };
+              environmentFile = lib.mkOption {
+                type = lib.types.nullOr lib.types.path;
+                default = null;
+                example = lib.literalExpression "config.sops.templates.litestream.path";
+                description = "Environment file with LITESTREAM_ACCESS_KEY_ID and LITESTREAM_SECRET_ACCESS_KEY.";
+              };
+            };
           };
 
           config = lib.mkIf cfg.enable {
@@ -156,7 +188,13 @@
                 // cfg.settings;
               path = cfg.sandboxPackages;
               serviceConfig = {
-                ExecStart = "${cfg.package}/bin/${programs.${cfg.role}}";
+                ExecStart =
+                  if backup then "${pkgs.litestream}/bin/litestream replicate -config ${litestreamConfig} -exec ${cfg.package}/bin/${programs.${cfg.role}}"
+                  else "${cfg.package}/bin/${programs.${cfg.role}}";
+                # A host that starts without the database restores it from the replica first.
+                ExecStartPre = lib.optional backup
+                  "${pkgs.litestream}/bin/litestream restore -config ${litestreamConfig} -if-db-not-exists -if-replica-exists ${database}";
+                EnvironmentFile = lib.optional (backup && cfg.backup.environmentFile != null) cfg.backup.environmentFile;
                 DynamicUser = true;
                 StateDirectory = "pi-cloud";
                 LoadCredential = lib.mapAttrsToList (name: path: "${name}:${path}") cfg.secrets;
