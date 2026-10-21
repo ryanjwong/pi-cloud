@@ -25,10 +25,15 @@ import type {
   TaskQuery,
   TaskRecord
 } from "@earendil-works/pi-durable"
+import { StorageRequestError } from "@earendil-works/pi-durable"
 import type { StorageMethod } from "@pi-cloud/protocol"
 
-/** Sends one storage call to the control plane and resolves with its JSON result. */
-export type StorageTransport = (method: StorageMethod, args: ReadonlyArray<unknown>) => Promise<unknown>
+/**
+ * Sends one storage call to the control plane and resolves with its JSON result. It throws `LeaseLostError`,
+ * Pi Durable's `StorageRequestError`, or `StorageBackendError` for the control plane's answers; anything else it
+ * throws is a transport failure, which is retried.
+ */
+export type StorageTransport = (method: StorageMethod, args: ReadonlyArray<unknown>, requestId?: string) => Promise<unknown>
 
 /** Thrown when the control plane refuses a call because this runner no longer holds the session's lease. */
 export class LeaseLostError extends Error {
@@ -39,6 +44,17 @@ export class LeaseLostError extends Error {
     this.name = "LeaseLostError"
   }
 }
+
+/** The control plane's storage backend failed the call. Not retried: Pi Durable fails the session. */
+export class StorageBackendError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = "StorageBackendError"
+  }
+}
+
+/** How long a call is retried through transport failures before it fails, and with it the session. */
+const RETRY_FOR_MS = 30_000
 
 /** JSON has no `undefined`; the control plane turns `null` arguments back into `undefined`. */
 const encodeArgs = (args: ReadonlyArray<unknown>) =>
@@ -76,10 +92,28 @@ export class RemoteStorage implements Storage {
     this.transport = transport
   }
 
-  private call<T>(method: StorageMethod, ...args: Array<unknown>): Promise<T> {
+  /**
+   * One call, retried through transport failures (a dropped connection, a restarting control plane), as Pi Durable
+   * requires of a Storage: any error a Storage throws fails the session. A commit is retried with the same request
+   * id, so it applies once.
+   */
+  private async call<T>(method: StorageMethod, ...args: Array<unknown>): Promise<T> {
     if (this.abandoned) return new Promise<T>(() => {})
-    if (this.closed) return Promise.reject(new Error("RemoteStorage is closed"))
-    return this.transport(method, encodeArgs(args)) as Promise<T>
+    if (this.closed) throw new Error("RemoteStorage is closed")
+    const encoded = encodeArgs(args)
+    const requestId = method === "commit" ? crypto.randomUUID() : undefined
+    const deadline = Date.now() + RETRY_FOR_MS
+    for (let delay = 100;; delay = Math.min(delay * 2, 2_000)) {
+      try {
+        return await this.transport(method, encoded, requestId) as T
+      } catch (error) {
+        const final = error instanceof LeaseLostError || error instanceof StorageRequestError ||
+          error instanceof StorageBackendError || this.closed || Date.now() + delay > deadline
+        if (final) throw error
+        if (this.abandoned) return new Promise<T>(() => {})
+        await new Promise((resolve) => setTimeout(resolve, delay))
+      }
+    }
   }
 
   async commit(writes: ReadonlyArray<StorageWrite>, _context: Context): Promise<Seq> {

@@ -1,18 +1,5 @@
-import {
-  type Context,
-  createFacetHost,
-  createRemoteServiceEndpoint,
-  defineFacet,
-  type Facet,
-  type FacetHost,
-  type JsonValue,
-  parseServiceCall,
-  type RemoteServiceEndpoint,
-  RemoteServiceError,
-  replicatedState,
-  type ServiceProviderUpdate
-} from "@earendil-works/chord"
-import { BACKGROUND_CONTEXT, withCancel } from "@earendil-works/chord/context"
+import { createHost, type Ctx, type Facet, type Frame, invalid, type ReplicatedState, replicatedState } from "@earendil-works/chord"
+import { BACKGROUND_CONTEXT, type Context, withAbortSignal } from "@earendil-works/chord/context"
 import {
   clampThinkingLevel,
   getSupportedThinkingLevels,
@@ -36,42 +23,30 @@ import {
   type UserInput
 } from "@earendil-works/pi-durable"
 import {
-  type AgentController as AgentControllerService,
-  type AgentOperationError,
-  type AgentPromptRequest,
-  type AgentPromptResult,
-  type AgentQueueResponse,
-  AgentController,
-  type Conversation as ConversationService,
-  Conversations,
   type ConversationSummary,
-  type ModelRef,
-  Models,
-  type Models as ModelsService,
-  type ModelsState,
+  ConversationObject,
+  FrameLink,
+  type ModelCatalog,
+  type ModelConfiguration,
   type Notice,
-  Notices,
-  type NoticesState,
-  Tasks,
-  Transcript
+  type OperationResponse,
+  type Principal,
+  principalKey,
+  type PromptRequest,
+  SessionObject,
+  sessionHost
 } from "@pi-cloud/protocol"
+import { Type } from "typebox"
 
 /**
- * A session's Chord services (see `Services.ts` in `@pi-cloud/protocol`), served by the runner that hosts it.
- * Presentations reach them through the control plane, which relays each attachment's calls here.
+ * A session's Chord host (`session:<id>`, see `Services.ts` in `@pi-cloud/protocol`), on the runner that hosts it.
+ * The control plane connects to it over the runner's channel and relays presentations' references here.
  */
 export interface SessionServices {
-  /** Run one call of an attachment; subscription updates go to `publish`. */
-  invoke(
-    attachmentId: string,
-    callId: string,
-    call: unknown,
-    publish: (subscriptionId: string, update: ServiceProviderUpdate) => void
-  ): Promise<JsonValue | undefined>
-  cancel(callId: string): void
-  release(attachmentId: string): void
-  /** Presentations attached right now; the runner stays while there are any. */
-  readonly attachments: number
+  /** Frames from the control plane on the link numbered `link`; a new number replaces the link. */
+  frames(link: number, frames: ReadonlyArray<unknown>): void
+  /** Objects presentations hold right now; the runner stays while there are any. */
+  readonly attached: number
   notice(level: Notice["level"], message: string): void
   /** Report a prompt that ends without an answer, as Pi does. */
   watchAnswer(submission: Submission): void
@@ -80,7 +55,7 @@ export interface SessionServices {
   dispose(): Promise<void>
 }
 
-const text = (entry: EntryRecord | undefined): string | null => {
+const titleOf = (entry: EntryRecord | undefined): string | null => {
   const message = entry?.model?.[0]
   if (message?.role !== "user") return null
   const content = typeof message.content === "string"
@@ -89,44 +64,52 @@ const text = (entry: EntryRecord | undefined): string | null => {
   return content.replace(/\s+/g, " ").trim()
 }
 
-const toInput = (request: AgentPromptRequest): UserInput => {
-  if (request.images === null || request.images.length === 0) return request.message
+const toInput = (request: PromptRequest): UserInput => {
+  if (request.images === undefined || request.images.length === 0) return request.message
   const content: Array<TextContent | ImageContent> = [{ type: "text", text: request.message }, ...request.images]
   return content
 }
 
-const toAgentError = (error: unknown): AgentOperationError =>
-  error instanceof ConversationBusy
+const refused = (error: unknown): OperationResponse => ({
+  accepted: false,
+  error: error instanceof ConversationBusy
     ? { code: "busy", message: error.message }
     : { code: "operation_failed", message: error instanceof Error ? error.message : String(error) }
+})
 
 const parseSubmissionId = (value: string): SubmissionId | undefined => {
   const id = Number(value)
   return /^[1-9][0-9]*$/.test(value) && Number.isSafeInteger(id) ? (id as SubmissionId) : undefined
 }
 
+const Anything = Type.Unsafe<any>(Type.Unknown())
+
 /**
- * Open the session's services: Pi's `Transcript`, `AgentController` and `Models` for the root conversation, and
- * pi-cloud's keyed `Conversation`s, `Tasks` and `Notices`, plus whatever services `facets` provide. Ported from
- * Pi's session worker (github.com/earendil-works/pi, v1.1.0, packages/coding-agent/src/experimental/services;
- * MIT License, Copyright (c) 2025 Mario Zechner).
+ * Serve the session's objects: `pi-cloud.session` and one `pi-cloud.conversation` per conversation, plus whatever
+ * `facets` serve. Their state mirrors Pi Durable's replicated states, so a presentation gets a snapshot and then
+ * deltas of exactly what Pi commits.
  */
 export const openSessionServices = async (options: {
+  readonly sessionId: string
   readonly harness: Harness
   readonly root: PiConversation
   readonly models: ModelRegistry
-  readonly facets: ReadonlyArray<Facet>
+  readonly facets: ReadonlyArray<Facet<Principal>>
+  /** Send frames to the control plane, in order. Rejects once the lease is gone. */
+  readonly transmit: (link: number, frames: ReadonlyArray<Frame>) => Promise<void>
   readonly context: Context
 }): Promise<SessionServices> => {
-  const { harness, root, models, context } = options
+  const { sessionId, harness, root, models, context } = options
+  /** Pi Durable takes a `Context`; Chord calls carry a signal. */
+  const durable = (ctx: Ctx<Principal>) => withAbortSignal(ctx.signal, context)
 
   // Notices: what went wrong without an error to return.
-  const notices = replicatedState<NoticesState>({ notices: [] })
+  const notices = replicatedState<{ list: Array<Notice> }>({ list: [] })
   let nextNotice = 1
   const notice = (level: Notice["level"], message: string) =>
     notices.change(BACKGROUND_CONTEXT, (draft) => {
-      draft.notices.push({ id: nextNotice++, level, message })
-      if (draft.notices.length > 20) draft.notices.splice(0, draft.notices.length - 20)
+      draft.list.push({ id: nextNotice++, level, message })
+      if (draft.list.length > 20) draft.list.splice(0, draft.list.length - 20)
     })
   const watchAnswer = (submission: Submission) =>
     void submission.wait(context).then((settled) => {
@@ -156,276 +139,279 @@ export const openSessionServices = async (options: {
       else notice("error", `Compaction ${outcome.status}: ${(outcome as { error?: { message?: string } }).error?.message ?? ""}`)
     }, (error) => notice("error", String(error)))
 
-  /** Pi's agent controller over one conversation, reporting unanswered prompts and compaction outcomes. */
-  const controller = (conversation: PiConversation): AgentControllerService => {
-    const queue = async (whenBusy: "steer" | "followUp", request: AgentPromptRequest, context: Context): Promise<AgentQueueResponse> => {
-      try {
-        const submission = await conversation.submit({ type: "input", content: toInput(request), whenBusy }, context)
-        watchAnswer(submission)
-        return { accepted: true, entryId: String(submission.id), error: null }
-      } catch (error) {
-        return { accepted: false, entryId: null, error: toAgentError(error) }
-      }
-    }
-    return {
-      async prompt(request, context) {
-        try {
-          const submission = await conversation.submit({ type: "input", content: toInput(request), whenBusy: "reject" }, context)
-          watchAnswer(submission)
-          return { accepted: true, operationId: String(submission.id), error: null }
-        } catch (error) {
-          return { accepted: false, operationId: null, error: toAgentError(error) }
-        }
-      },
-      steer: (request, context) => queue("steer", request, context),
-      followUp: (request, context) => queue("followUp", request, context),
-      async cancelQueued(entryId, context) {
-        const id = parseSubmissionId(entryId)
-        if (id === undefined) return { outcome: "not_found" }
-        const result = await harness.abortSubmission(id, context, conversation.id)
-        return { outcome: result === "aborted" ? "cancelled" : result === "not_found" ? "not_found" : "already_consumed" }
-      },
-      abort: (context) => conversation.abort(context),
-      async compact(request, context) {
-        try {
-          const id = await conversation.compact(request.customInstructions ?? undefined, context)
-          watchCompaction(id)
-          return { accepted: true, operationId: String(id), error: null }
-        } catch (error) {
-          return { accepted: false, operationId: null, error: toAgentError(error) }
-        }
-      },
-      async waitForPrompt(operationId, context): Promise<AgentPromptResult> {
-        const id = parseSubmissionId(operationId)
-        const submission = id === undefined ? undefined : await harness.submission(id, context)
-        if (submission === undefined) throw new RemoteServiceError("service_invalid_value", `Unknown prompt: ${operationId}`)
-        const settled = await submission.wait(context)
-        if (settled.status === "unanswered") return { status: "unanswered", text: null, reason: settled.reason }
-        const answer = settled.type === "input" ? settled.answer : undefined
-        const message = answer === undefined ? undefined : (await harness.commit((tx) => tx.entry(answer), context))?.model?.[0]
-        const text = message?.role === "assistant"
-          ? message.content.flatMap((content) => content.type === "text" ? [content.text] : []).join("")
-          : ""
-        return { status: "done", text, reason: null }
-      }
-    }
-  }
-
-  /** Model selection for one conversation, from its replicated agent document. */
-  const modelControls = async (conversation: PiConversation) => {
-    const agent = await harness.documentState(AgentDoc, conversation.id, context)
-    if (agent === undefined) throw new Error(`Conversation ${conversation.id} has no agent document`)
-    const current = (): Readonly<AgentState> | null => agent.value ?? null
-    const selected = () => {
-      const ref = current()?.model
-      return ref === undefined ? undefined : models.getModel(ref.provider, ref.modelId)
-    }
-    const levels = (): Array<ModelThinkingLevel> => {
-      const model = selected()
-      return model === undefined ? ["off"] : getSupportedThinkingLevels(model)
-    }
-    return {
-      agent,
-      levels,
-      cycleThinking: async (context: Context) => {
-        const model = selected()
-        if (model === undefined) return notice("error", "No model selected")
-        if (!model.reasoning) return notice("error", "Current model does not support thinking")
-        const all = levels()
-        const next = all[(all.indexOf(current()?.thinkingLevel ?? "off") + 1) % all.length] ?? "off"
-        await conversation.configure({ thinkingLevel: next }, context)
-      },
-      select: async (ref: ModelRef, context: Context) => {
-        const model = models.getModel(ref.provider, ref.modelId)
-        if (model === undefined) return notice("error", `Unknown model: ${ref.provider}/${ref.modelId}`)
-        const thinkingLevel = clampThinkingLevel(model, current()?.thinkingLevel ?? "off")
-        await conversation.configure({ model: { provider: model.provider, modelId: model.id }, thinkingLevel }, context)
-      },
-      selectThinking: async (level: ModelThinkingLevel, context: Context) => {
-        if (!levels().includes(level)) return notice("error", `Thinking level ${level} is unavailable; choose one of: ${levels().join(", ")}`)
-        await conversation.configure({ thinkingLevel: level }, context)
-      }
-    }
-  }
-
-  const catalog = async (revision: number): Promise<ModelsState["catalog"]> => ({
-    revision,
-    availableModels: (await models.getAvailable().catch(() => [])).map((model) => ({
+  // The model catalog, shared by every conversation.
+  let catalogRevision = 0
+  const listModels = async (): Promise<ModelCatalog["availableModels"]> =>
+    (await models.getAvailable().catch(() => [])).map((model) => ({
       provider: model.provider,
       modelId: model.id,
       name: model.name,
       reasoning: model.reasoning,
       contextWindow: model.contextWindow
     }))
-  })
-
-  // Pi's root services.
-  const transcript = await root.viewState(context)
-  const rootModels = await modelControls(root)
-  let catalogRevision = 1
-  const configurationOf = (value: Readonly<AgentState> | null | undefined): ModelsState["configuration"] => ({
-    model: value?.model === undefined ? null : { provider: value.model.provider, modelId: value.model.modelId },
-    thinkingLevel: value?.thinkingLevel ?? "off"
-  })
-  const modelsState = replicatedState<ModelsState>({
-    catalog: await catalog(catalogRevision),
-    configuration: configurationOf(rootModels.agent.value),
+  const catalog = replicatedState<ModelCatalog>({
+    revision: ++catalogRevision,
+    availableModels: await listModels(),
     refresh: { status: "idle" }
   })
-  const modelsService: ModelsService = {
-    state: modelsState,
-    cycleThinking: rootModels.cycleThinking,
-    getThinkingLevels: async () => rootModels.levels(),
-    async refresh(context) {
-      modelsState.change(context, (draft) => void (draft.refresh = { status: "refreshing" }))
-      const result = await models.refresh({ signal: context.abortSignal }).catch(() => undefined)
-      const errors = Object.fromEntries([...(result?.errors ?? [])].map(([id, error]) => [id, error.message]))
-      const next = await catalog(++catalogRevision)
-      modelsState.change(context, (draft) => {
-        draft.catalog = next
-        draft.refresh = Object.keys(errors).length === 0 ? { status: "done" } : { status: "warning", errors }
-      })
-    },
-    select: rootModels.select,
-    selectThinking: rootModels.selectThinking
+
+  // Every conversation, the root first, with its label and title; subagents appear as Pi creates them.
+  const conversations = replicatedState<{ list: Array<ConversationSummary> }>({ list: [] })
+  const listed = new Set<number>()
+  const label = (id: number) => (id === root.id ? "main" : `subagent ${id}`)
+  const list = (id: number, title: string | null) => {
+    if (listed.has(id)) return
+    listed.add(id)
+    conversations.change(BACKGROUND_CONTEXT, (draft) => void draft.list.push({ id, label: label(id), title }))
   }
-
-  const tasks = await harness.taskGraph(context)
-  const disposers: Array<() => void> = [
-    () => transcript.dispose(),
-    () => rootModels.agent.dispose(),
-    () => tasks.dispose(),
-    rootModels.agent.subscribe((value, context) => {
-      const next = configurationOf(value)
-      const now = modelsState.value.configuration
-      if (now.model?.provider === next.model?.provider && now.model?.modelId === next.model?.modelId && now.thinkingLevel === next.thinkingLevel) return
-      modelsState.change(context, (draft) => void (draft.configuration = next))
-    })
-  ]
-
-  // Every conversation, as an instance of the keyed `Conversation` service.
-  const conversationsFacet = defineFacet({
-    id: "@pi-cloud/conversations",
-    setup(env) {
-      const spawner = env.provideMany(Conversations)
-      const spawned = new Map<number, { summary: ReturnType<typeof replicatedState<ConversationSummary>> }>()
-      const label = (id: number) => (id === root.id ? "main" : `subagent ${id}`)
-      const spawn = async (id: number, title: string | null) => {
-        if (spawned.has(id)) return
-        const conversation = id === root.id ? root : await harness.conversation(id as ConversationId, context)
-        if (conversation === undefined || spawned.has(id)) return
-        const summary = replicatedState<ConversationSummary>({ id, label: label(id), title })
-        spawned.set(id, { summary })
-        const state = id === root.id ? transcript : await conversation.viewState(context)
-        const controls = id === root.id ? rootModels : await modelControls(conversation)
-        const service: ConversationService = {
-          ...controller(conversation),
-          summary,
-          state,
-          cycleThinking: controls.cycleThinking,
-          selectModel: controls.select
-        }
-        const withdraw = spawner.spawn(String(id), service)
-        env.own(() => {
-          withdraw()
-          if (id !== root.id) {
-            state.dispose()
-            controls.agent.dispose()
-          }
+  let cursor: Cursor | undefined
+  do {
+    const page = await harness.commit((tx) => tx.scanConversations({}, 256, cursor), context)
+    for (const { id } of page.items) {
+      let first: EntryRecord | undefined
+      const conversation = id === root.id ? undefined : await harness.conversation(id, context)
+      let entries: Cursor | undefined
+      if (conversation !== undefined) {
+        do {
+          const entryPage = await conversation.entries({}, 256, entries, context)
+          first = entryPage.items.findLast((entry) => entry.kind === "pi.user") ?? first
+          entries = entryPage.next
+        } while (entries !== undefined)
+      }
+      list(id, titleOf(first))
+    }
+    cursor = page.next
+  } while (cursor !== undefined)
+  const unsubscribeCommits = harness.subscribeCommits((publication) => {
+    for (const change of publication.changes) {
+      if (change.type === "conversation") list(change.value.id, null)
+      else if (change.type === "entry" && change.value.kind === "pi.user" && change.value.conversationId !== root.id) {
+        const id = change.value.conversationId
+        const title = titleOf(change.value)
+        conversations.change(BACKGROUND_CONTEXT, (draft) => {
+          const entry = draft.list.find((item) => item.id === id)
+          if (entry !== undefined && entry.title === null) entry.title = title
         })
       }
-      env.onActivate(async () => {
-        let cursor: Cursor | undefined
-        do {
-          const page = await harness.commit((tx) => tx.scanConversations({}, 256, cursor), context)
-          for (const { id } of page.items) {
-            const conversation = await harness.conversation(id, context)
-            let first: EntryRecord | undefined
-            if (conversation !== undefined && id !== root.id) {
-              let entries: Cursor | undefined
-              do {
-                const entryPage = await conversation.entries({}, 256, entries, context)
-                first = entryPage.items.findLast((entry) => entry.kind === "pi.user") ?? first
-                entries = entryPage.next
-              } while (entries !== undefined)
-            }
-            await spawn(id, text(first))
-          }
-          cursor = page.next
-        } while (cursor !== undefined)
-        // Subagents appear as their conversations are created; their titles with their first input.
-        env.own(harness.subscribeCommits((publication) => {
-          for (const change of publication.changes) {
-            if (change.type === "conversation") void spawn(change.value.id, null).catch((error) => notice("warning", String(error)))
-            else if (change.type === "entry" && change.value.kind === "pi.user") {
-              const entry = spawned.get(change.value.conversationId)
-              if (entry !== undefined && entry.summary.value.title === null && change.value.conversationId !== root.id) {
-                entry.summary.change(BACKGROUND_CONTEXT, (draft) => void (draft.title = text(change.value)))
-              }
-            }
-          }
-        }))
-      })
+    }
+  })
+  const tasks = await harness.taskGraph(context)
+
+  // Objects presentations hold: while there are any, the runner keeps the session.
+  let attached = 0
+  const presence = {
+    version: 1,
+    open: () => void attached++,
+    close: () => void attached--
+  }
+
+  const host = createHost<Principal>({
+    name: sessionHost(sessionId),
+    self: { kind: "host" },
+    principalKey,
+    onError: (error) => notice("warning", error instanceof Error ? error.message : String(error))
+  })
+
+  /** A cell that follows a replicated state: its first value, then every new one, sent as deltas. */
+  const mirror = <T>(
+    self: Parameters<Parameters<typeof host.serve>[1]>[2],
+    name: string,
+    source: () => ReplicatedState<T> & { readonly value: T },
+    project: (value: T) => unknown = (value) => value
+  ) => {
+    const cell = self.state(name, Anything, { init: () => project(source().value) })
+    self.on(name, source(), (value, ctx) => cell.replace(ctx, project(value as T)))
+    return cell
+  }
+
+  const checkSession = (session: string) => {
+    if (session !== sessionId) throw invalid("input", `This host serves session ${sessionId}, not ${session}`)
+  }
+
+  host.serve(SessionObject, ({ session }, _principal, self) => {
+    checkSession(session)
+    self.resource("presence", presence)
+    return {
+      variant: "default",
+      conversations: mirror(self, "conversations", () => conversations, (value) => value.list),
+      models: mirror(self, "models", () => catalog),
+      tasks: mirror(self, "tasks", () => tasks),
+      notices: mirror(self, "notices", () => notices, (value) => value.list),
+      refreshModels: async (ctx) => {
+        catalog.change(BACKGROUND_CONTEXT, (draft) => void (draft.refresh = { status: "refreshing" }))
+        const result = await models.refresh({ signal: ctx.signal }).catch(() => undefined)
+        const errors = Object.fromEntries([...(result?.errors ?? [])].map(([id, error]) => [id, error.message]))
+        const availableModels = await listModels()
+        catalog.change(BACKGROUND_CONTEXT, (draft) => {
+          draft.revision = ++catalogRevision
+          draft.availableModels = availableModels
+          draft.refresh = Object.keys(errors).length === 0 ? { status: "done" } : { status: "warning", errors }
+        })
+      },
+      abortTask: async ({ taskId }, ctx) => void (await harness.abortTask(taskId as TaskId, durable(ctx)))
     }
   })
 
-  const builtIns = defineFacet({
-    id: "@pi-cloud/session",
-    setup(env) {
-      env.provide(Transcript, { state: transcript })
-      env.provide(AgentController, controller(root))
-      env.provide(Models, modelsService)
-      env.provide(Tasks, {
-        state: tasks,
-        abort: async (taskId, context) => void (await harness.abortTask(taskId as TaskId, context))
-      })
-      env.provide(Notices, { state: notices })
+  host.serve(ConversationObject, ({ session, conversation: id = root.id }, _principal, self) => {
+    checkSession(session)
+    self.resource("presence", presence)
+    const conversation = self.resource("conversation", {
+      version: 1,
+      open: async () => {
+        const found = id === root.id ? root : await harness.conversation(id as ConversationId, context)
+        if (found === undefined) throw invalid("not_found", `Conversation ${id} not found`)
+        return found
+      }
+    })
+    const view = self.resource("view", {
+      version: 1,
+      deps: [conversation],
+      open: () => conversation.value.viewState(context),
+      close: (state) => state.dispose()
+    })
+    const agent = self.resource("agent", {
+      version: 1,
+      deps: [conversation],
+      open: async () => {
+        const state = await harness.documentState(AgentDoc, conversation.value.id, context)
+        if (state === undefined) throw invalid("not_found", `Conversation ${id} has no agent document`)
+        return state
+      },
+      close: (state) => state.dispose()
+    })
+
+    const selected = (state: Readonly<AgentState> | null | undefined) =>
+      state?.model === undefined ? undefined : models.getModel(state.model.provider, state.model.modelId)
+    const levels = (state: Readonly<AgentState> | null | undefined): Array<ModelThinkingLevel> => {
+      const model = selected(state)
+      return model === undefined ? ["off"] : getSupportedThinkingLevels(model)
+    }
+    const configurationOf = (state: Readonly<AgentState> | null | undefined): ModelConfiguration => ({
+      model: state?.model === undefined ? null : { provider: state.model.provider, modelId: state.model.modelId },
+      thinkingLevel: state?.thinkingLevel ?? "off",
+      thinkingLevels: levels(state)
+    })
+    const summaryOf = (list: ReadonlyArray<ConversationSummary>): ConversationSummary =>
+      list.find((item) => item.id === id) ?? { id, label: label(id), title: null }
+
+    const summary = mirror(self, "summary", () => conversations, (value) => summaryOf(value.list))
+    const viewCell = self.state("view", Anything, { init: () => view.value.value })
+    self.on("view", view, (state) => state, (value, ctx) => viewCell.replace(ctx, value))
+    const configuration = self.state("configuration", Anything, { init: () => configurationOf(agent.value.value) })
+    self.on("configuration", agent, (state) => state, (value, ctx) => configuration.replace(ctx, configurationOf(value)))
+
+    const queue = async (whenBusy: "steer" | "followUp" | "reject", request: PromptRequest, ctx: Ctx<Principal>): Promise<OperationResponse> => {
+      try {
+        const submission = await conversation.value.submit({ type: "input", content: toInput(request), whenBusy }, durable(ctx))
+        watchAnswer(submission)
+        return { accepted: true, operationId: String(submission.id) }
+      } catch (error) {
+        return refused(error)
+      }
+    }
+
+    return {
+      variant: "default",
+      summary,
+      view: viewCell,
+      configuration,
+      prompt: (request, ctx) => queue("reject", request, ctx),
+      steer: (request, ctx) => queue("steer", request, ctx),
+      followUp: (request, ctx) => queue("followUp", request, ctx),
+      cancelQueued: async ({ operationId }, ctx) => {
+        const submissionId = parseSubmissionId(operationId)
+        if (submissionId === undefined) return "not_found"
+        const result = await harness.abortSubmission(submissionId, durable(ctx), conversation.value.id)
+        return result === "aborted" ? "cancelled" : result === "not_found" ? "not_found" : "already_consumed"
+      },
+      abort: async (ctx) => void (await conversation.value.abort(durable(ctx))),
+      compact: async ({ instructions }, ctx) => {
+        try {
+          const taskId = await conversation.value.compact(instructions, durable(ctx))
+          watchCompaction(taskId)
+          return { accepted: true, operationId: String(taskId) }
+        } catch (error) {
+          return refused(error)
+        }
+      },
+      waitForPrompt: async ({ operationId }, ctx) => {
+        const submissionId = parseSubmissionId(operationId)
+        const submission = submissionId === undefined ? undefined : await harness.submission(submissionId, durable(ctx))
+        if (submission === undefined) throw invalid("args", `Unknown prompt: ${operationId}`)
+        const settled = await submission.wait(durable(ctx))
+        if (settled.status === "unanswered") return { status: "unanswered", reason: settled.reason }
+        const answer = settled.type === "input" ? settled.answer : undefined
+        const message = answer === undefined ? undefined : (await harness.commit((tx) => tx.entry(answer), durable(ctx)))?.model?.[0]
+        const text = message?.role === "assistant"
+          ? message.content.flatMap((content) => content.type === "text" ? [content.text] : []).join("")
+          : ""
+        return { status: "done", text }
+      },
+      selectModel: async (ref, ctx) => {
+        const model = models.getModel(ref.provider, ref.modelId)
+        if (model === undefined) throw invalid("args", `Unknown model: ${ref.provider}/${ref.modelId}`)
+        const thinkingLevel = clampThinkingLevel(model, agent.value.value?.thinkingLevel ?? "off")
+        await conversation.value.configure({ model: { provider: model.provider, modelId: model.id }, thinkingLevel }, durable(ctx))
+      },
+      selectThinking: async ({ level }, ctx) => {
+        const available = levels(agent.value.value)
+        if (!available.includes(level)) throw invalid("args", `Thinking level ${level} is unavailable; choose one of: ${available.join(", ")}`)
+        await conversation.value.configure({ thinkingLevel: level }, durable(ctx))
+      },
+      cycleThinking: async (ctx) => {
+        const state = agent.value.value
+        const model = selected(state)
+        if (model === undefined) throw invalid("state", "No model selected")
+        if (!model.reasoning) throw invalid("state", "Current model does not support thinking")
+        const all = levels(state)
+        const next = all[(all.indexOf(state?.thinkingLevel ?? "off") + 1) % all.length] ?? "off"
+        await conversation.value.configure({ thinkingLevel: next }, durable(ctx))
+      }
     }
   })
 
-  const host: FacetHost = await createFacetHost({
-    facets: [builtIns, conversationsFacet, ...options.facets],
-    onError: (error) => notice("warning", error.message)
-  })
+  for (const facet of options.facets) await host.install(facet)
 
-  const endpoints = new Map<string, RemoteServiceEndpoint>()
-  const calls = new Map<string, () => void>()
-
-  const saved = configurationOf(rootModels.agent.value).model
-  if (saved === null) notice("warning", "No model configured; select one with /model.")
+  const saved = configurationOfRoot(await harness.documentState(AgentDoc, root.id, context))
+  if (saved === undefined) notice("warning", "No model configured; select one with /model.")
   else if (models.getModel(saved.provider, saved.modelId) === undefined) notice("warning", `Saved model is unavailable: ${saved.provider}/${saved.modelId}`)
 
+  // The link to the control plane. Its frames travel in order; a new link number means the control plane
+  // reconnected, and the previous link is gone.
+  let upstream: { readonly id: number; readonly link: FrameLink } | undefined
+  let sending = Promise.resolve()
+  const connect = (id: number) => {
+    upstream?.link.end("replaced")
+    const link: FrameLink = new FrameLink((frames) => {
+      sending = sending.then(() => options.transmit(id, frames)).catch(() => link.end("lease lost"))
+    })
+    upstream = { id, link }
+    host.connect(link, { principal: { kind: "server" } })
+    return link
+  }
+
   return {
-    async invoke(attachmentId, callId, call, publish) {
-      let endpoint = endpoints.get(attachmentId)
-      if (endpoint === undefined) {
-        endpoint = createRemoteServiceEndpoint(host.services)
-        endpoints.set(attachmentId, endpoint)
-      }
-      const { context: callContext, cancel } = withCancel(context)
-      calls.set(callId, cancel)
-      try {
-        return await endpoint.invoke(parseServiceCall(call), (subscriptionId, update) => publish(subscriptionId, update), callContext)
-      } finally {
-        calls.delete(callId)
-      }
+    frames(id, frames) {
+      const link = upstream?.id === id ? upstream.link : connect(id)
+      link.deliver(frames)
     },
-    cancel: (callId) => calls.get(callId)?.(),
-    release(attachmentId) {
-      endpoints.get(attachmentId)?.dispose()
-      endpoints.delete(attachmentId)
-    },
-    get attachments() {
-      return endpoints.size
+    get attached() {
+      return attached
     },
     notice,
     watchAnswer,
     watchCompaction,
     async dispose() {
-      for (const endpoint of endpoints.values()) endpoint.dispose()
-      endpoints.clear()
-      await host.dispose()
-      for (const dispose of disposers) dispose()
+      upstream?.link.close("session closed")
+      await host.close()
+      unsubscribeCommits()
+      tasks.dispose()
     }
   }
+}
+
+const configurationOfRoot = (state: { readonly value: Readonly<AgentState> | null; dispose(): void } | undefined) => {
+  const model = state?.value?.model
+  state?.dispose()
+  return model
 }

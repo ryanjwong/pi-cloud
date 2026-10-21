@@ -71,10 +71,10 @@ export const githubTools = (options: GithubToolsOptions): RunnerPlugin =>
           const repository = args.repository ?? thread?.repository
           const number = args.number ?? thread?.number
           if (repository === undefined || number === undefined) {
-            return { isError: true, content: text("Which issue or pull request? Pass repository and number.") }
+            return { isError: true, output: text("Which issue or pull request? Pass repository and number.") }
           }
           const posted = await request("POST", `/repos/${repository}/issues/${number}/comments`, { body: args.body })
-          return { content: text(`Commented on ${repository}#${number}: ${posted.html_url ?? ""}`) }
+          return { output: text(`Commented on ${repository}#${number}: ${posted.html_url ?? ""}`) }
         }
       })
 
@@ -90,14 +90,14 @@ export const githubTools = (options: GithubToolsOptions): RunnerPlugin =>
         }),
         async execute(args) {
           const repository = args.repository ?? thread?.repository
-          if (repository === undefined) return { isError: true, content: text("Which repository? Pass repository.") }
+          if (repository === undefined) return { isError: true, output: text("Which repository? Pass repository.") }
           const opened = await request("POST", `/repos/${repository}/pulls`, {
             head: args.head,
             base: args.base,
             title: args.title,
             body: args.body ?? ""
           })
-          return { content: text(`Opened ${opened.html_url ?? `a pull request on ${repository}`}`) }
+          return { output: text(`Opened ${opened.html_url ?? `a pull request on ${repository}`}`) }
         }
       })
 

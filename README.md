@@ -79,8 +79,8 @@ The workspace is a stack of small libraries, each building on the ones below it,
 | | `@pi-cloud/tool-github` | GitHub tools for the agent (`github_comment`, `github_open_pull_request`), run by the runner so the token stays out of sandboxes. |
 | | `@pi-cloud/source-slack` | Slack: each thread is a session; mentions and thread replies go in, answers are posted in the thread. |
 | | `@pi-cloud/storage-sqlite` | SQLite `StateStore` (Pi's own SQLite storage, one file per session), `SessionStore` and `BindingStore`, for Node. |
-| Clients | `@pi-cloud/client` | Typed REST client derived from the API, `followEvents`, `openChannel` (the WebSocket channel), and `connectServices` (the service API, with Pi's client). |
-| | `@pi-cloud/tui` | Pi's own durable TUI as a projection of the service API: it renders service states and calls services, nothing else. |
+| Clients | `@pi-cloud/client` | Typed REST client derived from the API, `followEvents`, `openChannel` (the WebSocket channel), and `connectServices` (the service API: a Chord client host). |
+| | `@pi-cloud/tui` | Pi's own durable TUI as a projection of the service API: it renders objects' state and calls their methods, nothing else. |
 | | `@pi-cloud/cli` | `pi-cloud`: the TUI by default; `new`, `ls`, `chat` (line mode), `send`, `tail`, `rm` for scripts. |
 | Apps | `apps/local` | Control plane and runner in one process (`main.ts`), or split (`control-plane.ts`, `runner.ts`). The end-to-end tests live here. |
 | | `apps/cloudflare` | Runner host on Cloudflare: a Worker routes wake requests to one Durable Object per session. Deployed with Alchemy. |
@@ -104,39 +104,33 @@ plugin). Every surface reads the same Pi agent events (`message_start`, `message
 
 ### Services
 
-Presentations that render a session (TUIs, web UIs, dashboards) use the **service API**: Chord services served
-with Pi's own server protocol, so they connect with Pi's own client. pi-cloud runs Pi's server
-(`@earendil-works/pi-server`) in the control plane, over a WebSocket at `/v1/pi` (`GET /v1/server` gives the
-server id clients verify), and each session's services are served by the runner hosting it, in the cloud. This is
-how Pi's own experimental client/server split works, with pi-cloud's control plane as the server and its runners
-as the session workers.
+Presentations that render a session (TUIs, web UIs, dashboards) use the **service API**: Chord objects
+(`@earendil-works/chord`, the runtime Pi Durable is built on). The control plane is the Chord host `server`, reached
+over a WebSocket at `/v1/pi`. Each session's runner is the host `session:<id>`: the control plane relays references
+to it over the runner's own lease-fenced channel, waking a runner when the first reference arrives. A client never
+names a host; each contract says where its objects live.
 
-| Service | Scope | What it is |
+| Object | Lives on | What it is |
 |---|---|---|
-| `pi.session-directory`, `pi.session-management` | server | Pi's: the sessions, live; create, remove, attach, detach |
-| `pi-cloud.sessions` | server | each session's title, spec and runner state, live; create with a spec |
-| `pi.transcript` | session | Pi's: the root conversation's durable view (entries, streaming message, running tools, queue, agent, usage) |
-| `pi.agent-controller` | session | Pi's: prompt, steer, follow up, cancel queued input, abort, compact, wait for an answer |
-| `pi.models` | session | Pi's: the models the runner can use and the selected model and thinking level; select, cycle |
-| `pi-cloud.conversation` | session, keyed | one instance per conversation (the root and each subagent's): its view and the same controls |
-| `pi-cloud.tasks` | session | Pi Durable's live task graph; abort a task |
-| `pi-cloud.notices` | session | prompts that ended unanswered, compaction outcomes, runner warnings |
+| `pi-cloud.sessions` | `server` | every session with its title, spec and runner state, live; create with a spec, remove |
+| `pi-cloud.session` `{ session }` | `session:<id>` | the session's conversations (the root and each subagent's), the models the runner can use, Pi Durable's live task graph, and notices (prompts that ended unanswered, compaction outcomes, runner warnings); refresh models, abort a task |
+| `pi-cloud.conversation` `{ session, conversation }` | `session:<id>` | one conversation: Pi Durable's view of it (entries, streaming message, running tools, queue, agent, usage) and its model configuration; prompt, steer, follow up, cancel queued input, abort, compact, wait for an answer, select a model or thinking level |
 
-State members are Chord replicated states (a snapshot, then delta operations, with hydration, ordering and gap
-detection handled by Chord); the rest are calls. Runner plugins can serve more session services as Chord facets
-(`PluginParts.facets`). An attached presentation keeps the session's runner alive; if the runner dies, Pi's server
-ends the attachment and `connectServices` attaches again, now served by the new runner, with the same durable
-state.
+State members replicate as a snapshot followed by deltas of exactly what Pi commits; methods are calls, validated
+against the contract's schemas on both ends. Runner plugins can serve more object types on the session's host as
+Chord facets (`PluginParts.facets`). Objects a presentation holds keep the session's runner alive. When the runner
+goes away, its objects end (`gone`); `follow` gets the reference again, which wakes a new runner with the same
+durable state.
 
 ```ts
-const connection = await connectServices({ url, apiKey })          // @pi-cloud/client, on @earendil-works/pi-client
-const session = await connection.attach(sessionId)
-const transcript = session.services.use(Transcript)                  // transcript.state: ReplicatedState<ConversationView>
-const agent = session.services.use(AgentController)
-const { operationId } = await agent.prompt({ message: "hi", images: null }, context)
+const connection = await connectServices({ url, apiKey })                    // @pi-cloud/client
+const main = await follow(() => connection.conversation(sessionId))          // the root conversation, across runners
+main.current.view.subscribe((view) => render(view))                          // Pi Durable's ConversationView
+const response = await main.current.prompt({ message: "hi" })
+if (response.accepted) console.log(await main.current.waitForPrompt({ operationId: response.operationId }))
 ```
 
-Pi's TUI is a projection of exactly these services (`@pi-cloud/tui`): it renders their states and calls them.
+Pi's TUI is a projection of exactly these objects (`@pi-cloud/tui`): it renders their state and calls them.
 REST, server-sent events and the session channel remain for scripts and for clients in other languages.
 
 ## Sources and triggers
@@ -397,6 +391,9 @@ renderer; a web UI or Slack bot is another renderer over `followEvents`.
 - **Crash recovery is Pi's.** After a crash, a cut-off model request is sent again. A cut-off tool call reruns only
   if the tool is `replay: "safe"`; otherwise the model is told it was interrupted. Submissions with a `requestId`
   are exactly-once.
+- **Storage survives blips, not outages.** A runner retries a storage call through transport failures for up to 30 s;
+  a commit carries a request id, so a retried one applies once. Past that, Pi Durable fails the session, and the
+  runner stops without releasing its lease, so the control plane reopens the session on a fresh runner.
 - **One control-plane process.** The default `LeaseManager`, `EventHub`, and runner channels live in memory.
   Running several control-plane instances needs a shared `LeaseManager` whose check is atomic with the state
   store's commit, plus a shared event hub.
@@ -407,17 +404,18 @@ renderer; a web UI or Slack bot is another renderer over `followEvents`.
   history, read `/entries`.
 - **Latency.** Every commit is a round trip to the control plane. Keep runners close to it, and consider raising
   Pi's `settings.progress` intervals, which control how often streaming output is committed.
-- **The TUI is Pi's durable TUI.** It is Pi's experimental durable mode (vendored from Pi 1.1.0, MIT) with its
-  feature set: prompting, steering, follow-ups, abort, the model picker, thinking levels, `/compact`, `/agents`,
-  `/tasks`. Not there yet, in Pi's durable mode either: a session picker, forks and tree navigation, extensions,
-  prompt templates, images, `/login`. It loads Pi internals from the installed `@earendil-works/pi-coding-agent`
-  1.1.0 by file path, so upgrading Pi needs a check.
+- **The TUI is Pi's durable TUI.** It is the experimental durable mode Pi 1.1.0 shipped (vendored, MIT; Pi 1.3
+  removed it from `pi-coding-agent`), with its feature set: prompting, steering, follow-ups, abort, the model picker,
+  thinking levels, `/compact`, `/agents`, `/tasks`. Not there: a session picker, forks and tree navigation,
+  extensions, prompt templates, images, `/login`. It loads Pi's UI components from the installed
+  `@earendil-works/pi-coding-agent` (1.3.0) by file path, so upgrading Pi needs a check.
 - **Pi's agent needs a Node runner.** `@pi-cloud/pi` builds Pi's system prompt from the runner's `~/.pi/agent` and
   the sandbox: `AGENTS.md`/`CLAUDE.md` files are read through the sandbox, wherever it runs, but project skills
   (`.pi/skills`) load only from sandboxes on the runner's filesystem. The Cloudflare runner has Pi Durable's tools
   but no Pi prompt and no sandbox yet.
-- **Remote sandboxes do not report file changes** (`watch` is not supported), and file names containing newlines
-  are not listed correctly. The Daytona provider is tested against a stand-in for its API, not the live service.
+- **Remote sandboxes poll for file changes** (`watch` compares snapshots every second, `mode: "polling"`), and file
+  names containing newlines are not listed correctly. `shellEnv` passes Pi Durable's environment conformance suite
+  over a local shell; the Daytona provider is tested against a stand-in for its API, not the live service.
 - **Not yet built:** a Postgres state store, a shared lease manager, E2B, Modal and Cloudflare sandbox providers,
   hosting the control plane itself on Cloudflare, and real authentication (today: static API keys and a shared
   runner secret). The Cloudflare app typechecks but has not been deployed. The local sandbox provider has no

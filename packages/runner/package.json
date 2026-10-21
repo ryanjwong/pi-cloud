@@ -7,11 +7,12 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@earendil-works/chord": "1.1.0",
-    "@earendil-works/pi-ai": "1.1.0",
-    "@earendil-works/pi-durable": "1.1.0",
+    "@earendil-works/chord": "1.3.0",
+    "@earendil-works/pi-ai": "1.3.0",
+    "@earendil-works/pi-durable": "1.3.0",
     "@pi-cloud/protocol": "workspace:*",
-    "effect": "4.0.2"
+    "effect": "4.0.2",
+    "typebox": "1.3.27"
   },
   "scripts": {
     "test": "vitest run"

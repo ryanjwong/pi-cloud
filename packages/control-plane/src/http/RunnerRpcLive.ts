@@ -4,7 +4,6 @@ import { RunnerRpcs, type StorageMethod } from "@pi-cloud/protocol"
 import { Effect, Option, Semaphore, Stream } from "effect"
 import { ControlPlaneConfig, CredentialStore, EventHub, LeaseManager, StateStore, storageFailure } from "@pi-cloud/core"
 import { Runners } from "../Runners.ts"
-import { PiServer } from "../services/PiServer.ts"
 import { toJson } from "../Sessions.ts"
 import { RunnerAuth } from "./Auth.ts"
 
@@ -23,8 +22,16 @@ export const RunnerRpcLive = RunnerRpcs.toLayer(Effect.gen(function*() {
   const events = yield* EventHub
   const auth = yield* RunnerAuth
   const config = yield* ControlPlaneConfig
-  const piServer = yield* PiServer
   const credentials = yield* CredentialStore
+
+  /** Recent commits per session by request id, so a retried commit returns its first result instead of applying again. */
+  const commits = new Map<string, Map<string, unknown>>()
+  const remember = (sessionId: string, requestId: string, value: unknown) => {
+    let recent = commits.get(sessionId)
+    if (recent === undefined) commits.set(sessionId, recent = new Map())
+    recent.set(requestId, value)
+    if (recent.size > 64) recent.delete(recent.keys().next().value!)
+  }
 
   /** One commit at a time per session, checked against the lease at the moment it applies. */
   const commitLocks = new Map<string, Semaphore.Semaphore>()
@@ -80,12 +87,8 @@ export const RunnerRpcLive = RunnerRpcs.toLayer(Effect.gen(function*() {
         return yield* credentials.put(providerId, credential, version).pipe(Effect.orDie)
       }),
 
-    ServiceUpdate: ({ sessionId, token, attachmentId, subscriptionId, update }, { headers }) =>
-      Effect.gen(function*() {
-        yield* auth.check(headers).pipe(Effect.orDie)
-        yield* leases.validate(sessionId, token)
-        yield* piServer.publish(attachmentId, subscriptionId, update)
-      }),
+    Frames: ({ sessionId, token, link, frames }, { headers }) =>
+      auth.check(headers).pipe(Effect.orDie, Effect.andThen(runners.frames(sessionId, token, link, frames))),
 
     Reply: ({ sessionId, token, commandId, result }, { headers }) =>
       auth.check(headers).pipe(Effect.orDie, Effect.andThen(runners.reply(sessionId, token, commandId, result))),
@@ -98,14 +101,21 @@ export const RunnerRpcLive = RunnerRpcs.toLayer(Effect.gen(function*() {
         if (needsSnapshot) yield* runners.notify(sessionId, { _tag: "Resnapshot" })
       }),
 
-    Storage: ({ sessionId, token, method, args }, { headers }) =>
+    Storage: ({ sessionId, token, method, args, requestId }, { headers }) =>
       Effect.gen(function*() {
         yield* auth.check(headers).pipe(Effect.orDie)
         yield* leases.validate(sessionId, token)
         const storage = yield* states.open(sessionId)
         const run = Effect.tryPromise({ try: () => call(storage, method, args), catch: storageFailure })
         const value = method === "commit"
-          ? yield* commitLock(sessionId).withPermits(1)(Effect.andThen(leases.validate(sessionId, token), run))
+          ? yield* commitLock(sessionId).withPermits(1)(Effect.gen(function*() {
+            yield* leases.validate(sessionId, token)
+            const recent = requestId === undefined ? undefined : commits.get(sessionId)
+            if (recent?.has(requestId!) === true) return recent.get(requestId!)
+            const seq = yield* run
+            if (requestId !== undefined) remember(sessionId, requestId, seq)
+            return seq
+          }))
           : yield* run
         return { value: toJson(value) as never }
       }).pipe(Effect.withSpan("RunnerRpc.Storage", { attributes: { method, leaseTtl: config.leaseTtlMs } }))

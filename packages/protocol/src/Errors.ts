@@ -44,7 +44,11 @@ export class LeaseLost extends Schema.TaggedError<LeaseLost>()("LeaseLost", {
   sessionId: Schema.String
 }) {}
 
-/** The storage backend rejected an operation. */
+/**
+ * The storage backend rejected an operation. `request`: an invalid request with no durable effect (Pi Durable's
+ * `StorageRequestError`), which fails only that read.
+ */
 export class StorageFailure extends Schema.TaggedError<StorageFailure>()("StorageFailure", {
-  message: Schema.String
+  message: Schema.String,
+  request: Schema.optional(Schema.Boolean)
 }) {}

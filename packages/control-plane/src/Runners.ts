@@ -1,5 +1,7 @@
+import type { Link } from "@earendil-works/chord"
 import {
   type CommandResult,
+  FrameLink,
   LeaseHeld,
   LeaseLost,
   type RunnerCommand,
@@ -11,11 +13,8 @@ import {
 import { type Cause, Context, Deferred, Effect, Layer, Option, Queue, Schedule, Stream } from "effect"
 import { ControlPlaneConfig, LeaseManager, RunnerDispatcher, SessionStore } from "@pi-cloud/core"
 
-/** A command on its way to a runner, with the id its reply will carry. */
-interface Envelope {
-  readonly commandId: string
-  readonly command: RunnerCommand
-}
+/** What goes down a runner's stream: commands, with the id their reply will carry, and Chord frames. */
+type Envelope = Exclude<RunnerMessage, { readonly _tag: "LeaseGranted" }>
 
 /**
  * Tracks the runner attached to each session and routes commands to it. When a command arrives for a session with
@@ -36,12 +35,12 @@ export class Runners extends Context.Service<Runners, {
   /** Whether a runner start has been requested and has not attached yet. */
   starting(sessionId: string): Effect.Effect<boolean>
   /**
-   * The session's live runner, waking one if needed: its lease token, and an effect that completes when that runner
-   * stops hosting the session (released, replaced, or its lease abandoned).
+   * A Chord link to the session's host on its live runner, waking one if needed. It closes when that runner stops
+   * hosting the session (released, replaced, or its lease abandoned).
    */
-  host(session: Session): Effect.Effect<{ readonly token: string; readonly ended: Effect.Effect<void> }, RunnerUnavailable>
-  /** Send a command to the runner holding `token`, with no deadline. Fails once that runner is gone. */
-  call(sessionId: string, token: string, command: RunnerCommand): Effect.Effect<CommandResult, RunnerUnavailable>
+  link(session: Session): Effect.Effect<Link, RunnerUnavailable>
+  /** Chord frames from the runner holding `token`, on its link numbered `link`. */
+  frames(sessionId: string, token: string, link: number, frames: ReadonlyArray<unknown>): Effect.Effect<void, LeaseLost>
   /** The runner holding `token` released the session. */
   released(sessionId: string, token: string): Effect.Effect<void>
 }>()("@pi-cloud/control-plane/Runners") {
@@ -65,6 +64,9 @@ export class Runners extends Context.Service<Runners, {
         readonly pending: Map<string, Deferred.Deferred<CommandResult>>
         /** Completes when this lease's runner stops hosting the session. */
         readonly closed: Deferred.Deferred<void>
+        /** The Chord link to the session's host, numbered within the lease. */
+        link: { readonly id: number; readonly link: FrameLink } | undefined
+        links: number
       }
       const channels = new Map<string, Channel>()
       /** Requests waiting for a woken runner to attach. */
@@ -73,6 +75,7 @@ export class Runners extends Context.Service<Runners, {
       const closeChannel = Effect.fnUntraced(function*(sessionId: string, channel: Channel, message: string) {
         if (channels.get(sessionId) === channel) channels.delete(sessionId)
         yield* Deferred.succeed(channel.closed, undefined)
+        channel.link?.link.end(message)
         yield* Queue.end(channel.queue)
         for (const deferred of channel.pending.values()) {
           yield* Deferred.succeed(deferred, { _tag: "Err", tag: "LeaseLost", message })
@@ -106,7 +109,9 @@ export class Runners extends Context.Service<Runners, {
               token: lease.token,
               queue: yield* Queue.unbounded<Envelope, Cause.Done>(),
               pending: new Map(),
-              closed: yield* Deferred.make<void>()
+              closed: yield* Deferred.make<void>(),
+              link: undefined,
+              links: 0
             }
             channels.set(input.sessionId, channel)
           } else {
@@ -129,9 +134,7 @@ export class Runners extends Context.Service<Runners, {
           }
           return Stream.concat(
             Stream.make(granted),
-            Stream.fromQueue(channel.queue).pipe(
-              Stream.map(({ command, commandId }): RunnerMessage => ({ _tag: "Command", commandId, command }))
-            )
+            Stream.fromQueue(channel.queue)
           )
         }))
 
@@ -173,7 +176,7 @@ export class Runners extends Context.Service<Runners, {
         const commandId = crypto.randomUUID()
         const reply = yield* Deferred.make<CommandResult>()
         channel.pending.set(commandId, reply)
-        yield* Queue.offer(channel.queue, { commandId, command })
+        yield* Queue.offer(channel.queue, { _tag: "Command", commandId, command })
         return yield* Deferred.await(reply).pipe(
           Effect.timeoutOrElse({
             duration: config.commandTimeoutMs,
@@ -193,7 +196,7 @@ export class Runners extends Context.Service<Runners, {
 
       const notify = Effect.fnUntraced(function*(sessionId: string, command: RunnerCommand) {
         const channel = yield* liveChannel(sessionId)
-        if (channel !== undefined) yield* Queue.offer(channel.queue, { commandId: crypto.randomUUID(), command })
+        if (channel !== undefined) yield* Queue.offer(channel.queue, { _tag: "Command", commandId: crypto.randomUUID(), command })
       })
 
       // Crash recovery: a lease that expired without a release means its runner died, maybe mid-run. Wake the
@@ -218,20 +221,21 @@ export class Runners extends Context.Service<Runners, {
         reply,
         notify,
         shutdown: (sessionId, reason) => notify(sessionId, { _tag: "Shutdown", reason }),
-        host: Effect.fnUntraced(function*(session) {
+        link: Effect.fnUntraced(function*(session) {
           const channel = (yield* liveChannel(session.id)) ?? (yield* awaitRunner(session.id))
-          return { token: channel.token, ended: Deferred.await(channel.closed) }
+          if (channel.link !== undefined && !channel.link.link.closed) return channel.link.link
+          // A new link for this lease: the runner replaces its end when it sees the new number.
+          const id = ++channel.links
+          const link = new FrameLink((frames) =>
+            Effect.runSync(Queue.offer(channel.queue, { _tag: "Frames", link: id, frames: frames as never }))
+          )
+          channel.link = { id, link }
+          return link
         }),
-        call: Effect.fnUntraced(function*(sessionId, token, command) {
+        frames: Effect.fnUntraced(function*(sessionId, token, link, frames) {
+          yield* leases.validate(sessionId, token)
           const channel = channels.get(sessionId)
-          if (channel === undefined || channel.token !== token) {
-            return yield* new RunnerUnavailable({ sessionId, message: "The session's runner is gone" })
-          }
-          const commandId = crypto.randomUUID()
-          const reply = yield* Deferred.make<CommandResult>()
-          channel.pending.set(commandId, reply)
-          yield* Queue.offer(channel.queue, { commandId, command })
-          return yield* Deferred.await(reply).pipe(Effect.ensuring(Effect.sync(() => channel.pending.delete(commandId))))
+          if (channel?.token === token && channel.link?.id === link) channel.link.link.deliver(frames)
         }),
         released: Effect.fnUntraced(function*(sessionId, token) {
           const channel = channels.get(sessionId)

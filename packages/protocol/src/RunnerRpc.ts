@@ -43,23 +43,6 @@ const leaseFields = {
 /** Ask the runner to start a fresh event stream, beginning with a snapshot. */
 export const ResnapshotCommand = Schema.TaggedStruct("Resnapshot", {})
 
-/**
- * A Chord service call from a presentation attached to the session (see `Services.ts`), relayed by the control
- * plane. Each attachment has its own endpoint on the runner; subscription updates come back over `ServiceUpdate`.
- * The reply is the call's result, or an error whose tag is a Chord error code.
- */
-export const ServiceCallCommand = Schema.TaggedStruct("ServiceCall", {
-  attachmentId: Schema.String,
-  callId: Schema.String,
-  call: Schema.Json
-})
-
-/** The presentation stopped waiting for a call. */
-export const ServiceCancelCommand = Schema.TaggedStruct("ServiceCancel", { callId: Schema.String })
-
-/** The attachment ended: drop its endpoint and subscriptions. */
-export const ServiceReleaseCommand = Schema.TaggedStruct("ServiceRelease", { attachmentId: Schema.String })
-
 /** Ask the runner to release its lease and stop, e.g. because the session was deleted. */
 export const ShutdownCommand = Schema.TaggedStruct("Shutdown", { reason: Schema.String })
 
@@ -67,9 +50,6 @@ export const ShutdownCommand = Schema.TaggedStruct("Shutdown", { reason: Schema.
 export const RunnerCommand = Schema.Union([
   ...SessionCommand.members,
   ResnapshotCommand,
-  ServiceCallCommand,
-  ServiceCancelCommand,
-  ServiceReleaseCommand,
   ShutdownCommand
 ])
 export type RunnerCommand = typeof RunnerCommand.Type
@@ -82,9 +62,16 @@ export const LeaseGranted = Schema.TaggedStruct("LeaseGranted", {
   session: Session
 })
 
+/**
+ * Chord frames from the control plane's host to the session's host (see `Services.ts`). `link` numbers the link
+ * within the lease: a new number means the control plane opened a new link, and the old one is gone.
+ */
+export const ChordFrames = Schema.TaggedStruct("Frames", { link: Schema.Number, frames: Schema.Array(Schema.Json) })
+
 export const RunnerMessage = Schema.Union([
   LeaseGranted,
-  Schema.TaggedStruct("Command", { commandId: Schema.String, command: RunnerCommand })
+  Schema.TaggedStruct("Command", { commandId: Schema.String, command: RunnerCommand }),
+  ChordFrames
 ])
 export type RunnerMessage = typeof RunnerMessage.Type
 
@@ -140,17 +127,18 @@ export class RunnerRpcs extends RpcGroup.make(
     success: Schema.Struct({ stored: Schema.Boolean, version: Schema.Number }),
     error: LeaseLost
   }),
-  /** A Chord subscription update for one attachment's subscription. */
-  Rpc.make("ServiceUpdate", {
-    payload: { ...leaseFields, attachmentId: Schema.String, subscriptionId: Schema.String, update: Schema.Json },
+  /** Chord frames from the session's host to the control plane's, on the link numbered `link`. */
+  Rpc.make("Frames", {
+    payload: { ...leaseFields, link: Schema.Number, frames: Schema.Array(Schema.Json) },
     error: LeaseLost
   }),
   /**
    * One Pi Durable `Storage` call. Arguments and results are JSON; `undefined` arguments travel as `null`.
-   * `commit` is fenced: it fails with `LeaseLost` unless `token` holds the lease at the moment it is applied.
+   * `commit` is fenced: it fails with `LeaseLost` unless `token` holds the lease at the moment it is applied. A
+   * commit carries a `requestId`, so one retried after a lost response applies once.
    */
   Rpc.make("Storage", {
-    payload: { ...leaseFields, method: StorageMethod, args: Schema.Array(Schema.Json) },
+    payload: { ...leaseFields, method: StorageMethod, args: Schema.Array(Schema.Json), requestId: Schema.optional(Schema.String) },
     success: Schema.Struct({ value: Schema.optional(Schema.Json) }),
     error: Schema.Union([LeaseLost, StorageFailure])
   })

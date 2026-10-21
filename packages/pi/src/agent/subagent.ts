@@ -50,7 +50,7 @@ export const Subagent: Extension = defineExtension({
 					throw new Error(`Subagent ${child} failed: ${settled.status}`);
 				}
 				const text = await answerText(api, settled.answer, context);
-				return { content: [{ type: "text", text }], details: { conversationId: child } };
+				return { output: [{ type: "text", text }], details: { conversationId: child } };
 			},
 		}),
 	],

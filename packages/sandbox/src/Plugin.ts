@@ -164,7 +164,7 @@ export const sandboxes = (options: SandboxPluginOptions): RunnerPlugin =>
           const existing = (await api.snapshot(SandboxesDoc, context))?.sandboxes[name]
           if (existing !== undefined) {
             await api.commit(async (tx) => void ((await tx.doc(SandboxesDoc)).active = name), context)
-            return { content: text(`Sandbox "${name}" is active (working directory ${existing.handle.cwd}).`) }
+            return { output: text(`Sandbox "${name}" is active (working directory ${existing.handle.cwd}).`) }
           }
           // The session's own sandbox may already be set up; creating it just activates it.
           if (args.template === plugin.session.spec.sandbox && name === args.template) {
@@ -174,14 +174,14 @@ export const sandboxes = (options: SandboxPluginOptions): RunnerPlugin =>
               doc.sandboxes[name] = stored
               doc.active = name
             }, context)
-            return { content: text(`Sandbox "${name}" is ready and active (working directory ${stored.handle.cwd}).`) }
+            return { output: text(`Sandbox "${name}" is ready and active (working directory ${stored.handle.cwd}).`) }
           }
           const template = templates[args.template]
           if (template === undefined) {
             const known = Object.keys(templates)
             return {
               isError: true,
-              content: text(`Unknown template "${args.template}". Available: ${known.length ? known.join(", ") : "none"}.`)
+              output: text(`Unknown template "${args.template}". Available: ${known.length ? known.join(", ") : "none"}.`)
             }
           }
           const env = await environment(template)
@@ -203,7 +203,7 @@ export const sandboxes = (options: SandboxPluginOptions): RunnerPlugin =>
             doc.sandboxes[name] = stored
             doc.active = name
           }, context)
-          return { content: text(`Sandbox "${name}" is ready and active (working directory ${handle.cwd}).`) }
+          return { output: text(`Sandbox "${name}" is ready and active (working directory ${handle.cwd}).`) }
         }
       })
 
@@ -214,7 +214,7 @@ export const sandboxes = (options: SandboxPluginOptions): RunnerPlugin =>
         replay: "safe",
         async execute(args, api, context) {
           const stored = (await api.snapshot(SandboxesDoc, context))?.sandboxes[args.name]
-          if (stored === undefined) return { content: text(`No sandbox named "${args.name}".`) }
+          if (stored === undefined) return { output: text(`No sandbox named "${args.name}".`) }
           await Effect.runPromise(provider(stored.handle.provider).destroy(stored.handle))
           connections.delete(`${stored.handle.provider}:${stored.handle.id}`)
           await api.commit(async (tx) => {
@@ -222,7 +222,7 @@ export const sandboxes = (options: SandboxPluginOptions): RunnerPlugin =>
             delete doc.sandboxes[args.name]
             if (doc.active === args.name) delete doc.active
           }, context)
-          return { content: text(`Sandbox "${args.name}" destroyed.`) }
+          return { output: text(`Sandbox "${args.name}" destroyed.`) }
         }
       })
 
@@ -250,7 +250,7 @@ export const sandboxes = (options: SandboxPluginOptions): RunnerPlugin =>
           // Whatever a tool returns (command output, file contents, ...) is masked before it is stored.
           hooks: [hook(ToolTask, {
             afterTool: (_call, result) =>
-              mask.size === 0 ? undefined : { ...result, content: mask.deep(result.content), details: mask.deep(result.details) }
+              mask.size === 0 ? undefined : mask.deep(result)
           })]
         })],
         env: async ({ read }, context) => {

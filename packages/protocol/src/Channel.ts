@@ -12,7 +12,7 @@ import { EventBatch } from "./Domain.ts"
  * client's `id` and may arrive in any order relative to events.
  *
  * Presentations that render a session (TUIs, web UIs) use the service API instead (`Services.ts`): live state
- * and typed controls as Chord services, over Pi's server protocol at `/v1/pi`.
+ * and typed controls as Chord objects, over a Chord link at `/v1/pi`.
  */
 
 /** Client → server. */

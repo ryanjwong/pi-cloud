@@ -1,19 +1,7 @@
-import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context"
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai/providers/faux"
 import type { ConversationView } from "@earendil-works/pi-durable"
 import { CodingTools } from "@earendil-works/pi-durable/tools"
-import {
-  AgentController,
-  CloudSessions,
-  type Conversation,
-  Conversations,
-  connectServices,
-  Models,
-  Notices,
-  SessionDirectory,
-  Tasks,
-  Transcript
-} from "@pi-cloud/client"
+import { connectServices, follow } from "@pi-cloud/client"
 import { piAgent } from "@pi-cloud/pi"
 import { extensions, modelProviders } from "@pi-cloud/runner"
 import { sandboxes } from "@pi-cloud/sandbox"
@@ -42,7 +30,7 @@ const until = async (check: () => boolean, what: string) => {
 }
 
 describe("the service API", () => {
-  it("serves Pi's services and pi-cloud's through Pi's own client", async () => {
+  it("serves the directory, sessions and conversations as Chord objects", async () => {
     root = await mkdtemp(join(tmpdir(), "pi-cloud-services-"))
     const faux = fauxProvider({ models: [{ id: "deep", reasoning: true }, { id: "plain" }] })
     faux.setResponses([
@@ -64,66 +52,56 @@ describe("the service API", () => {
     })
     const connection = await connectServices({ url: deployment.url })
     try {
-      // Server services: pi-cloud's sessions, and Pi's directory, live.
-      const sessions = connection.server.use(CloudSessions)
-      const directory = connection.server.use(SessionDirectory)
-      await connection.server.ready(BACKGROUND_CONTEXT)
-      const created = await sessions.create({
+      // The directory lives on the control plane's host.
+      const directory = await connection.sessions()
+      const created = await directory.create({
         title: "demo",
         spec: { model: { provider: "faux", modelId: "deep" }, sandbox: "home", sandboxes: { home: { provider: "local" } } }
-      }, BACKGROUND_CONTEXT)
-      await until(() => directory.state.value?.sessions.some((session) => session.sessionId === created.id) === true, "the directory")
-      expect(sessions.state.value?.sessions.find((session) => session.id === created.id)?.title).toBe("demo")
-
-      // Session services, served by the session's runner through the control plane.
-      const attached = await connection.attach(created.id)
-      const agent = attached.services.use(AgentController)
-      const transcript = attached.services.use(Transcript)
-      const models = attached.services.use(Models)
-      const tasks = attached.services.use(Tasks)
-      const notices = attached.services.use(Notices)
-      const conversations = new Map<number, Conversation>()
-      attached.services.observe(Conversations, (conversation) => {
-        conversations.set(conversation.summary.value!.id, conversation)
       })
-      await attached.services.ready(BACKGROUND_CONTEXT)
-      expect(models.state.value?.configuration.model).toEqual({ provider: "faux", modelId: "deep" })
-      expect(models.state.value?.catalog.availableModels.map((model) => model.modelId).sort()).toEqual(["deep", "plain"])
+      await until(() => directory.sessions.value.some((session) => session.id === created.id), "the directory")
+      expect(directory.sessions.value.find((session) => session.id === created.id)?.title).toBe("demo")
 
-      const response = await agent.prompt({ message: "delegate it", images: null }, BACKGROUND_CONTEXT)
+      // The session and its conversations live on its runner, woken by the first reference.
+      const session = await connection.session(created.id)
+      const main = await connection.conversation(created.id)
+      expect(main.configuration.value.model).toEqual({ provider: "faux", modelId: "deep" })
+      expect(session.models.value.availableModels.map((model) => model.modelId).sort()).toEqual(["deep", "plain"])
+
+      const response = await main.prompt({ message: "delegate it" })
       expect(response.accepted).toBe(true)
-      const result = await agent.waitForPrompt(response.operationId!, BACKGROUND_CONTEXT)
-      expect(result).toEqual({ status: "done", text: "Three files.", reason: null })
+      const result = await main.waitForPrompt({ operationId: response.accepted ? response.operationId : "" })
+      expect(result).toEqual({ status: "done", text: "Three files." })
 
-      // The transcript is the root conversation's live view; the subagent is another conversation instance.
-      const entries = () => (transcript.state.value as ConversationView | undefined)?.entries ?? []
+      // The view is Pi Durable's, replicated; the subagent is another conversation, listed by the session.
+      const entries = () => (main.view.value as ConversationView).entries
       await until(() => entries().some((entry) => entry.kind === "pi.assistant"), "the transcript")
-      await until(() => conversations.size === 2, "the subagent's conversation")
-      const subagent = [...conversations.values()].find((conversation) => conversation.summary.value!.id !== 1)!
-      expect(subagent.summary.value).toMatchObject({ label: expect.stringMatching(/^subagent \d+$/), title: "count the files" })
-      expect(JSON.stringify(subagent.state.value)).toContain("There are three files.")
-      expect(tasks.state.value).toBeDefined()
+      await until(() => session.conversations.value.length === 2, "the subagent's conversation")
+      const listed = session.conversations.value.find((conversation) => conversation.id !== 1)!
+      expect(listed).toMatchObject({ label: expect.stringMatching(/^subagent \d+$/), title: "count the files" })
+      const subagent = await connection.conversation(created.id, listed.id)
+      expect(JSON.stringify(subagent.view.value)).toContain("There are three files.")
+      expect(session.tasks.value).toBeDefined()
 
-      // Controls go through the services too: thinking levels and model switching, clamped by the runner.
-      await models.cycleThinking(BACKGROUND_CONTEXT)
-      await until(() => models.state.value?.configuration.thinkingLevel !== "off", "a thinking level")
-      await models.select({ provider: "faux", modelId: "plain" }, BACKGROUND_CONTEXT)
-      await until(() => models.state.value?.configuration.model?.modelId === "plain", "the new model")
-      expect(models.state.value?.configuration.thinkingLevel).toBe("off")
-      await conversations.get(1)!.cycleThinking(BACKGROUND_CONTEXT)
-      await until(() => notices.state.value?.notices.some((notice) => notice.message.includes("does not support thinking")) === true, "the notice")
+      // Controls: thinking levels and model switching, clamped by the runner.
+      await main.cycleThinking()
+      await until(() => main.configuration.value.thinkingLevel !== "off", "a thinking level")
+      await main.selectModel({ provider: "faux", modelId: "plain" })
+      await until(() => main.configuration.value.model?.modelId === "plain", "the new model")
+      expect(main.configuration.value.thinkingLevel).toBe("off")
+      await expect(main.cycleThinking()).rejects.toThrow(/does not support thinking/)
 
-      // An attached presentation keeps the runner; it stays past its idle time.
+      // Held references keep the runner; it stays past its idle time.
       await new Promise((resolve) => setTimeout(resolve, 3_000))
-      const view = sessions.state.value?.sessions.find((session) => session.id === created.id)
-      expect(view?.runner.state).toBe("running")
-      await attached.detach()
+      expect(directory.sessions.value.find((item) => item.id === created.id)?.runner.state).toBe("running")
+      subagent.release()
+      main.release()
+      session.release()
     } finally {
       await connection.close()
     }
   }, 60_000)
 
-  it("moves an attached presentation to a new runner when its runner dies", async () => {
+  it("moves a presentation's references to a new runner when its runner dies", async () => {
     const faux = fauxProvider()
     faux.setResponses([fauxAssistantMessage("before"), fauxAssistantMessage("after")])
     deployment = await startLocal({
@@ -134,29 +112,31 @@ describe("the service API", () => {
     const local = deployment
     const connection = await connectServices({ url: local.url })
     try {
-      const sessions = connection.server.use(CloudSessions)
-      await connection.server.ready(BACKGROUND_CONTEXT)
-      const created = await sessions.create({ title: null, spec: { model: { provider: "faux", modelId: "faux-1" } } }, BACKGROUND_CONTEXT)
-      const attached = await connection.attach(created.id)
-      const agent = attached.services.use(AgentController)
-      const transcript = attached.services.use(Transcript)
-      await attached.services.ready(BACKGROUND_CONTEXT)
-      const first = await agent.prompt({ message: "one", images: null }, BACKGROUND_CONTEXT)
-      expect((await agent.waitForPrompt(first.operationId!, BACKGROUND_CONTEXT)).text).toBe("before")
+      const directory = await connection.sessions()
+      const created = await directory.create({ spec: { model: { provider: "faux", modelId: "faux-1" } } })
+      const followed = await follow(() => connection.conversation(created.id))
+      const first = await followed.current.prompt({ message: "one" })
+      expect(await followed.current.waitForPrompt({ operationId: first.accepted ? first.operationId : "" })).toEqual({ status: "done", text: "before" })
 
-      // The runner dies without releasing its lease. The control plane notices, Pi's server ends the attachment,
-      // and the client attaches again: on a new runner, with the same durable state.
+      // The runner dies without releasing its lease. The control plane notices and the link to its host closes, so
+      // the reference is gone; following it gets it again, which wakes a new runner with the same durable state.
       await local.runners.kill()
-      const texts = () => JSON.stringify((transcript.state.value as ConversationView | undefined)?.entries ?? [])
-      let second: Awaited<ReturnType<typeof agent.prompt>> | undefined
+      const texts = () => {
+        try {
+          return JSON.stringify((followed.current.view.value as ConversationView).entries)
+        } catch {
+          return ""
+        }
+      }
+      let second: Awaited<ReturnType<typeof followed.current.prompt>> | undefined
       for (let attempt = 0; attempt < 100 && second?.accepted !== true; attempt++) {
         await new Promise((resolve) => setTimeout(resolve, 200))
-        second = await agent.prompt({ message: "two", images: null }, BACKGROUND_CONTEXT).catch(() => undefined)
+        second = await followed.current.prompt({ message: "two" }).catch(() => undefined)
       }
       expect(second?.accepted).toBe(true)
       await until(() => texts().includes("after"), "the answer from the new runner")
       expect(texts()).toContain("before")
-      await attached.detach()
+      followed.release()
     } finally {
       await connection.close()
     }

@@ -9,11 +9,14 @@ import {
   type FileErrorCode,
   type FileInfo,
   type FileKind,
+  type FileWatcher,
   LineScanner,
   ok,
   type Result,
   StreamDecoder,
-  type TextLineReader
+  type TextLineReader,
+  type WatchChange,
+  type WatchTarget
 } from "@earendil-works/pi-durable/env"
 import { posix } from "node:path"
 
@@ -49,6 +52,8 @@ export interface ShellEnvOptions {
   readonly cwd: string
   /** Variables for every command: the template's env and resolved secrets. */
   readonly env?: Readonly<Record<string, string>>
+  /** How often `watch` compares snapshots of the watched files. Default 1 s. */
+  readonly watchIntervalMs?: number
 }
 
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`
@@ -107,6 +112,8 @@ const KINDS: Record<string, FileKind> = {
 
 /** Exit code the exec wrapper uses when the working directory is missing; confirmed with a second check. */
 const NO_CWD = 199
+/** Exit code the exec wrapper uses when an argv program does not exist; confirmed with a second check. */
+const NO_PROGRAM = 198
 /** Output kept for a spill file before older output is dropped. */
 const MAX_SPILL_BYTES = 64 * 1024 * 1024
 /** Base64 bytes per command when a shell takes no stdin. */
@@ -118,7 +125,7 @@ const DETACHED = {} as Context
 /**
  * An `ExecutionEnv` over a `RemoteShell`. Paths are POSIX paths inside the sandbox. Commands run in their own
  * session (via `setsid` where available) and an abort or timeout kills the whole process group, then any
- * descendants that left it. Not supported: `watch` (the sandbox's files are not reported to the runner).
+ * descendants that left it. `watch` polls.
  */
 export const shellEnv = (shell: RemoteShell, options: ShellEnvOptions): ExecutionEnv => {
   const baseEnv = options.env ?? {}
@@ -317,6 +324,7 @@ exit 0`,
     const inner = quote(`echo $$ > "$0"; exec "$@"`)
     const script = `R=sh; command -v bash >/dev/null 2>&1 && R=bash
 cd -- ${quote(cwd)} 2>/dev/null || exit ${NO_CWD}
+${typeof command === "string" ? "" : `command -v ${quote(command[0]!)} >/dev/null 2>&1 || exit ${NO_PROGRAM}`}
 if setsid -w true 2>/dev/null; then setsid -w sh -c ${inner} ${quote(pidFile)} ${program}
 else sh -c ${inner} ${quote(pidFile)} ${program}; fi
 s=$?; rm -f ${quote(pidFile)}; exit $s`
@@ -407,6 +415,10 @@ s=$?; rm -f ${quote(pidFile)}; exit $s`
       if (spillPath !== undefined) error.spillPath = spillPath
       return err(error)
     }
+    if (exitCode === NO_PROGRAM && typeof command !== "string") {
+      const found = await capture(`cd -- "$1" && command -v "$2" >/dev/null 2>&1`, [cwd, command[0]!]).catch(() => undefined)
+      if (found !== undefined && found.code !== 0) return err(new ExecutionError("spawn_error", `spawn ${command[0]} ENOENT`))
+    }
     if (exitCode === NO_CWD) {
       const exists = await capture(`[ -d "$1" ]`, [cwd]).catch(() => undefined)
       if (exists !== undefined && exists.code !== 0) {
@@ -491,11 +503,19 @@ s=$?; rm -f ${quote(pidFile)}; exit $s`
     fileInfo,
     listDir,
     openDirReader: async (path, context) => {
-      const listed = await listDir(path, context)
-      return listed.ok ? ok(dirReader(listed.value)) : listed
+      const resolved = await absolute(path)
+      const info = await fileInfo(resolved, context)
+      if (!info.ok) return info
+      if (info.value.kind !== "directory") return err(new FileError("not_directory", `not_directory: ${resolved}`, resolved))
+      // Entries are read at the first page, as a directory stream reads them.
+      return ok(dirReader(resolved, (readContext) => listDir(resolved, readContext)))
     },
-    watch: async (targets) =>
-      err(new FileError("not_supported", "This sandbox does not report file changes", targets[0]?.path)),
+    watch: (targets, onChange, context) =>
+      pollingWatch(targets, onChange, context, {
+        intervalMs: options.watchIntervalMs ?? 1_000,
+        resolve: absolute,
+        snapshot: (script, args) => capture(script, args).then(({ code, stdout, stderr }) => ({ code, stdout: text(stdout), stderr }))
+      }),
     canonicalPath: async (path, context) => {
       const resolved = await absolute(path)
       const result = await fileOp(`e "$1"; realpath -- "$1" 2>/dev/null || readlink -f -- "$1"`, resolved, [resolved], context)
@@ -563,13 +583,24 @@ const lineReader = (path: string, bytes: Uint8Array): TextLineReader => {
   }
 }
 
+const abortedAt = (context: Context, path: string) =>
+  context.abortSignal?.aborted ? err<never, FileError>(new FileError("aborted", "aborted", path)) : undefined
+
+const count = (value: number) => Number.isSafeInteger(value) && value >= 0
+
 const memoryReader = (path: string, info: FileInfo, bytes: Uint8Array): BinaryReader => {
   let isClosed = false
   return {
-    info: async () => (isClosed ? closed("Binary reader", path) : ok(info)),
-    read: async (offset, length) => (isClosed ? closed("Binary reader", path) : ok(bytes.slice(offset, offset + length))),
-    scanLines: async (range) => {
+    info: async (context) => (isClosed ? closed("Binary reader", path) : abortedAt(context, path) ?? ok(info)),
+    read: async (offset, length, context) => {
       if (isClosed) return closed("Binary reader", path)
+      if (!count(offset) || !count(length)) return err(new FileError("invalid", "Invalid byte range", path))
+      return abortedAt(context, path) ?? ok(bytes.slice(offset, offset + length))
+    },
+    scanLines: async (range, context) => {
+      if (isClosed) return closed("Binary reader", path)
+      const aborted = abortedAt(context, path)
+      if (aborted) return aborted
       let scanner: LineScanner
       try {
         scanner = new LineScanner(range.startLine, range.endLine)
@@ -583,14 +614,105 @@ const memoryReader = (path: string, info: FileInfo, bytes: Uint8Array): BinaryRe
   }
 }
 
-const dirReader = (entries: ReadonlyArray<FileInfo>): DirReader => {
+const dirReader = (path: string, list: (context: Context) => Promise<Result<Array<FileInfo>, FileError>>): DirReader => {
+  let entries: Array<FileInfo> | undefined
   let position = 0
+  let isClosed = false
   return {
-    next: async (maxEntries) => {
+    next: async (maxEntries, context) => {
+      if (isClosed) return closed("Directory reader", path)
+      if (!Number.isSafeInteger(maxEntries) || maxEntries <= 0) return err(new FileError("invalid", "Invalid page size", path))
+      const aborted = abortedAt(context, path)
+      if (aborted) return aborted
+      if (entries === undefined) {
+        const listed = await list(context)
+        if (!listed.ok) return listed
+        entries = listed.value
+      }
       const page = entries.slice(position, position + maxEntries)
       position += page.length
       return ok({ entries: page, done: position >= entries.length })
     },
-    close: async () => {}
+    close: async () => void (isClosed = true)
   }
+}
+
+/**
+ * `watch` by comparing snapshots: every interval, one command lists what is watched (kind, size, mtime, inode per
+ * path), and the paths whose line changed are reported. A change undone between two snapshots is missed, which
+ * `mode: "polling"` tells the host.
+ */
+const pollingWatch = async (
+  targets: ReadonlyArray<WatchTarget>,
+  onChange: (change: WatchChange) => void,
+  context: Context,
+  options: {
+    readonly intervalMs: number
+    readonly resolve: (path: string) => Promise<string>
+    readonly snapshot: (script: string, args: ReadonlyArray<string>) => Promise<{ code: number; stdout: string; stderr: string }>
+  }
+): Promise<Result<FileWatcher, FileError>> => {
+  const aborted = abortedAt(context, targets[0]?.path ?? "")
+  if (aborted) return aborted
+  const resolved = await Promise.all(targets.map(async (target) => ({ ...target, path: await options.resolve(target.path) })))
+  // Per target: the target itself (followed if a link), then its entries, pruning excluded names.
+  const parts = resolved.map((target, index) => {
+    const prune = [...(target.exclude?.hidden === true ? [`-name '.*'`] : []), ...(target.exclude?.names ?? []).map((name) => `-name ${quote(name)}`)]
+    const depth = target.recursive === true ? "" : "-maxdepth 1"
+    const pruning = prune.length === 0 ? "" : `\\( ${prune.join(" -o ")} \\) -prune -o`
+    return `t="$${index + 1}"; if [ -e "$t" ] || [ -L "$t" ]; then stat -L -c "$S" -- "$t" 2>/dev/null || stat -c "$S" -- "$t"
+  [ -d "$t" ] && find "$t" -mindepth 1 ${depth} ${pruning} -exec stat -c "$S" -- {} + 2>/dev/null; fi`
+  })
+  // Nanosecond mtimes where `stat` has them (GNU), whole seconds otherwise.
+  const script = [`S='%F|%s|%.9Y|%i|%n'; stat -c "$S" / >/dev/null 2>&1 || S='%F|%s|%Y|%i|%n'`, ...parts, "exit 0"].join("\n")
+  const LIMIT = 50_000
+  const take = async (): Promise<Map<string, string> | FileError> => {
+    const { code, stdout, stderr } = await options.snapshot(script, resolved.map((target) => target.path))
+    if (code !== 0) return new FileError("unknown", stderr.trim() || `Snapshot exited with ${code}`)
+    const lines = stdout.split("\n").filter(Boolean)
+    if (lines.length > LIMIT) return new FileError("invalid", `More than ${LIMIT} watched entries`)
+    const snapshot = new Map<string, string>()
+    for (const line of lines) {
+      const parts = line.split("|")
+      snapshot.set(parts.slice(4).join("|"), parts.slice(0, 4).join("|"))
+    }
+    return snapshot
+  }
+  let previous = await take().catch((error: unknown) => new FileError("unknown", String(error)))
+  if (previous instanceof FileError) return err(previous)
+
+  let isClosed = false
+  let failures = 0
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const poll = async () => {
+    if (isClosed) return
+    const next = await take().catch((error: unknown) => new FileError("unknown", String(error)))
+    if (isClosed) return
+    if (next instanceof FileError) {
+      // A sandbox that stopped answering: say coverage was uncertain, and give up after a few tries.
+      if (++failures >= 3) {
+        isClosed = true
+        return onChange({ error: next })
+      }
+    } else {
+      if (failures > 0) onChange({ overflow: true })
+      failures = 0
+      const changed: Array<string> = []
+      for (const [path, line] of next) if ((previous as Map<string, string>).get(path) !== line) changed.push(path)
+      for (const path of (previous as Map<string, string>).keys()) if (!next.has(path)) changed.push(path)
+      previous = next
+      if (changed.length > 0) onChange({ paths: changed })
+    }
+    timer = setTimeout(() => void poll(), options.intervalMs)
+    timer.unref?.()
+  }
+  timer = setTimeout(() => void poll(), options.intervalMs)
+  timer.unref?.()
+  return ok({
+    mode: "polling",
+    close: async () => {
+      isClosed = true
+      if (timer !== undefined) clearTimeout(timer)
+    }
+  })
 }

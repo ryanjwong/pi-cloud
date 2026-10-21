@@ -1,16 +1,5 @@
-import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context"
 import type { ConversationId, ConversationView, ModelRef } from "@earendil-works/pi-durable"
-import {
-  type AttachedSession,
-  type ClientOptions,
-  type Conversation,
-  Conversations,
-  connectServices,
-  Models,
-  Notices,
-  type ServiceConnection,
-  Tasks
-} from "@pi-cloud/client"
+import { type ClientOptions, connectServices, type Followed, follow, type ServiceConnection } from "@pi-cloud/client"
 import type { ConversationSummary, DurableController, DurableView, DurableViewSource, Notice } from "./pi/View.ts"
 
 /** Pi Durable's root conversation. */
@@ -25,21 +14,26 @@ export interface ProjectionOptions extends ClientOptions {
 export interface Projection {
   readonly source: DurableViewSource
   readonly controller: DurableController
-  /** Resolves once the session's services have their state. */
+  /** Resolves once the session's objects have their state. */
   readonly ready: Promise<void>
   close(): Promise<void>
 }
 
+type Ref<T> = T extends Followed<infer R> ? R : never
+type SessionRef = Ref<Awaited<ReturnType<typeof followSession>>>
+type ConversationRef = Ref<Awaited<ReturnType<typeof followConversation>>>
+const followSession = (connection: ServiceConnection, id: string) => follow(() => connection.session(id))
+const followConversation = (connection: ServiceConnection, id: string, conversation: number) =>
+  follow(() => connection.conversation(id, conversation))
+
 /**
  * Pi's durable TUI contract (`DurableViewSource`, `DurableController`) projected from the service API: every value
- * is a Chord replicated state of a session service, every action a service call. Nothing runs locally but
+ * is the state of a Chord object on the session's runner, every action a call on it. Nothing runs locally but
  * rendering.
  */
 export const project = (options: ProjectionOptions): Projection => {
   const listeners = new Set<() => void>()
   const notify = () => listeners.forEach((listener) => listener())
-  const conversations = new Map<number, Conversation>()
-  let shown: ConversationId = ROOT
   let showTasks = true
   let local: Array<Notice> = []
   let nextLocal = 1_000_000
@@ -49,54 +43,62 @@ export const project = (options: ProjectionOptions): Projection => {
   }
 
   let connection: ServiceConnection | undefined
-  let attached: AttachedSession | undefined
-  const unsubscribes: Array<() => void> = []
-  const watch = (state: { subscribe(listener: () => void): () => void }) => unsubscribes.push(state.subscribe(() => notify()))
+  let session: Followed<SessionRef> | undefined
+  let shown: { readonly id: ConversationId; readonly followed: Followed<ConversationRef> } | undefined
+  const subscriptions = new Map<object, Array<() => void>>()
+
+  /** Re-render on every change of a reference's state, and follow it to its replacement. */
+  const observe = <R>(followed: Followed<R>, members: (ref: R) => ReadonlyArray<{ subscribe(listener: () => void): () => void }>) => {
+    const attach = (ref: R) => {
+      for (const unsubscribe of subscriptions.get(followed) ?? []) unsubscribe()
+      subscriptions.set(followed, members(ref).map((member) => member.subscribe(() => notify())))
+      notify()
+    }
+    attach(followed.current)
+    followed.onChange(attach)
+  }
+  const stopObserving = (followed: object) => {
+    for (const unsubscribe of subscriptions.get(followed) ?? []) unsubscribe()
+    subscriptions.delete(followed)
+  }
+
+  const show = async (id: ConversationId) => {
+    const followed = await followConversation(connection!, options.sessionId, id)
+    observe(followed, (ref) => [ref.view, ref.summary])
+    const previous = shown
+    shown = { id, followed }
+    if (previous !== undefined) {
+      stopObserving(previous.followed)
+      previous.followed.release()
+    }
+    notify()
+  }
 
   const ready = (async () => {
     connection = await connectServices({ url: options.url, apiKey: options.apiKey })
-    attached = await connection.attach(options.sessionId)
-    const services = attached.services
-    watch(services.use(Models).state)
-    watch(services.use(Notices).state)
-    watch(services.use(Tasks).state)
-    // One instance per conversation; a re-subscription after a runner change delivers fresh instances.
-    unsubscribes.push(services.observe(Conversations, (conversation) => {
-      const id = conversation.summary.value?.id
-      if (id === undefined) return
-      conversations.set(id, conversation)
-      watch(conversation.summary)
-      watch(conversation.state)
-      notify()
-    }))
-    await services.ready(BACKGROUND_CONTEXT)
-    while (conversations.get(ROOT)?.state.value === undefined) await new Promise((resolve) => setTimeout(resolve, 20))
+    session = await followSession(connection, options.sessionId)
+    observe(session, (ref) => [ref.conversations, ref.models, ref.tasks, ref.notices])
+    await show(ROOT)
   })()
-
-  const current = (): Conversation => conversations.get(shown) ?? conversations.get(ROOT)!
 
   const source: DurableViewSource = {
     current: (): DurableView => {
-      const services = attached!.services
-      const models = services.use(Models).state.value
-      const tasks = services.use(Tasks).state.value
-      const summaries: Array<ConversationSummary> = [...conversations.values()]
-        .map((conversation) => conversation.summary.value!)
-        .filter((summary) => summary !== undefined)
-        .sort((a, b) => a.id - b.id)
+      const ref = session!.current
+      const summaries: Array<ConversationSummary> = ref.conversations.value
         .map((summary) => ({ id: summary.id as ConversationId, label: summary.label, ...(summary.title === null ? {} : { title: summary.title }) }))
+        .sort((a, b) => a.id - b.id)
       return {
         session: { id: options.sessionId, directory: "", cwd: options.label ?? options.sessionId },
-        conversation: current().state.value as ConversationView,
+        conversation: shown!.followed.current.view.value as ConversationView,
         conversations: summaries,
-        models: (models?.catalog.availableModels ?? []).map((model) => ({
+        models: ref.models.value.availableModels.map((model) => ({
           provider: model.provider,
           modelId: model.modelId,
           name: model.name,
           contextWindow: model.contextWindow ?? 0
         })),
-        notices: [...(services.use(Notices).state.value?.notices ?? []), ...local],
-        ...(showTasks && tasks !== undefined ? { tasks } : {})
+        notices: [...ref.notices.value, ...local],
+        ...(showTasks ? { tasks: ref.tasks.value } : {})
       }
     },
     subscribe: (listener) => {
@@ -105,34 +107,31 @@ export const project = (options: ProjectionOptions): Projection => {
     }
   }
 
-  const act = (operation: (conversation: Conversation) => Promise<unknown>): Promise<void> =>
-    operation(current()).then(
+  const act = (operation: (conversation: ConversationRef) => Promise<unknown>): Promise<void> =>
+    operation(shown!.followed.current).then(
       (response) => {
-        const error = (response as { accepted?: boolean; error?: { message: string } } | undefined)?.error
-        if (error != null) notice("error", error.message)
+        const refused = response as { accepted?: boolean; error?: { message: string } } | undefined
+        if (refused?.accepted === false && refused.error !== undefined) notice("error", refused.error.message)
       },
       (error) => notice("error", error instanceof Error ? error.message : String(error))
     )
 
   const controller: DurableController = {
     submit: (text, whenBusy) =>
-      act((conversation) =>
-        whenBusy === "steer"
-          ? conversation.steer({ message: text, images: null }, BACKGROUND_CONTEXT)
-          : conversation.followUp({ message: text, images: null }, BACKGROUND_CONTEXT)
-      ),
-    compact: (instructions) => act((conversation) => conversation.compact({ customInstructions: instructions ?? null }, BACKGROUND_CONTEXT)),
-    abort: () => act((conversation) => conversation.abort(BACKGROUND_CONTEXT)),
-    cycleThinking: () => act((conversation) => conversation.cycleThinking(BACKGROUND_CONTEXT)),
-    setModel: (model: ModelRef) => act((conversation) => conversation.selectModel(model, BACKGROUND_CONTEXT)),
+      act((conversation) => whenBusy === "steer" ? conversation.steer({ message: text }) : conversation.followUp({ message: text })),
+    compact: (instructions) => act((conversation) => conversation.compact(instructions === undefined ? {} : { instructions })),
+    abort: () => act((conversation) => conversation.abort()),
+    cycleThinking: () => act((conversation) => conversation.cycleThinking()),
+    setModel: (model: ModelRef) => act((conversation) => conversation.selectModel(model)),
     toggleTasks: async () => {
       showTasks = !showTasks
       notify()
     },
     switchConversation: async (id) => {
-      if (!conversations.has(id)) return notice("error", `Conversation ${id} is not available`)
-      shown = id
-      notify()
+      if (!session!.current.conversations.value.some((summary) => summary.id === id)) {
+        return notice("error", `Conversation ${id} is not available`)
+      }
+      if (shown?.id !== id) await show(id).catch((error) => notice("error", error instanceof Error ? error.message : String(error)))
     }
   }
 
@@ -141,8 +140,10 @@ export const project = (options: ProjectionOptions): Projection => {
     controller,
     ready,
     close: async () => {
-      for (const unsubscribe of unsubscribes) unsubscribe()
-      await attached?.detach().catch(() => {})
+      for (const unsubscribes of subscriptions.values()) for (const unsubscribe of unsubscribes) unsubscribe()
+      subscriptions.clear()
+      shown?.followed.release()
+      session?.release()
       await connection?.close().catch(() => {})
     }
   }

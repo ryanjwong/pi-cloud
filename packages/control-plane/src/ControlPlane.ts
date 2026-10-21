@@ -19,7 +19,7 @@ import { ChannelRoute } from "./http/ChannelLive.ts"
 import { PublicApiHandlers } from "./http/PublicApiLive.ts"
 import { RunnerRpcLive } from "./http/RunnerRpcLive.ts"
 import { Runners } from "./Runners.ts"
-import { PiServer } from "./services/PiServer.ts"
+import { ServiceHost } from "./services/ServiceHost.ts"
 import { Sessions } from "./Sessions.ts"
 
 /**
@@ -34,11 +34,11 @@ export type Extension = Layer.Layer<never, never, HttpRouter.HttpRouter | Sessio
  *
  * - `/v1/sessions/...` the public API, with `/openapi.json` and `/docs` describing it,
  * - `/v1/sessions/:id/channel` the WebSocket session channel,
- * - `/v1/pi` the service API (Chord services over Pi's server protocol; `GET /v1/server` says where),
+ * - `/v1/pi` the service API (a Chord link to the control plane's host; `GET /v1/server` says where),
  * - `/internal/runner` the runner RPC,
  * - whatever the extensions add.
  */
-export const routes = (extensions: ReadonlyArray<Extension> = [], options: { readonly serverId?: string | undefined } = {}) =>
+export const routes = (extensions: ReadonlyArray<Extension> = []) =>
   Layer.mergeAll(
     HttpApiBuilder.layer(PublicApi, { openapiPath: "/openapi.json" }).pipe(
       Layer.provide(PublicApiHandlers),
@@ -52,8 +52,8 @@ export const routes = (extensions: ReadonlyArray<Extension> = [], options: { rea
     ),
     ...extensions
   ).pipe(
-    // The service API: Pi's server protocol at /v1/pi.
-    Layer.provideMerge(PiServer.layer(options)),
+    // The service API at /v1/pi.
+    Layer.provideMerge(ServiceHost.layer),
     Layer.provide(Sessions.layer.pipe(Layer.provideMerge(Runners.layer)))
   )
 
@@ -81,8 +81,6 @@ export interface ControlPlaneOptions {
   readonly credentials?: Layer.Layer<CredentialStore>
   /** Extra routes built on `Sessions`: hosted sources, event triggers, admin endpoints, ... */
   readonly extensions?: ReadonlyArray<Extension>
-  /** The service API's logical server id, a UUID v4. Defaults to a new one per start. */
-  readonly serverId?: string
 }
 
 /** The control plane's routes with every service provided. Serve it with `HttpRouter.serve` or `toWebHandler`. */
@@ -90,7 +88,7 @@ export const layer = (options: ControlPlaneOptions) => {
   const config = ControlPlaneConfig.layer(options.settings)
   const ttlMs = options.settings.leaseTtlMs ?? 15_000
   const logLimit = options.settings.eventLogLimit ?? 2_000
-  return routes(options.extensions, { serverId: options.serverId }).pipe(
+  return routes(options.extensions).pipe(
     Layer.provide([
       options.dispatcher,
       options.sessions ?? SessionStore.memory,

@@ -1,6 +1,7 @@
 import type { Context } from "@earendil-works/chord"
 import type { ExecutionEnv } from "@earendil-works/pi-durable/env"
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node"
+import { registerEnvConformance } from "@earendil-works/pi-durable/testing"
 import { execFileSync, spawn } from "node:child_process"
 import { mkdtemp, rm, symlink } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -148,4 +149,16 @@ describe("shellEnv", () => {
     const small = await env.exec(`echo hi`, { spill: { afterBytes: 1_000, afterLines: 100 } }, context)
     expect(small).toEqual({ ok: true, value: { exitCode: 0 } })
   })
+})
+
+// Pi Durable's own suite for custom environments, over a local shell.
+registerEnvConformance({ describe, expect, it }, "shellEnv over a local shell", async (use) => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-cloud-conformance-"))
+  const env = shellEnv(localShell({ stdin: true }), { cwd: dir })
+  try {
+    await use(env)
+  } finally {
+    await env.cleanup(context)
+    await rm(dir, { recursive: true, force: true })
+  }
 })

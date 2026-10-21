@@ -2,7 +2,7 @@ import { CredentialStore, parsePosition, type VersionedCredential } from "@pi-cl
 import { CommandFailed, type CredentialInfo, PublicApi, type SessionId, type Submitted } from "@pi-cloud/protocol"
 import { Effect, Layer, Option } from "effect"
 import { HttpApiBuilder } from "effect/http-api"
-import { PiServer, SERVICES_PATH } from "../services/PiServer.ts"
+import { SERVICES_PATH } from "../services/ServiceHost.ts"
 import { Sessions } from "../Sessions.ts"
 
 /** The REST surface: a thin mapping from `PublicApi` endpoints onto the `Sessions` service. */
@@ -57,10 +57,9 @@ export const CredentialsApiLive = HttpApiBuilder.group(PublicApi, "credentials",
 }))
 
 export const SystemApiLive = HttpApiBuilder.group(PublicApi, "system", Effect.fn(function*(handlers) {
-  const piServer = yield* PiServer
   return handlers
     .handle("health", () => Effect.void)
-    .handle("server", () => Effect.succeed({ serverId: piServer.serverId, servicesPath: SERVICES_PATH }))
+    .handle("server", () => Effect.succeed({ servicesPath: SERVICES_PATH }))
 }))
 
 export const PublicApiHandlers = Layer.mergeAll(SessionsApiLive, CredentialsApiLive, SystemApiLive)

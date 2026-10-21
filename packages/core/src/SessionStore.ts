@@ -1,3 +1,4 @@
+import { StorageRequestError } from "@earendil-works/pi-durable"
 import type { Session, SessionId } from "@pi-cloud/protocol"
 import { StorageFailure } from "@pi-cloud/protocol"
 import { Context, Effect, Layer, Option } from "effect"
@@ -25,4 +26,7 @@ export class SessionStore extends Context.Service<SessionStore, {
 }
 
 export const storageFailure = (cause: unknown) =>
-  new StorageFailure({ message: cause instanceof Error ? cause.message : String(cause) })
+  new StorageFailure({
+    message: cause instanceof Error ? cause.message : String(cause),
+    ...(cause instanceof StorageRequestError ? { request: true } : {})
+  })

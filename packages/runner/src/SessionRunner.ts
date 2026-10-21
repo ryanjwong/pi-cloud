@@ -10,14 +10,14 @@ import {
   createRegistry,
   Harness,
   type HarnessSettings,
+  StorageRequestError,
   watchEvents
 } from "@earendil-works/pi-durable"
 import type { CommandResult, EventBatch, RunnerCommand, Session } from "@pi-cloud/protocol"
-import { RemoteServiceError } from "@earendil-works/chord"
 import { Cause, Deferred, Effect, Exit, Fiber, Schedule, Stream } from "effect"
 import type { ControlPlaneClient } from "./ControlPlaneClient.ts"
 import { noSecrets, type PluginParts, type RunnerPlugin, runSetup, type RunningSession, type SecretResolver } from "./Plugin.ts"
-import { LeaseLostError, RemoteStorage } from "./RemoteStorage.ts"
+import { LeaseLostError, RemoteStorage, StorageBackendError } from "./RemoteStorage.ts"
 import { RemoteCredentialStore } from "./RemoteCredentials.ts"
 import { openSessionServices, type SessionServices } from "./Services.ts"
 
@@ -38,8 +38,11 @@ export interface SessionRunnerOptions {
   readonly modelCredentials?: (name: string) => string | undefined
 }
 
-/** Why a runner stopped hosting a session. */
-export type StopReason = "idle" | "shutdown" | "lease-lost" | "failed"
+/**
+ * Why a runner stopped hosting a session. `session-failed`: Pi Durable failed the session (a storage error that
+ * survived the retries); the lease is kept to expire, so the control plane reopens the session on a fresh runner.
+ */
+export type StopReason = "idle" | "shutdown" | "lease-lost" | "failed" | "session-failed"
 
 const toJson = <T>(value: T): T => JSON.parse(JSON.stringify(value))
 
@@ -85,6 +88,8 @@ export const hostSession = Effect.fnUntraced(function*(
   let hosted: Hosted | undefined
   let ttlMs = 15_000
   let lastActive = Date.now()
+  /** Chord frames that arrived before the session's host was open. */
+  const early: Array<{ readonly link: number; readonly frames: ReadonlyArray<unknown> }> = []
 
   const run = <A, E>(effect: Effect.Effect<A, E>) => Effect.runPromise(effect)
 
@@ -96,16 +101,6 @@ export const hostSession = Effect.fnUntraced(function*(
       })
     )
     return current.publishing
-  }
-
-  /** Relay a subscription update of an attached presentation to the control plane, in order. */
-  const publishService = (current: Hosted, attachmentId: string, subscriptionId: string, update: unknown) => {
-    current.publishing = current.publishing.then(() =>
-      run(client.ServiceUpdate({ sessionId, token: current.token, attachmentId, subscriptionId, update: toJson(update) as never }))
-        .catch((error) => {
-          if ((error as { _tag?: string })._tag === "LeaseLost") stopNow("lease-lost")
-        })
-    )
   }
 
   /** (Re)start the root conversation's event stream; it begins with a snapshot. */
@@ -124,15 +119,25 @@ export const hostSession = Effect.fnUntraced(function*(
 
   const open = async (session: Session, token: string, epoch: number): Promise<Hosted> => {
     const { context, cancel } = withCancel(BACKGROUND_CONTEXT)
-    const storage = new RemoteStorage(async (method, args) => {
+    const storage = new RemoteStorage(async (method, args, requestId) => {
       try {
-        const { value } = await run(client.Storage({ sessionId, token, method, args: args as any }))
+        const { value } = await run(client.Storage({
+          sessionId,
+          token,
+          method,
+          args: args as any,
+          ...(requestId === undefined ? {} : { requestId })
+        }))
         // A missing record may arrive as `null`; Storage reports misses as `undefined`.
         return value ?? undefined
       } catch (error) {
-        if ((error as { _tag?: string })._tag === "LeaseLost") {
+        const failure = error as { _tag?: string; message?: string; request?: boolean }
+        if (failure._tag === "LeaseLost") {
           stopNow("lease-lost")
           throw new LeaseLostError(sessionId)
+        }
+        if (failure._tag === "StorageFailure") {
+          throw failure.request === true ? new StorageRequestError(failure.message ?? "") : new StorageBackendError(failure.message ?? "")
         }
         throw error
       }
@@ -188,6 +193,11 @@ export const hostSession = Effect.fnUntraced(function*(
       }
     })
     harness.resume()
+    void harness.closed.then((end) => {
+      if (end.reason !== "failed" || hosted?.harness !== harness) return
+      console.warn(`[pi-cloud runner ${runnerId}] ${sessionId}: the session failed:`, end.error)
+      stopNow("session-failed")
+    })
     const current: Hosted = {
       storage,
       session,
@@ -207,12 +217,19 @@ export const hostSession = Effect.fnUntraced(function*(
     for (const part of parts) await part.ready?.(current, context)
     await startWatch(current)
     current.services = await openSessionServices({
+      sessionId,
       harness,
       root,
       models,
       facets: parts.flatMap((part) => part.facets ?? []),
+      transmit: (link, frames) =>
+        run(client.Frames({ sessionId, token, link, frames: frames as never })).catch((error) => {
+          if ((error as { _tag?: string })._tag === "LeaseLost") stopNow("lease-lost")
+          throw error
+        }),
       context
     })
+    for (const { link, frames } of early.splice(0)) current.services.frames(link, frames)
     return current
   }
 
@@ -282,28 +299,6 @@ export const hostSession = Effect.fnUntraced(function*(
           await (await conversation(current, command.conversationId)).reset(command.handoff, current.context)
           return { _tag: "Ok" }
         }
-        case "ServiceCall": {
-          const services = current.services
-          if (services === undefined) return { _tag: "Err", tag: "service_not_found", message: "The session is not open" }
-          try {
-            const value = await services.invoke(command.attachmentId, command.callId, command.call, (subscriptionId, update) =>
-              publishService(current, command.attachmentId, subscriptionId, update))
-            return value === undefined ? { _tag: "Ok" } : { _tag: "Ok", value: toJson(value) as never }
-          } catch (error) {
-            // Chord errors keep their code; anything else is an internal error, as with Pi's own server.
-            return error instanceof RemoteServiceError
-              ? { _tag: "Err", tag: error.code, message: error.message }
-              : { _tag: "Err", tag: "internal_error", message: error instanceof Error ? error.message : String(error) }
-          }
-        }
-        case "ServiceCancel": {
-          current.services?.cancel(command.callId)
-          return { _tag: "Ok" }
-        }
-        case "ServiceRelease": {
-          current.services?.release(command.attachmentId)
-          return { _tag: "Ok" }
-        }
         case "Resnapshot": {
           await startWatch(current)
           return { _tag: "Ok" }
@@ -342,11 +337,18 @@ export const hostSession = Effect.fnUntraced(function*(
         Stream.runForEach((message) =>
           Effect.promise(async () => {
             if (message._tag === "Command") return handleCommand(message.commandId, message.command)
+            if (message._tag === "Frames") {
+              // Frames that arrive while the session is still opening wait for its host.
+              if (hosted?.services === undefined) early.push(message)
+              else hosted.services.frames(message.link, message.frames)
+              return
+            }
             ttlMs = message.ttlMs
             if (hosted?.token === message.token) return
             // A new lease: whatever we held before may be stale, so start over from storage.
             if (hosted !== undefined) await close(hosted)
             hosted = undefined
+            early.length = 0
             hosted = await open(message.session, message.token, message.epoch)
             lastActive = Date.now()
           })
@@ -383,9 +385,9 @@ export const hostSession = Effect.fnUntraced(function*(
     const current = hosted
     if (current === undefined) return
     const inspection = yield* Effect.promise(() => current.harness.inspect(current.context))
-    // Attached presentations keep the session hosted, as Pi's server keeps a worker while presentations demand it.
+    // Objects presentations hold keep the session hosted.
     const busy = inspection.submissions.length > 0 || inspection.tasks.some((task) => task.state.kind !== "blocked") ||
-      (current.services?.attachments ?? 0) > 0
+      (current.services?.attached ?? 0) > 0
     if (busy) lastActive = Date.now()
     else if (Date.now() - lastActive > idleMs) yield* stop("idle")
   }).pipe(
@@ -414,7 +416,7 @@ export const hostSession = Effect.fnUntraced(function*(
   hosted = undefined
   if (current !== undefined) {
     yield* Effect.promise(() => close(current))
-    if (reason !== "lease-lost") {
+    if (reason !== "lease-lost" && reason !== "session-failed") {
       yield* client.Release({ sessionId, token: current.token }).pipe(Effect.ignore)
     }
   }

@@ -8,13 +8,12 @@
     "./node": "./src/node.ts"
   },
   "dependencies": {
-    "@earendil-works/chord": "1.1.0",
-    "@earendil-works/pi-durable": "1.1.0",
+    "@earendil-works/chord": "1.3.0",
+    "@earendil-works/pi-durable": "1.3.0",
     "@pi-cloud/protocol": "workspace:*",
     "effect": "4.0.2",
     "@pi-cloud/core": "workspace:*",
-    "@earendil-works/pi-server": "1.1.0",
-    "@earendil-works/pi-protocol": "1.1.0"
+    "typebox": "1.3.27"
   },
   "devDependencies": {
     "@effect/platform-node": "4.0.2"

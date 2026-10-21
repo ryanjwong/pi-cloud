@@ -114,9 +114,7 @@ export class SessionsApi extends HttpApiGroup.make("sessions")
 
 /** Where and how to reach the service API (`Services.ts`). */
 export const ServerInfo = Schema.Struct({
-  /** The logical server id `@earendil-works/pi-client` verifies in the handshake. */
-  serverId: Schema.String,
-  /** WebSocket path of the service API: Pi's server protocol, binary frames. */
+  /** WebSocket path of the service API: a Chord link to the control plane's host. */
   servicesPath: Schema.String
 })
 
