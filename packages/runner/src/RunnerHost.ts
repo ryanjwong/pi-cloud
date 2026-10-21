@@ -1,4 +1,4 @@
-import { WakeRequest } from "@pi-cloud/protocol"
+import { secretsEqual, WakeRequest } from "@pi-cloud/protocol"
 import { Effect, Exit, Fiber, Schema, Scope } from "effect"
 import { type ControlPlaneClient, makeClient } from "./ControlPlaneClient.ts"
 import { hostSession, type SessionRunnerOptions, type StopReason } from "./SessionRunner.ts"
@@ -7,8 +7,8 @@ export interface RunnerHostOptions extends SessionRunnerOptions {
   /** Shared secret for the runner RPC, and for authenticating wake requests. */
   readonly secret?: string
   /**
-   * Pin the control plane URL instead of trusting the one in wake requests. Recommended whenever the wake
-   * endpoint is reachable by anyone but the control plane.
+   * The control plane runners attach to. `handler` requires it (with `secret`): a wake request must never choose
+   * where a runner connects. Without it, `wake` uses the URL in the request.
    */
   readonly controlPlaneUrl?: string
   /** How requests reach the control plane: a Durable Object stub's `fetch`, for instance. Default: `fetch`. */
@@ -51,7 +51,12 @@ export class RunnerHost {
   /** A fetch-style handler for `POST` wake requests with a JSON `WakeRequest` body. */
   readonly handler = async (request: Request): Promise<Response> => {
     if (request.method !== "POST") return new Response("Method not allowed", { status: 405 })
-    if (this.options.secret !== undefined && request.headers.get("authorization") !== `Bearer ${this.options.secret}`) {
+    // A wake request starts a runner that spends this host's model keys and sandbox secrets on the sessions it is
+    // given, so it must come from the control plane: authenticated, and never naming where the runner connects.
+    if (this.options.secret === undefined || this.options.controlPlaneUrl === undefined) {
+      return new Response("This runner host needs a secret and a pinned control plane URL to accept wake requests", { status: 503 })
+    }
+    if (!secretsEqual(request.headers.get("authorization") ?? "", `Bearer ${this.options.secret}`)) {
       return new Response("Unauthorized", { status: 401 })
     }
     let wake: WakeRequest

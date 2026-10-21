@@ -1,5 +1,6 @@
 import { createHost, type Host, type Ref, type WebSocketLike, webSocketLink } from "@earendil-works/chord"
 import { ConversationObject, type Principal, principalKey, SessionObject, SessionsObject } from "@pi-cloud/protocol"
+import { authorization } from "./auth.ts"
 import type { ClientOptions } from "./index.ts"
 
 /** A live connection to the service API (`Services.ts` in `@pi-cloud/protocol`). */
@@ -74,7 +75,6 @@ export const follow = async <R extends { onStatus: Ref<any>["onStatus"]; release
 export const connectServices = async (options: ClientOptions): Promise<ServiceConnection> => {
   const url = new URL("/v1/pi", options.url)
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:"
-  if (options.apiKey !== undefined) url.searchParams.set("token", options.apiKey)
 
   const host = createHost<Principal>({ self: { kind: "client" }, principalKey, kind: "client" })
   let closing = false
@@ -82,7 +82,8 @@ export const connectServices = async (options: ClientOptions): Promise<ServiceCo
   /** Open a socket and make it the host's upstream link; a dropped socket is replaced after a pause. */
   const open = () =>
     new Promise<void>((resolve, reject) => {
-      const socket = new WebSocket(url)
+      // The key goes in the `Authorization` header (Node's and Bun's clients send it), never in the URL.
+      const socket = new WebSocket(url, { headers: authorization(options.apiKey) } as never)
       socket.binaryType = "arraybuffer"
       let opened = false
       socket.addEventListener("open", () => {

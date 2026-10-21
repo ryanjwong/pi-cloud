@@ -43,11 +43,16 @@ export const ModelCredentials = Config.all(
 
 /**
  * Settings of the Cloudflare deployment, one Worker hosting the control plane and the runners, read from its
- * bindings (`wrangler secret put` for the secrets).
+ * bindings (`wrangler secret put` for the secrets). A Worker is public by definition, so every secret that guards it
+ * is required: API keys for clients, the runner secret for the internal channel, and the key credentials are sealed
+ * with. Without them the deployment answers nothing but 503.
  */
 export const CloudflareEnv = Config.all({
-  apiKeys: secretList("PI_CLOUD_API_KEYS"),
-  credentialKey: Config.option(Config.Redacted("PI_CLOUD_CREDENTIAL_KEY")),
+  apiKeys: Config.Redacted("PI_CLOUD_API_KEYS").pipe(
+    Config.map((value) => Redacted.value(value).split(",").map((item) => item.trim()).filter(Boolean).map((item) => Redacted.make(item)))
+  ),
+  runnerSecret: Config.Redacted("PI_CLOUD_RUNNER_SECRET"),
+  credentialKey: Config.Redacted("PI_CLOUD_CREDENTIAL_KEY"),
   modelCredentials: ModelCredentials
 })
 export type CloudflareEnv = Config.Success<typeof CloudflareEnv>

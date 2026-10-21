@@ -12,8 +12,20 @@ import { connectors } from "./connectors.ts"
 import { load } from "./env.ts"
 
 const env = await load(ControlPlaneEnv)
-const runnerUrl = Option.getOrThrowWith(env.runnerUrl, () => new Error("Set RUNNER_URL to the runner host's wake endpoint"))
-const runnerSecret = Option.getOrUndefined(Option.map(env.runnerSecret, Redacted.value))
+// A control plane alone is networked by definition: it never starts open, unauthenticated to runners, or with
+// credentials stored unsealed.
+const missing = [
+  ...(Option.isNone(env.runnerUrl) ? ["RUNNER_URL"] : []),
+  ...(env.apiKeys.length === 0 ? ["PI_CLOUD_API_KEYS"] : []),
+  ...(Option.isNone(env.runnerSecret) ? ["PI_CLOUD_RUNNER_SECRET"] : []),
+  ...(Option.isNone(env.credentialKey) ? ["PI_CLOUD_CREDENTIAL_KEY"] : [])
+]
+if (missing.length > 0) {
+  console.error(`Set ${missing.join(", ")} to run the control plane on its own.`)
+  process.exit(1)
+}
+const runnerUrl = Option.getOrThrow(env.runnerUrl)
+const runnerSecret = Redacted.value(Option.getOrThrow(env.runnerSecret))
 const dataDir = resolve(env.dataDir)
 
 Layer.launch(serve({

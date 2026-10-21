@@ -98,8 +98,8 @@ plugin). Every surface reads the same Pi agent events (`message_start`, `message
 
 - **WebSocket channel**, `GET /v1/sessions/{id}/channel`: send `{"_tag":"Command","id","command"}`, receive
   `{"_tag":"Events","batch"}` and `{"_tag":"Result","id","result"}` on the same socket. This is what interactive
-  surfaces (TUIs, web UIs, chat bridges) use. Resume with `?after=<epoch>:<seq>`; authenticate with a bearer header
-  or `?token=`.
+  surfaces (TUIs, web UIs, chat bridges) use. Resume with `?after=<epoch>:<seq>`; authenticate with the
+  `Authorization: Bearer` header (keys are never accepted in URLs, which proxies and logs keep).
 - **REST**: `POST /v1/sessions/{id}/commands` runs any command; `/messages` and `/abort` are shortcuts.
   `GET /v1/sessions/{id}/events` streams events as server-sent events. Transcript and submission reads come
   straight from the state store, with or without a running runner.
@@ -231,11 +231,30 @@ sops exec-env secrets.yaml 'litestream replicate -config litestream.yml -exec "p
 
 ```sh
 cd apps/cloudflare
-pnpm exec wrangler secret put PI_CLOUD_API_KEYS          # and PI_CLOUD_CREDENTIAL_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY
+pnpm exec wrangler secret put PI_CLOUD_API_KEYS          # required, as are PI_CLOUD_RUNNER_SECRET and PI_CLOUD_CREDENTIAL_KEY
+pnpm exec wrangler secret put ANTHROPIC_API_KEY          # and OPENAI_API_KEY, ...
 pnpm run deploy                                          # wrangler deploy
 pnpm run dev                                             # the same, in a local workerd
 PI_CLOUD_URL=https://pi-cloud.<you>.workers.dev pi-cloud # Pi's TUI against it
 ```
+
+## Security
+
+pi-cloud fails closed: anything reachable from another machine refuses to start, or to answer, without its secrets.
+
+| Surface | Guarded by | Without it |
+| --- | --- | --- |
+| Public API (REST, `/v1/pi`, the channel) | `PI_CLOUD_API_KEYS`, as `Authorization: Bearer` | all-in-one on loopback: open; on any other `HOST`: refuses to start; split control plane and Cloudflare: refuse |
+| Runner RPC (`/internal/runner`: session state, stored credentials) | `PI_CLOUD_RUNNER_SECRET`, checked on every call | all-in-one: a random secret per start; split and Cloudflare: refuse |
+| Runner wake endpoint | the runner secret, and a pinned `CONTROL_PLANE_URL` | refuses every wake (503), so a forged wake can never send a runner, with its model keys and sandbox secrets, to another control plane |
+| Stored model credentials | `PI_CLOUD_CREDENTIAL_KEY` (AES-256-GCM) | all-in-one on loopback: stored as plain JSON; everywhere else: refuses |
+| Cloudflare's runner RPC | not routed at all: the Worker forwards an allowlist of public paths (`/v1/...`, `/health`, `/docs`, `/openapi.json`, no `%` or `//`), and session objects call the control plane object directly, with the runner secret | the Worker answers 503 until all three secrets are set |
+
+Secrets are compared in constant time. A session's runner can reach only its own session's host through the
+service API, and not the session directory. Generate secrets with `openssl rand -base64 32`, keep them in
+`secrets.yaml` (SOPS) or `wrangler secret put`, never in `.env` or `.dev.vars` (both are gitignored for local
+experiments). Browser UIs cannot set headers on a WebSocket: serve them from the same origin behind a proxy that adds
+the key.
 
 ## Credentials
 
@@ -459,5 +478,5 @@ renderer; a web UI or Slack bot is another renderer over `followEvents`.
   names containing newlines are not listed correctly. `shellEnv` passes Pi Durable's environment conformance suite
   over a local shell; the Daytona provider is tested against a stand-in for its API, not the live service.
 - **Not yet built:** a Postgres state store, a shared lease manager, E2B, Modal and Cloudflare sandbox providers,
-  and real authentication (today: static API keys and a shared runner secret). The local sandbox provider has no
+  and per-user authentication (today: static API keys and a shared runner secret, see Security). The local sandbox provider has no
   isolation; use `docker` or `daytona` for code you do not trust. Pi Durable is experimental, so pin versions.

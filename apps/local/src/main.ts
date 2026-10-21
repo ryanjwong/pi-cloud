@@ -7,13 +7,25 @@ import { join, resolve } from "node:path"
 import { connectors } from "./connectors.ts"
 import { memoryReplica } from "@pi-cloud/runner/node"
 import { load } from "./env.ts"
-import { startLocal } from "./index.ts"
+import { isLoopback, startLocal } from "./index.ts"
 import { defaultPlugins } from "./plugins.ts"
 
 const control = await load(ControlPlaneEnv)
 const runner = await load(RunnerEnv)
 const dataDir = resolve(control.dataDir)
 const secret = (value: Option.Option<Redacted.Redacted<string>>) => Option.getOrUndefined(Option.map(value, Redacted.value))
+
+// On loopback only this machine can connect; anywhere else, refuse to start open or with credentials unsealed.
+if (!isLoopback(control.host)) {
+  const missing = [
+    ...(control.apiKeys.length === 0 ? ["PI_CLOUD_API_KEYS"] : []),
+    ...(Option.isNone(control.credentialKey) ? ["PI_CLOUD_CREDENTIAL_KEY"] : [])
+  ]
+  if (missing.length > 0) {
+    console.error(`HOST=${control.host} is reachable from other machines: set ${missing.join(" and ")} (or listen on 127.0.0.1).`)
+    process.exit(1)
+  }
+}
 
 const deployment = await startLocal({
   port: control.port,

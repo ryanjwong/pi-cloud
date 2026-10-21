@@ -1,4 +1,4 @@
-import { ApiAuth, Unauthorized } from "@pi-cloud/protocol"
+import { ApiAuth, secretsEqual, Unauthorized } from "@pi-cloud/protocol"
 import { Context, Effect, Layer, Redacted } from "effect"
 
 /** Authenticates runners calling the internal RPC. */
@@ -9,7 +9,7 @@ export class RunnerAuth extends Context.Service<RunnerAuth, {
   static readonly sharedSecret = (secret: string | undefined): Layer.Layer<RunnerAuth> =>
     Layer.succeed(RunnerAuth, {
       check: (headers) =>
-        secret === undefined || headers["authorization"] === `Bearer ${secret}`
+        secret === undefined || secretsEqual(headers["authorization"] ?? "", `Bearer ${secret}`)
           ? Effect.void
           : Effect.fail(new Unauthorized({ message: "Invalid runner credentials" }))
     })
@@ -26,7 +26,9 @@ export class ClientAuth extends Context.Service<ClientAuth, {
   static readonly apiKeys = (keys: ReadonlyArray<string> | undefined): Layer.Layer<ClientAuth> =>
     Layer.succeed(ClientAuth, {
       check: (token) =>
-        keys === undefined || keys.length === 0 || (token !== undefined && keys.includes(token))
+        keys === undefined || keys.length === 0 ||
+          // Every key is compared, so the time taken does not reveal which one matched.
+          (token !== undefined && keys.reduce((matched, key) => secretsEqual(token, key) || matched, false))
           ? Effect.void
           : Effect.fail(new Unauthorized({ message: "Missing or invalid API key" }))
     })

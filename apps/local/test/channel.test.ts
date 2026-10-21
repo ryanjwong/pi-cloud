@@ -69,15 +69,23 @@ describe("session channel", () => {
 
   it("refuses channels without a valid key", async () => {
     deployment = await startLocal({ port: 41_000 + Math.floor(Math.random() * 10_000), apiKeys: ["key-1"], runner: { plugins: [] } })
-    const outcome = (token: string) =>
+    const session = await fetch(`${deployment.url}/v1/sessions`, {
+      method: "POST",
+      headers: { authorization: "Bearer key-1", "content-type": "application/json" },
+      body: "{}"
+    }).then((response) => response.json()) as { id: string }
+    const outcome = (query: string, headers: Record<string, string> = {}) =>
       new Promise<string>((resolve) => {
-        const socket = new WebSocket(`${deployment!.url.replace("http", "ws")}/v1/sessions/whatever/channel?token=${token}`)
+        const socket = new WebSocket(`${deployment!.url.replace("http", "ws")}/v1/sessions/${session.id}/channel${query}`, { headers } as never)
         socket.onopen = () => {
           socket.close()
           resolve("open")
         }
         socket.onerror = () => resolve("refused")
       })
-    expect(await outcome("wrong")).toBe("refused")
+    expect(await outcome("", { authorization: "Bearer wrong" })).toBe("refused")
+    // Keys travel in the Authorization header only, never in URLs, where proxies and logs keep them.
+    expect(await outcome("?token=key-1")).toBe("refused")
+    expect(await outcome("", { authorization: "Bearer key-1" })).toBe("open")
   })
 })

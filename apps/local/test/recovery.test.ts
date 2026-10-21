@@ -71,13 +71,13 @@ describe("crash recovery", () => {
   }, 30_000)
 
   it("fences writes from a runner that lost its lease", async () => {
-    deployment = await startLocal({ port: port(), settings, runner: { plugins: [] } })
+    deployment = await startLocal({ port: port(), settings, runnerSecret: "test-runner-secret", runner: { plugins: [] } })
     const local = deployment
 
     const program = Effect.gen(function*() {
       const api = yield* PiCloud
       const session = yield* api.sessions.create({ payload: {} })
-      const rpc = yield* makeClient({ url: local.url })
+      const rpc = yield* makeClient({ url: local.url, secret: "test-runner-secret" })
       const first = yield* firstLease(rpc, session.id, "stale-runner")
       // A second runner cannot take a live lease.
       const held = yield* Effect.exit(firstLease(rpc, session.id, "eager-runner"))
@@ -99,13 +99,13 @@ describe("crash recovery", () => {
 
 describe("runner reconnects", () => {
   it("delivers commands to a runner's newest connection and ends the old one", async () => {
-    deployment = await startLocal({ port: port(), settings, runner: { plugins: [] } })
+    deployment = await startLocal({ port: port(), settings, runnerSecret: "test-runner-secret", runner: { plugins: [] } })
     const local = deployment
 
     const program = Effect.gen(function*() {
       const api = yield* PiCloud
       const session = yield* api.sessions.create({ payload: {} })
-      const rpc = yield* makeClient({ url: local.url })
+      const rpc = yield* makeClient({ url: local.url, secret: "test-runner-secret" })
 
       // First connection: take the lease, then keep reading until the stream ends.
       const firstMessages: Array<string> = []

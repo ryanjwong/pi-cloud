@@ -22,8 +22,8 @@ const resultOf = (error: CommandError): CommandResult => {
 
 /**
  * `GET /v1/sessions/{id}/channel`: the session channel, a WebSocket carrying `ChannelRequest`s in and
- * `ChannelMessage`s out. Authenticates with `Authorization: Bearer <key>` or, for browsers that cannot set
- * WebSocket headers, `?token=<key>`. Resume from a known position with `?after=<epoch>:<seq>`.
+ * `ChannelMessage`s out. Authenticates with `Authorization: Bearer <key>` only: a key in the URL would end up in
+ * proxy and request logs. Resume from a known position with `?after=<epoch>:<seq>`.
  */
 export const ChannelRoute = Layer.effectDiscard(Effect.gen(function*() {
   const router = yield* HttpRouter.HttpRouter
@@ -35,7 +35,7 @@ export const ChannelRoute = Layer.effectDiscard(Effect.gen(function*() {
     const { id } = yield* HttpRouter.params
     const url = new URL(request.url, "http://localhost")
     const bearer = request.headers["authorization"]?.replace(/^Bearer\s+/i, "")
-    const authorized = yield* auth.check(bearer ?? url.searchParams.get("token") ?? undefined).pipe(
+    const authorized = yield* auth.check(bearer).pipe(
       Effect.as(true),
       Effect.orElseSucceed(() => false)
     )

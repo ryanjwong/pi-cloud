@@ -1,4 +1,4 @@
-import { createHost, type Host, invalid, replicatedState, type WebSocketLike, webSocketLink } from "@earendil-works/chord"
+import { createHost, forbidden, type Host, invalid, replicatedState, type WebSocketLike, webSocketLink } from "@earendil-works/chord"
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context"
 import { SessionStore } from "@pi-cloud/core"
 import {
@@ -70,7 +70,9 @@ export class ServiceHost extends EffectContext.Service<ServiceHost, {
     }
     yield* Effect.promise(refresh).pipe(Effect.ignore, Effect.repeat(Schedule.spaced(1_000)), Effect.forkScoped)
 
-    host.serve(SessionsObject, (_input, _principal, self) => {
+    host.serve(SessionsObject, (_input, principal, self) => {
+      // The directory is for presentations; a session's runner has no business creating or removing sessions.
+      if (principal.kind === "runner") throw forbidden("Runners cannot use the session directory")
       const list = self.state("sessions", Anything, { init: () => directory.value.list })
       self.on("sessions", directory, (value, ctx) => list.replace(ctx, value.list))
       return {
@@ -106,9 +108,8 @@ export class ServiceHost extends EffectContext.Service<ServiceHost, {
     // ----- Presentations: one Chord link per WebSocket, as clients.
     yield* router.add("GET", SERVICES_PATH, Effect.gen(function*() {
       const request = yield* HttpServerRequest.HttpServerRequest
-      const url = new URL(request.url, "http://localhost")
       const bearer = request.headers["authorization"]?.replace(/^Bearer\s+/i, "")
-      const authorized = yield* auth.check(bearer ?? url.searchParams.get("token") ?? undefined).pipe(
+      const authorized = yield* auth.check(bearer).pipe(
         Effect.as(true),
         Effect.orElseSucceed(() => false)
       )

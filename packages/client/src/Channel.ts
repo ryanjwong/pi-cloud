@@ -6,8 +6,9 @@ import {
   type EventBatch,
   type SessionCommand
 } from "@pi-cloud/protocol"
-import { type Cause, Deferred, Effect, Queue, Schema, type Scope, Stream } from "effect"
+import { type Cause, Deferred, Effect, Layer, Queue, Schema, type Scope, Stream } from "effect"
 import { Socket } from "effect/socket"
+import { authorization } from "./auth.ts"
 import type { ClientOptions } from "./index.ts"
 
 /** A live, two-way connection to one session. */
@@ -22,8 +23,9 @@ const decode = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelMessage))
 const textDecoder = new TextDecoder()
 
 /**
- * Open the session channel (`GET /v1/sessions/{id}/channel`). The connection lives as long as the scope; the API
- * key travels as `?token=` because WebSocket clients cannot always set headers.
+ * Open the session channel (`GET /v1/sessions/{id}/channel`). The connection lives as long as the scope. The API key
+ * travels in the `Authorization` header (Node's and Bun's WebSocket clients send it), never in the URL, where
+ * proxies and request logs would keep it.
  */
 export const openChannel = (
   options: ClientOptions & { readonly sessionId: string; readonly after?: string | undefined }
@@ -31,11 +33,11 @@ export const openChannel = (
   Effect.gen(function*() {
     const url = new URL(channelPath(options.sessionId), options.url)
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:"
-    if (options.apiKey !== undefined) url.searchParams.set("token", options.apiKey)
     if (options.after !== undefined) url.searchParams.set("after", options.after)
 
+    const headers = authorization(options.apiKey)
     const socket = yield* Socket.makeWebSocket(url.toString()).pipe(
-      Effect.provide(Socket.layerWebSocketConstructorGlobal)
+      Effect.provide(Layer.succeed(Socket.WebSocketConstructor, (target) => new globalThis.WebSocket(target, { headers } as never) as never))
     )
     const writer = yield* socket.writer
     const reader = yield* socket.reader

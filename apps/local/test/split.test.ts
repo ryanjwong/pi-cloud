@@ -34,7 +34,14 @@ describe("split deployment", () => {
     const faux = fauxProvider()
     faux.setResponses([fauxAssistantMessage("answered by a remote runner")])
 
-    const runners = new RunnerHost({ plugins: [modelProviders(faux.provider)], secret, idleMs: 2_000 })
+    // A runner host without a secret and a pinned control plane accepts no wake requests at all.
+    const open = new RunnerHost({ plugins: [] })
+    const wake = (headers: Record<string, string> = {}) =>
+      new Request("http://runner/wake", { method: "POST", headers, body: JSON.stringify({ sessionId: "x", controlPlaneUrl: "http://evil.example" }) })
+    expect((await open.handler(wake({ authorization: "Bearer anything" }))).status).toBe(503)
+    expect((await new RunnerHost({ plugins: [], secret }).handler(wake({ authorization: `Bearer ${secret}` }))).status).toBe(503)
+
+    const runners = new RunnerHost({ plugins: [modelProviders(faux.provider)], secret, controlPlaneUrl: controlUrl, idleMs: 2_000 })
     const runnerServer = await serveFetch(base + 1, runners.handler)
 
     // An unauthenticated wake is refused.
@@ -43,9 +50,16 @@ describe("split deployment", () => {
       body: JSON.stringify({ sessionId: "x", controlPlaneUrl: controlUrl })
     })
     expect(refused.status).toBe(401)
+    const wrong = await fetch(`http://127.0.0.1:${base + 1}/wake`, {
+      method: "POST",
+      headers: { authorization: "Bearer not-the-secret" },
+      body: JSON.stringify({ sessionId: "x", controlPlaneUrl: controlUrl })
+    })
+    expect(wrong.status).toBe(401)
 
     const control = Effect.runFork(Layer.launch(HttpRouter.serve(ControlPlane.layer({
       settings: { publicUrl: controlUrl },
+      apiKeys: ["client-key"],
       runnerSecret: secret,
       dispatcher: RunnerDispatcher.http({ url: `http://127.0.0.1:${base + 1}/wake`, secret }).pipe(
         Layer.provide(FetchHttpClient.layer)
@@ -55,9 +69,19 @@ describe("split deployment", () => {
     )))
 
     try {
+      await new Promise((resolve) => setTimeout(resolve, 300))
+      // Without the runner secret, the runner RPC answers nothing: no session state, no stored credentials.
+      for (const authorization of [undefined, "Bearer wrong", "Bearer client-key"]) {
+        const response = await fetch(`${controlUrl}/internal/runner`, {
+          method: "POST",
+          headers: { "content-type": "application/ndjson", ...(authorization === undefined ? {} : { authorization }) },
+          body: `${JSON.stringify({ _tag: "Request", id: "1", tag: "CredentialList", payload: { sessionId: "x", token: "y" }, headers: [] })}\n`
+        })
+        const body = await response.text()
+        expect(body, authorization).toContain("Invalid runner credentials")
+      }
       await Effect.runPromise(Effect.gen(function*() {
         const client = yield* PiCloud
-        yield* Effect.sleep(300)
         const session = yield* client.sessions.create({ payload: { spec: { model: { provider: "faux", modelId: "faux-1" } } } })
         const submitted = yield* client.sessions.submit({ params: { id: session.id }, payload: { content: "hi" } })
         while (true) {
@@ -70,7 +94,7 @@ describe("split deployment", () => {
         const { entries } = yield* client.sessions.entries({ params: { id: session.id }, query: {} })
         expect(entries.map((entry) => entryText(entry as never))).toContain("answered by a remote runner")
         expect(runners.hosted()).toContain(session.id)
-      }).pipe(Effect.provide(PiCloud.layer({ url: controlUrl }))))
+      }).pipe(Effect.provide(PiCloud.layer({ url: controlUrl, apiKey: "client-key" }))))
     } finally {
       await runners.close()
       runnerServer.close()

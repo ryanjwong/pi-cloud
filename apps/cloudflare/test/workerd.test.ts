@@ -8,12 +8,16 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest"
 
 const port = 46_000 + Math.floor(Math.random() * 2_000)
 const url = `http://127.0.0.1:${port}`
+const apiKey = "test-api-key"
+const auth = { authorization: `Bearer ${apiKey}` }
 let state: string
 let wrangler: ChildProcess | undefined
 
 /** The Worker in a local workerd, with its Durable Objects' SQLite in `state`. */
 const start = async () => {
-  wrangler = spawn("npx", ["wrangler", "dev", "--port", String(port), "--ip", "127.0.0.1", "--persist-to", state], {
+  wrangler = spawn("npx", ["wrangler", "dev", "--port", String(port), "--ip", "127.0.0.1", "--persist-to", state,
+    "--var", `PI_CLOUD_API_KEYS:${apiKey}`, "--var", "PI_CLOUD_RUNNER_SECRET:test-runner-secret", "--var",
+    `PI_CLOUD_CREDENTIAL_KEY:${"k".repeat(32)}`], {
     cwd: join(import.meta.dirname, ".."),
     env: { ...process.env, WRANGLER_SEND_METRICS: "false", CI: "1" },
     stdio: "ignore",
@@ -44,7 +48,11 @@ const entries = (view: unknown) => (view as ConversationView).entries.map((entry
 
 describe("pi-cloud on Cloudflare (local workerd)", () => {
   it("runs sessions in their own objects against the control plane's central store, across restarts", async () => {
-    const connection = await connectServices({ url })
+    // Without an API key, nothing.
+    expect((await fetch(`${url}/v1/sessions`)).status).toBe(401)
+    expect((await fetch(`${url}/v1/pi`)).status).toBe(401)
+
+    const connection = await connectServices({ url, apiKey })
     const created = await (await connection.sessions()).create({ title: "on cloudflare", spec: {} })
     // The first reference wakes the session's object, which takes the lease, loads its replica and links back.
     const main = await connection.conversation(created.id)
@@ -56,21 +64,23 @@ describe("pi-cloud on Cloudflare (local workerd)", () => {
     main.release()
     await connection.close()
 
-    // The runner RPC is not public.
-    expect((await fetch(`${url}/internal/runner/`, { method: "POST" })).status).toBe(404)
+    // The runner RPC is not public, however its path is spelled.
+    for (const path of ["/internal/runner/", "//internal/runner/", "/%69nternal/runner/", "/v1/../internal/runner/", "/v1/%2e%2e/internal/runner/", "/v1%2F..%2Finternal/runner/"]) {
+      expect((await fetch(`${url}${path}`, { method: "POST", headers: auth })).status, path).toBe(404)
+    }
 
     // Everything is in the control plane object's SQLite: a fresh runtime has the session, and a fresh session
     // object continues it from a copy.
     await stop()
     await start()
-    const listed = await fetch(`${url}/v1/sessions`).then((response) => response.json()) as Array<{ id: string; title?: string }>
+    const listed = await fetch(`${url}/v1/sessions`, { headers: auth }).then((response) => response.json()) as Array<{ id: string; title?: string }>
     expect(listed.find((session) => session.id === created.id)?.title).toBe("on cloudflare")
-    const again = await connectServices({ url })
+    const again = await connectServices({ url, apiKey })
     const resumed = await again.conversation(created.id)
     const second = await resumed.prompt({ message: "second prompt" })
     if (second.accepted) await resumed.waitForPrompt({ operationId: second.operationId })
     expect(entries(resumed.view.value)).toEqual(["pi.user", "pi.user"])
-    const rest = await fetch(`${url}/v1/sessions/${created.id}/entries?limit=100`).then((response) => response.json()) as { entries: Array<{ kind: string }> }
+    const rest = await fetch(`${url}/v1/sessions/${created.id}/entries?limit=100`, { headers: auth }).then((response) => response.json()) as { entries: Array<{ kind: string }> }
     expect(rest.entries.map((entry) => entry.kind)).toEqual(["pi.user", "pi.user"])
     resumed.release()
     await again.close()

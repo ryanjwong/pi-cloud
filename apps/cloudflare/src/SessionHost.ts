@@ -6,6 +6,7 @@ import { DurableObjectSqliteDatabase } from "@earendil-works/pi-durable/storage/
 import { modelCredentialLookup } from "@pi-cloud/config"
 import type { WakeRequest } from "@pi-cloud/protocol"
 import { modelProviders, type ReplicaDatabase, RunnerHost } from "@pi-cloud/runner"
+import { Redacted } from "effect"
 import { CONTROL_PLANE, type Env, INTERNAL_URL, settings } from "./env.ts"
 
 /** How often a busy host re-arms its alarm. Each alarm is an event, which keeps the object resident. */
@@ -36,6 +37,7 @@ export class SessionHost extends DurableObject<Env> {
     const controlPlane = this.env.CONTROL_PLANE.getByName(CONTROL_PLANE)
     return new RunnerHost({
       controlPlaneUrl: INTERNAL_URL,
+      secret: Redacted.value(env.runnerSecret),
       // Straight to the control plane object, never over the public internet.
       fetch: ((input: RequestInfo | URL, init?: RequestInit) => controlPlane.fetch(new Request(input, init) as never)) as unknown as typeof fetch,
       modelCredentials: modelCredentialLookup(env),
