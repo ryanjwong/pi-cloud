@@ -9,8 +9,13 @@ export interface GithubThread {
 }
 
 export interface GithubToolsOptions {
-  /** A token that may comment and open pull requests on the repositories the agent works on. */
-  readonly token: string
+  /**
+   * A token that may comment and open pull requests on the repositories the agent works on, used when the session
+   * has no `credential` of its own (a GitHub App token the control plane issues it, see `@pi-cloud/github-app`).
+   */
+  readonly token?: string
+  /** The secret name to ask the session for. Default `GITHUB_TOKEN`. */
+  readonly credential?: string
   /** REST API base URL; override for GitHub Enterprise or tests. */
   readonly apiUrl?: string
 }
@@ -26,7 +31,9 @@ export const threadOf = (metadata: Readonly<Record<string, unknown>> | undefined
 }
 
 /**
- * GitHub tools, run by the runner itself (not inside a sandbox, so the token stays out of the agent's reach):
+ * GitHub tools, run by the runner itself (not inside a sandbox, so the token stays out of the agent's reach). The
+ * token is the session's `GITHUB_TOKEN` (with a GitHub App: an installation token for the session's repository,
+ * refreshed as it expires), else `options.token`. Sessions with neither get no GitHub tools.
  *
  * - `github_comment` comments on an issue or pull request; in a session started by the GitHub trigger it
  *   defaults to that thread, which is how the agent answers the people who mentioned it.
@@ -35,16 +42,22 @@ export const threadOf = (metadata: Readonly<Record<string, unknown>> | undefined
 export const githubTools = (options: GithubToolsOptions): RunnerPlugin =>
   definePlugin({
     name: "github",
-    setup: ({ session }) => {
+    setup: async ({ session, secrets }) => {
       const apiUrl = options.apiUrl ?? "https://api.github.com"
       const thread = threadOf(session.spec.metadata)
+      const credential = options.credential ?? "GITHUB_TOKEN"
+      const token = async () => (await secrets(credential)) ?? options.token
+      // A token that could not be issued just now (GitHub unreachable) still means the session has one.
+      if ((await token().catch(() => "unavailable")) === undefined) return {}
 
       const request = async (method: string, path: string, body: unknown) => {
+        const current = await token()
+        if (current === undefined) throw new Error("No GitHub token is available to this session")
         const response = await fetch(`${apiUrl}${path}`, {
           method,
           headers: {
             accept: "application/vnd.github+json",
-            authorization: `Bearer ${options.token}`,
+            authorization: `Bearer ${current}`,
             "content-type": "application/json",
             "user-agent": "pi-cloud",
             "x-github-api-version": "2022-11-28"

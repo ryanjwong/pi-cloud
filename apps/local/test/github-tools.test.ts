@@ -192,3 +192,118 @@ describe("repository sandboxes", () => {
     }).pipe(Effect.provide(PiCloud.layer({ url: deployment.url }))))
   }, 30_000)
 })
+
+describe("GitHub App", () => {
+  it("gives a session hour-long tokens for its own repository, refreshed for tools and sandboxes, never seen by the model", async () => {
+    root = await mkdtemp(join(tmpdir(), "pi-cloud-app-"))
+    const origin = join(root, "origin")
+    execFileSync("git", ["init", "--quiet", "-b", "main", origin])
+    await writeFile(join(origin, "README.md"), "hello\n")
+    execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "add", "."], { cwd: origin })
+    execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "--quiet", "-m", "init"], { cwd: origin })
+
+    // GitHub: the App's endpoints, minting tokens that expire within the runner's refresh margin, and the REST API.
+    const issued: Array<{ token: string; repositories: Array<string> }> = []
+    const comments: Array<string | undefined> = []
+    api = createServer((request, response) => {
+      let body = ""
+      request.on("data", (chunk) => (body += chunk))
+      request.on("end", () => {
+        const reply = (status: number, value: unknown) => {
+          response.writeHead(status, { "content-type": "application/json" })
+          response.end(JSON.stringify(value))
+        }
+        if (request.url === "/repos/acme/api/installation") return reply(200, { id: 9 })
+        if (request.url === "/app/installations/9/access_tokens") {
+          const token = `ghs_app_${issued.length + 1}`
+          issued.push({ token, repositories: JSON.parse(body).repositories })
+          return reply(201, { token, expires_at: new Date(Date.now() + 60_000).toISOString() })
+        }
+        if (request.url === "/repos/acme/api/issues/7/comments") {
+          comments.push(request.headers.authorization)
+          return reply(201, { html_url: "https://github.com/acme/api/issues/7#c2" })
+        }
+        reply(404, { message: "Not Found" })
+      })
+    })
+    await new Promise<void>((resolve) => api!.listen(0, "127.0.0.1", resolve))
+    const githubUrl = `http://127.0.0.1:${(api.address() as AddressInfo).port}`
+    const { privateKey } = (await import("node:crypto")).generateKeyPairSync("rsa", { modulusLength: 2048 })
+    const { githubApp, githubAppTokens } = await import("@pi-cloud/github-app")
+    const { SessionSecrets } = await import("@pi-cloud/core")
+
+    const faux = fauxProvider()
+    let prompts = ""
+    const reversed = "printf %s \"$GITHUB_TOKEN\" | rev; echo; printf 'protocol=https\\nhost=github.com\\n\\n' | git credential fill"
+    faux.setResponses([
+      (context) => {
+        prompts += JSON.stringify(context)
+        return toolUse("github_comment", { body: "On it" })
+      },
+      toolUse("bash", { command: reversed }),
+      toolUse("bash", { command: reversed }),
+      (context) => {
+        prompts += JSON.stringify(context)
+        return fauxAssistantMessage("Done")
+      }
+    ])
+    deployment = await startLocal({
+      port: port(),
+      sessionSecrets: SessionSecrets.issuers(githubAppTokens(githubApp({
+        appId: "1",
+        privateKey: privateKey.export({ type: "pkcs1", format: "pem" }).toString(),
+        apiUrl: githubUrl
+      }))),
+      runner: {
+        idleMs: 5_000,
+        // The runner has no GitHub token of its own.
+        plugins: [
+          modelProviders(faux.provider),
+          extensions("coding", CodingTools),
+          githubTools({ apiUrl: githubUrl }),
+          sandboxes({ providers: [localSandboxes({ root: join(root, "sandboxes") })] })
+        ]
+      }
+    })
+
+    await Effect.runPromise(Effect.gen(function*() {
+      const client = yield* PiCloud
+      const session = yield* client.sessions.create({
+        payload: {
+          spec: {
+            model: { provider: "faux", modelId: "faux-1" },
+            metadata: { github: { repository: "acme/api", number: 7 } },
+            sandbox: "repo",
+            sandboxes: { repo: { provider: "local", repository: { url: `file://${origin}`, credential: "GITHUB_TOKEN" } } }
+          }
+        }
+      })
+      yield* client.sessions.submit({ params: { id: session.id }, payload: { content: "Go" } })
+      const entries = yield* Effect.promise(() =>
+        waitFor(async () => {
+          const { entries } = await Effect.runPromise(client.sessions.entries({ params: { id: session.id }, query: { limit: 1000 } }))
+          return entries.some((entry: any) => entry.kind === "pi.assistant" && entryText(entry) === "Done") ? entries : undefined
+        })
+      )
+      const results = entries.filter((entry: any) => entry.kind === "pi.tool-result").map((entry) => entryText(entry as never))
+
+      // Every token was for the session's repository only.
+      expect(issued.length).toBeGreaterThanOrEqual(3)
+      expect(issued.every((token) => JSON.stringify(token.repositories) === '["api"]')).toBe(true)
+      // The comment went out with an App token.
+      expect(comments).toHaveLength(1)
+      expect(issued.map((token) => `Bearer ${token.token}`)).toContain(comments[0])
+      // Each command saw a token issued for it (tokens rotate faster than the runner's refresh margin here).
+      const seen = results.slice(1).map((result) => result.split("\n")[0]!.split("").reverse().join(""))
+      expect(seen[0]).toMatch(/^ghs_app_\d+$/)
+      expect(seen[1]).toMatch(/^ghs_app_\d+$/)
+      expect(seen[0]).not.toBe(seen[1])
+      expect(results[1]).toContain("password=[secret:GITHUB_TOKEN]")
+      // No token reaches the transcript or the model.
+      for (const { token } of issued) {
+        expect(JSON.stringify(entries)).not.toContain(token)
+        expect(prompts).not.toContain(token)
+      }
+    }).pipe(Effect.provide(PiCloud.layer({ url: deployment.url }))))
+  }, 30_000)
+})

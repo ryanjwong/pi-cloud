@@ -1,0 +1,15 @@
+{
+  "name": "@pi-cloud/github-app",
+  "version": "0.1.0",
+  "description": "GitHub App authentication for pi-cloud: the control plane mints short-lived installation tokens scoped to each session's repository.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@pi-cloud/protocol": "workspace:*"
+  },
+  "scripts": {
+    "test": "vitest run"
+  }
+}

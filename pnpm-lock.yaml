@@ -103,6 +103,9 @@ importers:
       '@pi-cloud/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@pi-cloud/github-app':
+        specifier: workspace:*
+        version: link:../../packages/github-app
       '@pi-cloud/pi':
         specifier: workspace:*
         version: link:../../packages/pi
@@ -232,6 +235,12 @@ importers:
       effect:
         specifier: 4.0.2
         version: 4.0.2
+
+  packages/github-app:
+    dependencies:
+      '@pi-cloud/protocol':
+        specifier: workspace:*
+        version: link:../protocol
 
   packages/pi:
     dependencies:

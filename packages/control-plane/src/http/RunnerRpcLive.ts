@@ -1,8 +1,8 @@
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context"
 import type { Storage } from "@earendil-works/pi-durable"
-import { RunnerRpcs, type StorageMethod } from "@pi-cloud/protocol"
+import { RunnerRpcs, type SessionId, type StorageMethod } from "@pi-cloud/protocol"
 import { Effect, Option, Semaphore, Stream } from "effect"
-import { ControlPlaneConfig, CredentialStore, EventHub, LeaseManager, StateStore, storageFailure } from "@pi-cloud/core"
+import { ControlPlaneConfig, CredentialStore, EventHub, LeaseManager, SessionSecrets, SessionStore, StateStore, storageFailure } from "@pi-cloud/core"
 import { Runners } from "../Runners.ts"
 import { toJson } from "../Sessions.ts"
 import { RunnerAuth } from "./Auth.ts"
@@ -23,6 +23,8 @@ export const RunnerRpcLive = RunnerRpcs.toLayer(Effect.gen(function*() {
   const auth = yield* RunnerAuth
   const config = yield* ControlPlaneConfig
   const credentials = yield* CredentialStore
+  const sessionSecrets = yield* SessionSecrets
+  const store = yield* SessionStore
 
   /** Recent commits per session by request id, so a retried commit returns its first result instead of applying again. */
   const commits = new Map<string, Map<string, unknown>>()
@@ -85,6 +87,19 @@ export const RunnerRpcLive = RunnerRpcs.toLayer(Effect.gen(function*() {
         yield* auth.check(headers).pipe(Effect.orDie)
         yield* leases.validate(sessionId, token)
         return yield* credentials.put(providerId, credential, version).pipe(Effect.orDie)
+      }),
+
+    SessionSecret: ({ sessionId, token, name }, { headers }) =>
+      Effect.gen(function*() {
+        yield* auth.check(headers).pipe(Effect.orDie)
+        yield* leases.validate(sessionId, token)
+        const session = yield* store.get(sessionId as SessionId)
+        if (Option.isNone(session)) return {}
+        const issued = yield* sessionSecrets.issue(session.value, name)
+        return Option.match(issued, {
+          onNone: () => ({}),
+          onSome: (secret) => ({ value: secret.value, ...(secret.expiresAt === undefined ? {} : { expiresAt: secret.expiresAt }) })
+        })
       }),
 
     Frames: ({ sessionId, token, link, frames }, { headers }) =>

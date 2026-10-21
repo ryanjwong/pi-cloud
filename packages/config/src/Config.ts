@@ -24,6 +24,10 @@ export const ControlPlaneEnv = Config.all({
   runnerSecret: Config.option(Config.Redacted("PI_CLOUD_RUNNER_SECRET")),
   credentialKey: Config.option(Config.Redacted("PI_CLOUD_CREDENTIAL_KEY")),
   model: Config.String("PI_CLOUD_MODEL").pipe(Config.withDefault("anthropic/claude-opus-5-5")),
+  githubApp: Config.option(Config.all({
+    appId: Config.String("GITHUB_APP_ID"),
+    privateKey: Config.Redacted("GITHUB_APP_PRIVATE_KEY")
+  })),
   github: Config.option(Config.all({
     webhookSecret: Config.Redacted("GITHUB_WEBHOOK_SECRET"),
     mention: Config.option(Config.String("GITHUB_MENTION")),

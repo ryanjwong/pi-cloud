@@ -76,6 +76,41 @@ interface Hosted extends RunningSession {
   publishing: Promise<void>
 }
 
+/** How long before an issued secret expires the runner asks for a fresh one. */
+const REFRESH_MARGIN_MS = 2 * 60_000
+
+/**
+ * A session's secrets: those the control plane issues to it (a GitHub App token scoped to its repository, ...),
+ * cached until shortly before they expire, else the runner's own. Ask again on every use; a cached answer is free.
+ */
+const issuedSecrets = (
+  issue: (name: string) => Promise<{ readonly value?: string | undefined; readonly expiresAt?: number | undefined }>,
+  fallback: SecretResolver,
+  leaseLost: () => Error
+): SecretResolver => {
+  type Issued = { readonly value?: string | undefined; readonly expiresAt?: number | undefined }
+  // Answers, including "none": the control plane's issuers do not change while this runner holds the lease.
+  const cache = new Map<string, Issued>()
+  const inflight = new Map<string, Promise<Issued>>()
+  return async (name) => {
+    const cached = cache.get(name)
+    const current = cached !== undefined && (cached.expiresAt === undefined || cached.expiresAt - REFRESH_MARGIN_MS > Date.now())
+    if (current) return cached.value ?? fallback(name)
+    let pending = inflight.get(name)
+    if (pending === undefined) {
+      pending = issue(name).finally(() => inflight.delete(name))
+      inflight.set(name, pending)
+    }
+    const issued = await pending.catch((error: { _tag?: string; message?: string }) => {
+      if (error._tag === "LeaseLost") throw leaseLost()
+      // The control plane has the secret but could not issue it: fail this use rather than fall back to a broader one.
+      throw new Error(error.message ?? `Could not get ${name} from the control plane`)
+    })
+    cache.set(name, issued)
+    return issued.value ?? fallback(name)
+  }
+}
+
 /**
  * Host one session until it goes idle, is shut down, or the lease is lost. The runner holds the session's lease,
  * runs Pi Durable against the control plane's storage, executes commands, and publishes Pi's events.
@@ -161,8 +196,16 @@ export const hostSession = Effect.fnUntraced(function*(
       hosted?.services?.notice("warning", `Reads go to the control plane again: ${reason}`)
     })
     const parts: Array<PluginParts> = []
+    const sessionSecrets = issuedSecrets(
+      (name) => run(client.SessionSecret({ sessionId, token, name })),
+      secrets,
+      () => {
+        stopNow("lease-lost")
+        return new LeaseLostError(sessionId)
+      }
+    )
     for (const plugin of options.plugins) {
-      parts.push(await runSetup(plugin, { session, config: session.spec.plugins?.[plugin.name], secrets }))
+      parts.push(await runSetup(plugin, { session, config: session.spec.plugins?.[plugin.name], secrets: sessionSecrets }))
     }
     // Stored credentials (API keys, subscription logins) come from the control plane; environment keys from the
     // runner's configuration. pi-ai refreshes OAuth tokens through the store, for every runner at once.

@@ -80,6 +80,7 @@ The workspace is a stack of small libraries, each building on the ones below it,
 | | `@pi-cloud/sandbox-docker` | One Docker container per sandbox, kept across runner restarts; secrets passed per command, never baked in. |
 | | `@pi-cloud/sandbox-daytona` | One Daytona sandbox (an isolated VM) per sandbox; persists while stopped and restarts on the next command. |
 | | `@pi-cloud/trigger-github` | GitHub webhooks: issues, comments, pull requests and reviews reach the session of their thread. |
+| | `@pi-cloud/github-app` | GitHub App authentication: the control plane mints installation tokens, limited to each session's repository, and issues them to its runner as `GITHUB_TOKEN`. Web Crypto, so it runs on Workers too. |
 | | `@pi-cloud/tool-github` | GitHub tools for the agent (`github_comment`, `github_open_pull_request`), run by the runner so the token stays out of sandboxes. |
 | | `@pi-cloud/source-slack` | Slack: each thread is a session; mentions and thread replies go in, answers are posted in the thread. |
 | | `@pi-cloud/storage-sqlite` | Every control-plane store in one SQLite file (`sqliteStores`): the session registry, each session's Pi state (Pi's own SQLite storage, tables prefixed per session), bindings, and credentials. For Node. |
@@ -180,11 +181,26 @@ Writing another one means implementing a small interface: a `Trigger` is a name 
 
 **A GitHub round trip.** Someone comments `@pi why is CI red?` on a pull request. The trigger creates (or wakes) the
 session for `acme/api#7`, records the thread in `spec.metadata.github`, and asks the agent to work in a `repo`
-sandbox: a clone of the repository (provider from `GITHUB_SANDBOX_PROVIDER`). With `GITHUB_TOKEN` set on the runner,
-the agent has `github_comment`, which defaults to that thread, and `github_open_pull_request`. Those tools run in
-the runner, not the sandbox. To let the sandbox clone private repositories and push branches, also list
-`GITHUB_TOKEN` in `SANDBOX_SECRETS`; git then gets it through a credential helper, never in a command, URL or
-`.git/config`, and any output that contains it is masked.
+sandbox: a clone of the repository (provider from `GITHUB_SANDBOX_PROVIDER`). With a GitHub token, the agent has
+`github_comment`, which defaults to that thread, and `github_open_pull_request`. Those tools run in the runner, not
+the sandbox. The sandbox clones and pushes with the same token, which git gets through a credential helper, never
+in a command, URL or `.git/config`; any output that contains it is masked.
+
+**GitHub App (recommended).** Create a GitHub App with contents, issues and pull requests (write) and metadata
+(read), subscribe it to issues, issue comments, pull requests and reviews, point its webhook at
+`/v1/triggers/github` with `GITHUB_WEBHOOK_SECRET`, and install it on your repositories. Set `GITHUB_APP_ID` and
+`GITHUB_APP_PRIVATE_KEY` on the control plane, and nothing GitHub-related on runners. Then:
+
+- a session's `GITHUB_TOKEN` is an installation token for the repositories its spec names (the trigger's thread and
+  its sandboxes' GitHub repositories, of one account), with just those permissions, for an hour. A session about no
+  repository gets none. An agent working on `acme/api` cannot touch `acme/billing`;
+- the control plane mints it on request over the lease-checked runner RPC; the runner caches it and asks again two
+  minutes before it expires, and every sandbox command gets the current one, so long sessions keep pushing;
+- the App's private key never leaves the control plane; the agent acts as `your-app[bot]`, whose own comments the
+  trigger ignores.
+
+Without an App, the runner's `GITHUB_TOKEN` (a personal or fine-grained token) is used instead: it is long-lived and
+reaches whatever it can reach, and reaches sandboxes only if listed in `SANDBOX_SECRETS`.
 
 ## Running it
 
@@ -334,7 +350,9 @@ tool it came from: when one side refreshes the token, providers that rotate refr
 
 - Model keys go to the model providers explicitly (`modelCredentials`); pi-ai does not read the environment.
   Stored credentials (`pi-cloud login`) come from the control plane; they never reach a sandbox or the transcript.
-- `GITHUB_TOKEN` is used by the runner's GitHub tools. It reaches a sandbox only if listed in `SANDBOX_SECRETS`.
+- `GITHUB_TOKEN`, with a GitHub App, is issued per session by the control plane, limited to the session's
+  repository and an hour; the App's key stays on the control plane. Without one, the runner's own `GITHUB_TOKEN` is
+  used by its GitHub tools and reaches a sandbox only if listed in `SANDBOX_SECRETS`.
 - Sandboxes get only what their template asks for, and only names the operator listed in `SANDBOX_SECRETS`.
   Everything else in the runner's environment (model keys, the runner secret) never reaches a sandbox: local
   sandboxes run commands with a minimal base environment.

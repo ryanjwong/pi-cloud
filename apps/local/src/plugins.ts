@@ -29,7 +29,7 @@ export const loadTemplates = (file: string | undefined): Record<string, SandboxT
 /**
  * The plugin set of a Node runner: every pi-ai model provider (API keys or `pi-cloud login` subscriptions), Pi's coding agent (its tools, system prompt and
  * subagents), sandboxes with the configured templates (`local` directories, `docker` containers, and `daytona` when
- * `DAYTONA_API_KEY` is set), and GitHub tools when `GITHUB_TOKEN` is set. Swap or extend freely.
+ * `DAYTONA_API_KEY` is set), and GitHub tools for sessions with a GitHub token (a GitHub App's, or `GITHUB_TOKEN`). Swap or extend freely.
  */
 export const defaultPlugins = (env: RunnerEnv): ReadonlyArray<RunnerPlugin> => {
   const plugins: Array<RunnerPlugin> = [
@@ -50,6 +50,8 @@ export const defaultPlugins = (env: RunnerEnv): ReadonlyArray<RunnerPlugin> => {
       templates: loadTemplates(Option.getOrUndefined(env.templatesFile))
     })
   ]
-  if (Option.isSome(env.githubToken)) plugins.push(githubTools({ token: Redacted.value(env.githubToken.value) }))
+  // With a GitHub App on the control plane, sessions about a repository get its installation token; otherwise the
+  // runner's GITHUB_TOKEN, if set. Sessions with neither get no GitHub tools.
+  plugins.push(githubTools(Option.match(env.githubToken, { onNone: () => ({}), onSome: (token) => ({ token: Redacted.value(token) }) })))
   return plugins
 }

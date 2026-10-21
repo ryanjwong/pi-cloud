@@ -8,7 +8,7 @@ import { sqliteStores } from "@pi-cloud/storage-sqlite/node"
 import { Layer, Option, Redacted } from "effect"
 import { FetchHttpClient } from "effect/http"
 import { join, resolve } from "node:path"
-import { connectors } from "./connectors.ts"
+import { connectors, sessionSecrets } from "./connectors.ts"
 import { load } from "./env.ts"
 
 const env = await load(ControlPlaneEnv)
@@ -37,5 +37,6 @@ Layer.launch(serve({
   // Everything the control plane keeps, in one file: back it up by copying it, or stream it with Litestream.
   ...sqliteStores({ file: join(dataDir, "pi-cloud.sqlite"), credentialKey: Option.getOrUndefined(Option.map(env.credentialKey, Redacted.value)) }),
   extensions: connectors(env),
+  sessionSecrets: sessionSecrets(env),
   dispatcher: RunnerDispatcher.http({ url: runnerUrl, secret: runnerSecret }).pipe(Layer.provide(FetchHttpClient.layer))
 })).pipe(NodeRuntime.runMain)

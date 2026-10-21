@@ -4,7 +4,7 @@ import { ControlPlaneEnv, modelCredentialLookup, RunnerEnv, sandboxSecretLookup 
 import { sqliteStores } from "@pi-cloud/storage-sqlite/node"
 import { Option, Redacted } from "effect"
 import { join, resolve } from "node:path"
-import { connectors } from "./connectors.ts"
+import { connectors, sessionSecrets } from "./connectors.ts"
 import { memoryReplica } from "@pi-cloud/runner/node"
 import { load } from "./env.ts"
 import { isLoopback, startLocal } from "./index.ts"
@@ -35,6 +35,7 @@ const deployment = await startLocal({
   // Everything the control plane keeps, in one file: back it up by copying it, or stream it with Litestream.
   ...sqliteStores({ file: join(dataDir, "pi-cloud.sqlite"), credentialKey: secret(control.credentialKey) }),
   extensions: connectors(control),
+  sessionSecrets: sessionSecrets(control),
   runner: {
     plugins: defaultPlugins(runner),
     modelCredentials: modelCredentialLookup(runner),

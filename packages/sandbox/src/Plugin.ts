@@ -84,6 +84,22 @@ export const sandboxes = (options: SandboxPluginOptions): RunnerPlugin =>
         return env
       }
 
+      /**
+       * Commands get the repository credential as it is now, not as it was when the sandbox connected: an issued token
+       * (a GitHub App installation token, an hour long) is refreshed by the runner, and each command sees the fresh one.
+       */
+      const refreshing = (env: ExecutionEnv, credential: string | undefined): ExecutionEnv => {
+        if (credential === undefined) return env
+        const fresh = Object.create(env) as ExecutionEnv
+        fresh.exec = async (command, options, context) => {
+          const token = await plugin.secrets(credential)
+          if (token === undefined) return env.exec(command, options, context)
+          mask.add(credential, token)
+          return env.exec(command, { ...options, env: { ...options?.env, [credential]: token } }, context)
+        }
+        return fresh
+      }
+
       const connect = (stored: StoredSandbox): Promise<ExecutionEnv> => {
         const key = `${stored.handle.provider}:${stored.handle.id}`
         let connection = connections.get(key)
@@ -91,7 +107,8 @@ export const sandboxes = (options: SandboxPluginOptions): RunnerPlugin =>
           connection = (async () => {
             const template = templates[stored.template] ?? { provider: stored.handle.provider }
             const env = await environment(template)
-            return mask.env(await Effect.runPromise(provider(stored.handle.provider).connect(stored.handle, env)))
+            const connected = mask.env(await Effect.runPromise(provider(stored.handle.provider).connect(stored.handle, env)))
+            return refreshing(connected, template.repository?.credential)
           })()
           connection.catch(() => connections.delete(key))
           connections.set(key, connection)

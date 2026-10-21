@@ -147,6 +147,16 @@ export class RunnerRpcs extends RpcGroup.make(
     error: LeaseLost
   }),
   /**
+   * A secret the control plane issues to this session, such as a GitHub App installation token scoped to the
+   * session's repository. Absent when the control plane has none by that name for this session; the runner then
+   * falls back to its own. `expiresAt` (epoch ms) says when to ask again.
+   */
+  Rpc.make("SessionSecret", {
+    payload: { ...leaseFields, name: Schema.String },
+    success: Schema.Struct({ value: Schema.optional(Schema.String), expiresAt: Schema.optional(Schema.Number) }),
+    error: Schema.Union([LeaseLost, StorageFailure])
+  }),
+  /**
    * A consistent copy of the session's storage, taken between commits, when the state store keeps it in SQLite.
    * Absent otherwise: the runner then reads through `Storage`.
    */

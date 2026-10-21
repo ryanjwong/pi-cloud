@@ -6,6 +6,7 @@ import {
   EventHub,
   LeaseManager,
   type RunnerDispatcher,
+  SessionSecrets,
   SessionStore,
   StateStore
 } from "@pi-cloud/core"
@@ -79,6 +80,8 @@ export interface ControlPlaneOptions {
   readonly bindings?: Layer.Layer<BindingStore>
   /** Model provider credentials (API keys, subscription logins). Defaults to memory. */
   readonly credentials?: Layer.Layer<CredentialStore>
+  /** Secrets issued to sessions on request (`SessionSecrets.issuers(githubAppTokens(...))`). Defaults to none. */
+  readonly sessionSecrets?: Layer.Layer<SessionSecrets>
   /** Extra routes built on `Sessions`: hosted sources, event triggers, admin endpoints, ... */
   readonly extensions?: ReadonlyArray<Extension>
 }
@@ -97,6 +100,7 @@ export const layer = (options: ControlPlaneOptions) => {
       options.events ?? EventHub.memory({ logLimit }),
       options.bindings ?? BindingStore.memory,
       options.credentials ?? CredentialStore.memory,
+      options.sessionSecrets ?? SessionSecrets.none,
       RunnerAuth.sharedSecret(options.runnerSecret),
       options.clientAuth ?? ClientAuth.apiKeys(options.apiKeys),
       config

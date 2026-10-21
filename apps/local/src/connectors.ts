@@ -1,5 +1,7 @@
 import type { ControlPlaneEnv } from "@pi-cloud/config"
 import type { Extension } from "@pi-cloud/control-plane"
+import { SessionSecrets } from "@pi-cloud/core"
+import { githubApp, githubAppTokens } from "@pi-cloud/github-app"
 import type { SessionSpec } from "@pi-cloud/protocol"
 import { slackSource } from "@pi-cloud/source-slack"
 import { sources } from "@pi-cloud/sources"
@@ -14,8 +16,8 @@ export const connectors = (env: ControlPlaneEnv): ReadonlyArray<Extension> => {
   const extensions: Array<Extension> = []
   if (Option.isSome(env.github)) {
     const { webhookSecret, mention, sandboxProvider } = env.github.value
-    // Each GitHub thread's session works in a sandbox of its repository, authenticated with the runner's
-    // GITHUB_TOKEN (which must be listed in SANDBOX_SECRETS to reach the sandbox).
+    // Each GitHub thread's session works in a sandbox of its repository, authenticated with GITHUB_TOKEN: the GitHub
+    // App's installation token for that repository, or else the runner's own (listed in SANDBOX_SECRETS).
     const repositorySpec = (repository: string): SessionSpec => ({
       ...spec,
       sandbox: "repo",
@@ -38,3 +40,14 @@ export const connectors = (env: ControlPlaneEnv): ReadonlyArray<Extension> => {
   }
   return extensions
 }
+
+/**
+ * Secrets the control plane issues to sessions: with a GitHub App (`GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`),
+ * `GITHUB_TOKEN` is an installation token for the session's repository. The App's key stays here.
+ */
+export const sessionSecrets = (env: ControlPlaneEnv) =>
+  Option.match(env.githubApp, {
+    onNone: () => SessionSecrets.none,
+    onSome: ({ appId, privateKey }) =>
+      SessionSecrets.issuers(githubAppTokens(githubApp({ appId, privateKey: Redacted.value(privateKey) })))
+  })

@@ -34,7 +34,8 @@
     "@pi-cloud/pi": "workspace:*",
     "@pi-cloud/tui": "workspace:*",
     "@pi-cloud/sandbox-docker": "workspace:*",
-    "@pi-cloud/sandbox-daytona": "workspace:*"
+    "@pi-cloud/sandbox-daytona": "workspace:*",
+    "@pi-cloud/github-app": "workspace:*"
   },
   "devDependencies": {
     "@xterm/headless": "5.5.0"
