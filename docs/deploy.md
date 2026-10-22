@@ -88,8 +88,12 @@ sops exec-env secrets.yaml 'litestream replicate -config litestream.yml -exec "p
 ## Cloudflare
 
 ```sh
-pnpm deploy:cloudflare
+nix run .#deploy-cloudflare
 ```
+
+Or, without Nix and with `sops` and `age` installed, `pnpm deploy:cloudflare`. The Nix app brings Node, pnpm,
+sops and age, installs the dependencies, and links its Node at `.nix-node` so the printed `pi-cloud` alias keeps
+working.
 
 What it does:
 

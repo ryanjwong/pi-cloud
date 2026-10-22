@@ -36,11 +36,13 @@ The local server listens on loopback only, with no API key. The agent's sandbox 
 
 ## Deploy to Cloudflare
 
-Needs a Cloudflare account, plus `sops` and `age` (`brew install sops age`).
+Needs a Cloudflare account. With Nix, that is all:
 
 ```sh
-pnpm deploy:cloudflare
+nix run .#deploy-cloudflare
 ```
+
+Without Nix, install `sops` and `age` (`brew install sops age`) and run `pnpm deploy:cloudflare`.
 
 It creates an age key if you have none and points `.sops.yaml` at it. It generates pi-cloud's own secrets, then
 asks for your model, [Daytona](https://app.daytona.io) and GitHub keys; press Enter to skip any of them. Everything

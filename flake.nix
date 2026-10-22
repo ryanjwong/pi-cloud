@@ -59,6 +59,25 @@
           cli = { type = "app"; program = "${pkg}/bin/pi-cloud"; };
           control-plane = { type = "app"; program = "${pkg}/bin/pi-cloud-control"; };
           runner = { type = "app"; program = "${pkg}/bin/pi-cloud-runner"; };
+          deploy-cloudflare = {
+            type = "app";
+            program = "${pkgs.writeShellApplication {
+              name = "pi-cloud-deploy-cloudflare";
+              runtimeInputs = [ pkgs.nodejs_22 pkgs.pnpm_10 pkgs.sops pkgs.age pkgs.git ];
+              text = ''
+                root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+                if [ ! -f "$root/apps/cloudflare/scripts/deploy.ts" ]; then
+                  echo "Run this inside a pi-cloud checkout: git clone https://github.com/ryanjwong/pi-cloud.git" >&2
+                  exit 1
+                fi
+                cd "$root"
+                nix-store --add-root "$root/.nix-node" --realise ${pkgs.nodejs_22} > /dev/null
+                export PI_CLOUD_NODE="$root/.nix-node/bin/node"
+                pnpm install --frozen-lockfile --config.confirmModulesPurge=false
+                exec node apps/cloudflare/scripts/deploy.ts "$@"
+              '';
+            }}/bin/pi-cloud-deploy-cloudflare";
+          };
         });
 
       checks = forAllSystems (pkgs: {

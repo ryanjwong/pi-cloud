@@ -11,3 +11,4 @@ dist
 
 secrets.dec.yaml
 *.decrypted.*
+.nix-node

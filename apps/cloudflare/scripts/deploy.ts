@@ -163,7 +163,7 @@ Use it from any repository (add these to your shell profile to keep them):
   export PI_CLOUD_URL=${url ?? "https://pi-cloud.<your-subdomain>.workers.dev"}
   export PI_CLOUD_API_KEY="$(sops decrypt --extract '["PI_CLOUD_API_KEYS"]' ${secretsFile})"
   export PI_CLOUD_SANDBOX_PROVIDER=${forwarded.DAYTONA_API_KEY === undefined ? "daytona   # after adding DAYTONA_API_KEY" : "daytona"}
-  alias pi-cloud="node ${cli}"
+  alias pi-cloud="${process.env.PI_CLOUD_NODE ?? "node"} ${cli}"
 
   cd ~/code/some-repo && pi-cloud
 `)
