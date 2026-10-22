@@ -44,6 +44,22 @@ afterAll(async () => {
   await rm(state, { recursive: true, force: true })
 })
 
+const api = (path: string, method?: "PUT" | "POST", body?: unknown) =>
+  fetch(`${url}${path}`, { method, headers: { ...auth, "content-type": "application/json" }, body: method && JSON.stringify(body) })
+    .then((response) => response.json()) as Promise<Record<string, unknown>>
+
+const answer = async (provider: string, modelId: string, expires: number) => {
+  await api(`/v1/credentials/${provider}`, "PUT", { type: "oauth", access: "sk-ant-oat01-fake", refresh: "sk-ant-ort01-fake", expires })
+  const session = await api("/v1/sessions", "POST", { spec: { model: { provider, modelId } } })
+  const { submissionId } = await api(`/v1/sessions/${session.id}/messages`, "POST", { content: "hello" })
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const record = await api(`/v1/sessions/${session.id}/submissions/${submissionId}`)
+    if (record.status === "done" || record.status === "unanswered") return String(record.detail)
+    await new Promise((resolve) => setTimeout(resolve, 200))
+  }
+  throw new Error("submission did not settle")
+}
+
 const entries = (view: unknown) => (view as ConversationView).entries.map((entry) => entry.kind)
 
 describe("pi-cloud on Cloudflare (local workerd)", () => {
@@ -91,4 +107,10 @@ describe("pi-cloud on Cloudflare (local workerd)", () => {
     resumed.release()
     await again.close()
   }, 120_000)
+
+  it("uses and refreshes subscription logins through statically loaded OAuth flows", async () => {
+    expect(await answer("anthropic", "claude-haiku-4-5", Date.now() + 3_600_000)).not.toMatch(/endsWith/)
+    expect(await answer("anthropic", "claude-haiku-4-5", Date.now() - 1_000)).not.toMatch(/endsWith/)
+    expect(await answer("openai-codex", "gpt-5.5", Date.now() - 1_000)).not.toMatch(/endsWith/)
+  }, 60_000)
 })
