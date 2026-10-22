@@ -19,7 +19,7 @@ beforeAll(async () => {
     })
   })
   await new Promise<void>((resolve) => api.listen(0, "127.0.0.1", resolve))
-  wrangler = spawn("npx", ["wrangler", "dev", "-c", "test/daytona-probe.json", "--port", String(port), "--ip", "127.0.0.1"], {
+  wrangler = spawn("npx", ["wrangler", "dev", "-c", "test/daytona-probe.json", "--port", String(port), "--inspector-port", String(port + 10_000), "--ip", "127.0.0.1"], {
     cwd: join(import.meta.dirname, ".."),
     env: { ...process.env, WRANGLER_SEND_METRICS: "false", CI: "1" },
     stdio: "ignore",

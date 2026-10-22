@@ -15,7 +15,7 @@ let state: string
 let wrangler: ChildProcess | undefined
 
 const start = async () => {
-  wrangler = spawn("npx", ["wrangler", "dev", "--port", String(port), "--ip", "127.0.0.1", "--persist-to", state,
+  wrangler = spawn("npx", ["wrangler", "dev", "--port", String(port), "--inspector-port", String(port + 10_000), "--ip", "127.0.0.1", "--persist-to", state,
     "--var", `PI_CLOUD_API_KEYS:${apiKey}`, "--var", "PI_CLOUD_RUNNER_SECRET:test-runner-secret", "--var",
     `PI_CLOUD_CREDENTIAL_KEY:${"k".repeat(32)}`, "--var", "GITHUB_WEBHOOK_SECRET:hook"], {
     cwd: join(import.meta.dirname, ".."),
