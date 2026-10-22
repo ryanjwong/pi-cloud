@@ -20,7 +20,9 @@
     "@pi-cloud/core": "workspace:*",
     "@pi-cloud/storage-sqlite": "workspace:*",
     "@pi-cloud/sandbox": "workspace:*",
-    "@pi-cloud/sandbox-daytona": "workspace:*"
+    "@pi-cloud/sandbox-daytona": "workspace:*",
+    "@pi-cloud/connectors": "workspace:*",
+    "@pi-cloud/tool-github": "workspace:*"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "5.20261009.1",

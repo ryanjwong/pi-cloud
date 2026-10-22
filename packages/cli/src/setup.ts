@@ -3,6 +3,8 @@ import { randomBytes } from "node:crypto"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
+import { createInterface } from "node:readline/promises"
+import { githubAppCommand } from "./github-app.ts"
 import { paths, readSecrets, readSettings, rejected, resolveConnection, saveTarget, unreachable, writePrivate } from "./settings.ts"
 import { writeSopsSecrets } from "./sops.ts"
 
@@ -17,10 +19,10 @@ const REQUIRED = ["PI_CLOUD_API_KEYS", "PI_CLOUD_RUNNER_SECRET", "PI_CLOUD_CREDE
 const ASKED = [
   { name: "ANTHROPIC_API_KEY", why: "Anthropic models (or skip, and sign in with Claude Pro/Max later: pi-cloud login anthropic)" },
   { name: "OPENAI_API_KEY", why: "OpenAI models (or skip, and sign in with ChatGPT later: pi-cloud login openai-codex)" },
-  { name: "DAYTONA_API_KEY", why: "sandboxes for the coding tools, from app.daytona.io (without it the agent can only chat)" },
-  { name: "GITHUB_TOKEN", why: "cloning and pushing, for PI_CLOUD_CONFIG templates with credential GITHUB_TOKEN (skip without one)" }
+  { name: "DAYTONA_API_KEY", why: "sandboxes for the coding tools, from app.daytona.io (without it the agent can only chat)" }
 ] as const
-const FORWARDED = [...REQUIRED, ...ASKED.map((entry) => entry.name)]
+const PROMPTED = [...REQUIRED, ...ASKED.map((entry) => entry.name)]
+const FORWARDED = [...PROMPTED, "GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY", "GITHUB_WEBHOOK_SECRET"]
 
 const write = (text: string) => void process.stdout.write(text)
 const step = (text: string) => write(`\n▸ ${text}\n`)
@@ -81,6 +83,37 @@ const askSecret = (question: string) =>
     stdin.on("data", onData)
   })
 
+const ask = async (question: string) => {
+  const prompt = createInterface({ input: process.stdin, output: process.stdout })
+  try {
+    return clean(await prompt.question(question))
+  } finally {
+    prompt.close()
+  }
+}
+
+export interface GithubAppIo {
+  readonly tty: boolean
+  readonly ask: (question: string) => Promise<string>
+  readonly create: (url: string) => Promise<Record<string, string>>
+  readonly write: (text: string) => void
+}
+
+export const offerGithubApp = async (
+  url: string,
+  name: string,
+  secrets: Readonly<Record<string, string>>,
+  io: GithubAppIo = { tty: process.stdin.isTTY === true, ask, create: (url) => githubAppCommand({ url }, write), write }
+): Promise<Record<string, string>> => {
+  if (secrets.GITHUB_APP_ID) return {}
+  const created = io.tty && /^(y|yes)?$/i.test(await io.ask("  Create the GitHub App now? (Y/n) "))
+    ? await io.create(url).catch((error: unknown) => void io.write(`  GitHub App not created: ${error instanceof Error ? error.message : String(error)}\n`))
+    : undefined
+  if (created !== undefined) return created
+  io.write(`  For GitHub access later: pi-cloud github-app --url ${url} && pi-cloud deploy cloudflare${name === "pi-cloud" ? "" : ` --name ${name}`}\n`)
+  return {}
+}
+
 export const init = async (): Promise<Record<string, string>> => {
   for (const tool of ["sops", "age-keygen"]) {
     if (!has(tool)) throw new Error(`${tool} is missing: install sops and age (brew install sops age), or install pi-cloud with Nix`)
@@ -99,7 +132,7 @@ export const init = async (): Promise<Record<string, string>> => {
   }
   const current = readSecrets()
   const added: Record<string, string> = {}
-  for (const name of FORWARDED) {
+  for (const name of PROMPTED) {
     if (typeof current[name] === "string" && clean(current[name]) !== current[name]) added[name] = clean(current[name])
   }
   for (const name of REQUIRED) {
@@ -135,13 +168,19 @@ export const deploy = async (kind: string | undefined, name = "pi-cloud") => {
     step("Deploying the Worker")
     const deployed = await wrangler(project, ["deploy", "-c", config])
     if (!deployed.ok) throw new Error("wrangler deploy failed (see above)")
-    step("Handing the secrets to the Worker")
-    const forwarded = Object.fromEntries(FORWARDED.flatMap((key) => (secrets[key] ? [[key, secrets[key]]] : [])))
-    if (!(await wrangler(project, ["secret", "bulk", "-c", config], JSON.stringify(forwarded))).ok) {
-      throw new Error("wrangler secret bulk failed (see above)")
-    }
     const url = deployed.output.match(/https:\/\/[\w.-]+\.workers\.dev/)?.[0] ?? readSettings().targets?.[name]?.url
     if (url === undefined) throw new Error("Deployed, but wrangler printed no workers.dev URL: set PI_CLOUD_URL to the Worker's address")
+    const send = async (values: Readonly<Record<string, string>>) => {
+      const forwarded = Object.fromEntries(FORWARDED.flatMap((key) => (values[key] ? [[key, values[key]]] : [])))
+      if (!(await wrangler(project, ["secret", "bulk", "-c", config], JSON.stringify(forwarded))).ok) {
+        throw new Error("wrangler secret bulk failed (see above)")
+      }
+      return forwarded
+    }
+    step("Handing the secrets to the Worker")
+    const forwarded = await send(secrets)
+    const created = await offerGithubApp(url, name, secrets)
+    if (Object.keys(created).length > 0) await send(created)
     step(`Waiting for ${url}`)
     let ready = false
     for (let attempt = 0; attempt < 30 && !ready; attempt++) {

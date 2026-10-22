@@ -24,7 +24,7 @@ export const SETTINGS: ReadonlyArray<Setting> = [
   { name: "GITHUB_WEBHOOK_SECRET", secret: true, components: ["control-plane"], description: "Enables the GitHub trigger" },
   { name: "GITHUB_MENTION", secret: false, components: ["control-plane"], description: "Only react to GitHub activity mentioning this as a whole word, e.g. @pi" },
   { name: "GITHUB_ALLOWED_ASSOCIATIONS", secret: false, components: ["control-plane"], description: "Comma-separated author associations the GitHub trigger reacts to", default: "OWNER,MEMBER,COLLABORATOR" },
-  { name: "GITHUB_SANDBOX_PROVIDER", secret: false, components: ["control-plane"], description: "Sandbox provider of the built-in github template used by GitHub-triggered sessions", default: "docker" },
+  { name: "GITHUB_SANDBOX_PROVIDER", secret: false, components: ["control-plane"], description: "Sandbox provider of the built-in github template used by GitHub-triggered sessions", default: "docker (Cloudflare: daytona)" },
   { name: "SLACK_SIGNING_SECRET", secret: true, components: ["control-plane"], description: "Enables the Slack source (with SLACK_BOT_TOKEN)" },
   { name: "SLACK_BOT_TOKEN", secret: true, components: ["control-plane"], description: "Posts the agent's replies to Slack" },
   { name: "SLACK_ALLOWED_USERS", secret: false, components: ["control-plane"], description: "Comma-separated Slack user ids the agent answers (nobody by default)" },

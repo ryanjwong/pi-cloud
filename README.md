@@ -59,9 +59,10 @@ pi-cloud deploy cloudflare
 ```
 
 It keeps its state in `~/.config/pi-cloud`, never in a checkout. It creates an age key and `.sops.yaml` there,
-generates pi-cloud's own secrets, then asks for your model, [Daytona](https://app.daytona.io) and GitHub keys (the
-GitHub token only reaches `PI_CLOUD_CONFIG` templates that name it); press Enter to skip any of them. Everything is kept encrypted in `secrets.yaml`. Then it signs you in to Cloudflare,
-deploys, and saves the server as the CLI's target in `config.json`. After that:
+generates pi-cloud's own secrets, then asks for your model and [Daytona](https://app.daytona.io) keys; press Enter
+to skip any of them. Everything is kept encrypted in `secrets.yaml`. Then it signs you in to Cloudflare, deploys,
+offers to create a [GitHub App](docs/integrations.md#github-app) pointed at the Worker, and saves the server as the
+CLI's target in `config.json`. After that:
 
 ```sh
 pi-cloud login anthropic         # if you skipped the API keys: sign in with Claude Pro/Max (or openai-codex)
@@ -104,5 +105,5 @@ Cloudflare account, or the live GitHub and Daytona APIs. Known gaps:
 
 - One control-plane process at a time: leases and event streams live in its memory.
 - The TUI is Pi 1.1's durable TUI, which Pi 1.3 dropped. It has no session picker, forks or `/login`.
-- On Cloudflare: no Pi coding-agent prompt or subagents, and no GitHub or Slack connectors yet.
+- On Cloudflare: no Pi coding-agent prompt or subagents, and no Slack connector yet.
 - Pi Durable is experimental; versions are pinned.

@@ -1,0 +1,21 @@
+{
+  "name": "@pi-cloud/connectors",
+  "version": "0.1.0",
+  "description": "What a control plane mounts from its settings, on Node and Cloudflare alike: the GitHub trigger, the Slack source, GitHub App tokens.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@pi-cloud/config": "workspace:*",
+    "@pi-cloud/control-plane": "workspace:*",
+    "@pi-cloud/core": "workspace:*",
+    "@pi-cloud/github-app": "workspace:*",
+    "@pi-cloud/protocol": "workspace:*",
+    "@pi-cloud/source-slack": "workspace:*",
+    "@pi-cloud/sources": "workspace:*",
+    "@pi-cloud/trigger-github": "workspace:*",
+    "@pi-cloud/triggers": "workspace:*",
+    "effect": "4.0.2"
+  }
+}

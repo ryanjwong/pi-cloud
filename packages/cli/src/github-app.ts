@@ -16,11 +16,12 @@ export interface GithubAppFlags {
 
 const isLocal = (url: string) => /^https?:\/\/(127\.|localhost|\[::1\])/.test(url)
 
-export const githubAppCommand = async (flags: GithubAppFlags, write: (text: string) => void) => {
+export const githubAppCommand = async (flags: GithubAppFlags, write: (text: string) => void): Promise<Record<string, string>> => {
   const publicUrl = flags.url === undefined || isLocal(flags.url) ? undefined : flags.url
   const options = { ...(flags.name === undefined ? {} : { name: flags.name }), ...(publicUrl === undefined ? {} : { publicUrl }) }
   if (flags.manifest === true) {
-    return write(`${JSON.stringify(appManifest({ ...options, redirectUrl: "http://127.0.0.1/callback" }), null, 2)}\n`)
+    write(`${JSON.stringify(appManifest({ ...options, redirectUrl: "http://127.0.0.1/callback" }), null, 2)}\n`)
+    return {}
   }
   const secrets = flags.secrets ?? paths().secrets
   if (flags.print !== true && !existsSync(secrets)) throw new Error(`No ${secrets}: run pi-cloud init, pass --secrets <file>, or --print`)
@@ -46,4 +47,5 @@ export const githubAppCommand = async (flags: GithubAppFlags, write: (text: stri
     write(`Stored ${Object.keys(values).join(", ")} in ${secrets}.\n`)
   }
   write(`Created ${created.htmlUrl}. Install it on your repositories: ${created.htmlUrl}/installations/new\n`)
+  return values
 }

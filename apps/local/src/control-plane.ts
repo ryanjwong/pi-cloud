@@ -6,7 +6,7 @@ import { sqliteStores } from "@pi-cloud/storage-sqlite/node"
 import { Layer, Option, Redacted } from "effect"
 import { FetchHttpClient } from "effect/http"
 import { join, resolve } from "node:path"
-import { connectors, sessionSecrets } from "./connectors.ts"
+import { connectors } from "@pi-cloud/connectors"
 import { load } from "./env.ts"
 
 const env = await load(ControlPlaneEnv)
@@ -31,7 +31,6 @@ Layer.launch(serve({
   apiKeys: env.apiKeys.map((key) => Redacted.value(key)),
   runnerSecret,
   ...sqliteStores({ file: join(dataDir, "pi-cloud.sqlite"), credentialKey: Option.getOrUndefined(Option.map(env.credentialKey, Redacted.value)) }),
-  extensions: connectors(env),
-  sessionSecrets: sessionSecrets(env),
+  ...connectors(env),
   dispatcher: RunnerDispatcher.http({ url: runnerUrl, secret: runnerSecret }).pipe(Layer.provide(FetchHttpClient.layer))
 })).pipe(NodeRuntime.runMain)

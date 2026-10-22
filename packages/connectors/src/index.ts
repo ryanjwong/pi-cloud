@@ -9,7 +9,7 @@ import { githubTrigger } from "@pi-cloud/trigger-github"
 import { triggers } from "@pi-cloud/triggers"
 import { Option, Redacted } from "effect"
 
-export const connectors = (env: ControlPlaneEnv): ReadonlyArray<Extension> => {
+export const connectors = (env: Pick<ControlPlaneEnv, "model" | "github" | "githubApp"> & Partial<Pick<ControlPlaneEnv, "slack">>) => {
   const [provider, ...model] = env.model.split("/")
   const spec: SessionSpec = { model: { provider: provider!, modelId: model.join("/") } }
   const extensions: Array<Extension> = []
@@ -24,18 +24,19 @@ export const connectors = (env: ControlPlaneEnv): ReadonlyArray<Extension> => {
       triggers([githubTrigger({ secret: Redacted.value(webhookSecret), mention, allowedAssociations, spec: repositorySpec })])
     )
   }
-  if (Option.isSome(env.slack)) {
-    const { signingSecret, botToken, allowedUsers, allowedChannels } = env.slack.value
+  const slack = env.slack ?? Option.none()
+  if (Option.isSome(slack)) {
+    const { signingSecret, botToken, allowedUsers, allowedChannels } = slack.value
     extensions.push(
       sources([slackSource({ signingSecret: Redacted.value(signingSecret), botToken: Redacted.value(botToken), allowedUsers, allowedChannels, spec })])
     )
   }
-  return extensions
+  return {
+    extensions,
+    sessionSecrets: Option.match(env.githubApp, {
+      onNone: () => SessionSecrets.none,
+      onSome: ({ appId, privateKey }) =>
+        SessionSecrets.issuers(githubAppTokens(githubApp({ appId, privateKey: Redacted.value(privateKey) })))
+    })
+  }
 }
-
-export const sessionSecrets = (env: ControlPlaneEnv) =>
-  Option.match(env.githubApp, {
-    onNone: () => SessionSecrets.none,
-    onSome: ({ appId, privateKey }) =>
-      SessionSecrets.issuers(githubAppTokens(githubApp({ appId, privateKey: Redacted.value(privateKey) })))
-  })
