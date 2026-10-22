@@ -12,20 +12,19 @@ Cloudflare.
 
 ## Try it locally
 
-Needs Node 22.19+, pnpm and git.
+With Nix:
 
 ```sh
 git clone https://github.com/ryanjwong/pi-cloud.git && cd pi-cloud
-pnpm install
-ANTHROPIC_API_KEY=sk-ant-... pnpm start        # control plane and runner on 127.0.0.1:8787
+nix profile add .#pi-cloud                      # the pi-cloud command
+ANTHROPIC_API_KEY=sk-ant-... nix run            # control plane and runner on 127.0.0.1:8787
 ```
 
-In another terminal:
+Without Nix, with Node 22.19+ and pnpm: `pnpm install`, then `ANTHROPIC_API_KEY=sk-ant-... pnpm start`, and
+`alias pi-cloud="node $PWD/packages/cli/src/main.ts"`. Then, in another terminal:
 
 ```sh
-alias pi-cloud="node $PWD/packages/cli/src/main.ts"
-cd ~/code/some-repo
-pi-cloud
+cd ~/code/some-repo && pi-cloud
 ```
 
 Without an API key, sign in with a subscription instead: `pi-cloud login anthropic` (Claude Pro/Max) or
@@ -36,18 +35,25 @@ The local server listens on loopback only, with no API key. The agent's sandbox 
 
 ## Deploy to Cloudflare
 
-Needs a Cloudflare account. With Nix, that is all:
+Needs a Cloudflare account and Nix:
 
 ```sh
+git clone https://github.com/ryanjwong/pi-cloud.git && cd pi-cloud
 nix run .#deploy-cloudflare
 ```
 
-Without Nix, install `sops` and `age` (`brew install sops age`) and run `pnpm deploy:cloudflare`.
-
 It creates an age key if you have none and points `.sops.yaml` at it. It generates pi-cloud's own secrets, then
 asks for your model, [Daytona](https://app.daytona.io) and GitHub keys; press Enter to skip any of them. Everything
-is kept encrypted in `secrets.yaml`. Then it signs you in to Cloudflare, deploys, and prints the `export` lines that
-point `pi-cloud` at the new URL. Run it again to redeploy; it only asks for keys that are missing.
+is kept encrypted in `secrets.yaml`. Then it signs you in to Cloudflare, deploys, saves the server's address for the
+CLI in `~/.config/pi-cloud/config.json`, and installs the `pi-cloud` command into your Nix profile. After that:
+
+```sh
+pi-cloud login anthropic         # if you skipped the API keys: sign in with Claude Pro/Max (or openai-codex)
+cd ~/code/some-repo && pi-cloud
+```
+
+Run it again to redeploy; it only asks for keys that are missing. Without Nix, install Node, pnpm, `sops` and `age`,
+run `pnpm install && pnpm deploy:cloudflare`, and add the alias it prints.
 
 Daytona provides the sandboxes, since a Worker has no shell of its own. On Cloudflare the agent gets Pi's coding
 tools but not yet Pi's full coding-agent prompt or subagents. [Deploying](docs/deploy.md) has the details.
@@ -63,9 +69,9 @@ pi-cloud chat | send | tail  # line-mode chat, one-shot message, follow events
 pi-cloud login <provider>    # store a subscription login on the server
 ```
 
-The cloud session works from origin, so push first; the CLI warns when your branch is ahead. Point it at a server
-with `PI_CLOUD_URL` and `PI_CLOUD_API_KEY`. `PI_CLOUD_SANDBOX_PROVIDER` picks the sandbox: `local`, `docker` or
-`daytona`.
+The cloud session works from origin, so push first; the CLI warns when your branch is ahead. The CLI uses the server
+saved by the deploy; `PI_CLOUD_URL`, `PI_CLOUD_API_KEY` and `PI_CLOUD_SANDBOX_PROVIDER` (`local`, `docker` or
+`daytona`) override it.
 
 ## Docs
 

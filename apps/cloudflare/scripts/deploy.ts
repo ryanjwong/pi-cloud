@@ -1,4 +1,5 @@
 import { MODEL_CREDENTIALS } from "@pi-cloud/config"
+import { writeSettings } from "@pi-cloud/cli/settings"
 import { writeSopsSecrets } from "@pi-cloud/cli/sops"
 import { spawn, spawnSync } from "node:child_process"
 import { randomBytes } from "node:crypto"
@@ -154,16 +155,15 @@ if (url !== undefined) {
   }
   console.log(ready ? "  up" : "  not answering yet; give it a minute")
 }
-const cli = join(root, "packages/cli/src/main.ts")
-console.log(`
-✓ pi-cloud is deployed.
-
-Use it from any repository (add these to your shell profile to keep them):
-
-  export PI_CLOUD_URL=${url ?? "https://pi-cloud.<your-subdomain>.workers.dev"}
-  export PI_CLOUD_API_KEY="$(sops decrypt --extract '["PI_CLOUD_API_KEYS"]' ${secretsFile})"
-  export PI_CLOUD_SANDBOX_PROVIDER=${forwarded.DAYTONA_API_KEY === undefined ? "daytona   # after adding DAYTONA_API_KEY" : "daytona"}
-  alias pi-cloud="${process.env.PI_CLOUD_NODE ?? "node"} ${cli}"
-
-  cd ~/code/some-repo && pi-cloud
-`)
+const saved = writeSettings({
+  ...(url === undefined ? {} : { url }),
+  ...(forwarded.DAYTONA_API_KEY === undefined ? {} : { sandboxProvider: "daytona" }),
+  secretsFile
+})
+console.log(`\n✓ pi-cloud is deployed, and the pi-cloud command is set up to use it (${saved}).`)
+if (forwarded.DAYTONA_API_KEY === undefined) {
+  console.log("  Without DAYTONA_API_KEY the agent can only chat: add one with `sops secrets.yaml`, then deploy again.")
+}
+if (process.env.PI_CLOUD_VIA_NIX === undefined) {
+  console.log(`\nTo get the command, add this to your shell profile:\n\n  alias pi-cloud="node ${join(root, "packages/cli/src/main.ts")}"`)
+}

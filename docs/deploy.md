@@ -91,9 +91,9 @@ sops exec-env secrets.yaml 'litestream replicate -config litestream.yml -exec "p
 nix run .#deploy-cloudflare
 ```
 
-Or, without Nix and with `sops` and `age` installed, `pnpm deploy:cloudflare`. The Nix app brings Node, pnpm,
-sops and age, installs the dependencies, and links its Node at `.nix-node` so the printed `pi-cloud` alias keeps
-working.
+Or, without Nix and with Node, pnpm, `sops` and `age` installed, `pnpm install && pnpm deploy:cloudflare`. The Nix
+app brings its own tools and, after deploying, installs the `pi-cloud` command into your Nix profile
+(`nix profile add .#pi-cloud`).
 
 What it does:
 
@@ -105,7 +105,9 @@ What it does:
 4. Saves everything to `secrets.yaml` through `sops`.
 5. Signs you in to Cloudflare if needed, runs `wrangler deploy`, and sends the secrets to the Worker with
    `wrangler secret bulk` over stdin.
-6. Prints the `export` lines for `pi-cloud`.
+6. Saves the server's URL, the sandbox provider and the path to `secrets.yaml` in `~/.config/pi-cloud/config.json`.
+   The CLI reads that file and decrypts its API key from `secrets.yaml` with sops when it starts, so the key never
+   sits unencrypted on disk.
 
 Run it again to redeploy. To change a key, run `sops secrets.yaml`, then deploy again. Back up the age key: without
 it nobody can decrypt `secrets.yaml`. `secrets.yaml` and `.sops.yaml` are safe to commit.

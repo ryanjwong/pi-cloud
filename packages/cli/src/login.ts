@@ -7,6 +7,7 @@ import { readFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import { createInterface } from "node:readline/promises"
+import { rejected, unreachable } from "./settings.ts"
 
 export interface Connection {
   readonly url: string
@@ -23,7 +24,10 @@ const request = async (connection: Connection, method: string, path: string, bod
       ...(connection.apiKey === undefined ? {} : { authorization: `Bearer ${connection.apiKey}` })
     },
     ...(body === undefined ? {} : { body: JSON.stringify(body) })
+  }).catch(() => {
+    throw new Error(unreachable(connection.url))
   })
+  if (response.status === 401) throw new Error(rejected(connection.url))
   if (!response.ok) throw new Error(`${method} ${path}: ${response.status} ${await response.text()}`)
   return response.status === 204 ? undefined : response.json()
 }
@@ -71,6 +75,7 @@ const terminalInteraction = (signal: AbortSignal): AuthInteraction & { close(): 
 }
 
 export const login = async (connection: Connection, providerId: string) => {
+  await request(connection, "GET", "/v1/credentials")
   const store = new InMemoryCredentialStore()
   const models = createModels({ credentials: store })
   for (const provider of builtinProviders()) models.setProvider(provider)

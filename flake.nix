@@ -27,7 +27,7 @@
             pname = "pi-cloud";
             inherit pnpm;
             fetcherVersion = 3;
-            hash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+            hash = "sha256-PZ3+U9piIYEe+ntoJyxUyexKN76AJ6r+jbNL+861+gA=";
           };
           dontFixup = true;
         });
@@ -42,7 +42,7 @@
             cp -r . $out/lib/pi-cloud
             node=${pkgs.nodejs_22}/bin/node
             root=$out/lib/pi-cloud
-            makeWrapper $node $out/bin/pi-cloud --add-flags $root/packages/cli/src/main.ts
+            makeWrapper $node $out/bin/pi-cloud --add-flags $root/packages/cli/src/main.ts --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.sops pkgs.git ]}
             makeWrapper $node $out/bin/pi-cloud-server --add-flags $root/apps/local/src/main.ts
             makeWrapper $node $out/bin/pi-cloud-control --add-flags $root/apps/local/src/control-plane.ts
             makeWrapper $node $out/bin/pi-cloud-runner --add-flags $root/apps/local/src/runner.ts
@@ -71,10 +71,12 @@
                   exit 1
                 fi
                 cd "$root"
-                nix-store --add-root "$root/.nix-node" --realise ${pkgs.nodejs_22} > /dev/null
-                export PI_CLOUD_NODE="$root/.nix-node/bin/node"
                 pnpm install --frozen-lockfile --config.confirmModulesPurge=false
-                exec node apps/cloudflare/scripts/deploy.ts "$@"
+                PI_CLOUD_VIA_NIX=1 node apps/cloudflare/scripts/deploy.ts "$@"
+                echo "Installing the pi-cloud command into your Nix profile..."
+                nix profile remove pi-cloud > /dev/null 2>&1 || true
+                nix profile add "$root#pi-cloud" 2> /dev/null || nix profile install "$root#pi-cloud"
+                echo "Done. In any repository, run: pi-cloud"
               '';
             }}/bin/pi-cloud-deploy-cloudflare";
           };

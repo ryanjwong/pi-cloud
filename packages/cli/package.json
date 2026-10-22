@@ -8,7 +8,8 @@
   },
   "exports": {
     ".": "./src/render.ts",
-    "./sops": "./src/sops.ts"
+    "./sops": "./src/sops.ts",
+    "./settings": "./src/settings.ts"
   },
   "dependencies": {
     "@pi-cloud/client": "workspace:*",

@@ -9,6 +9,7 @@ import { parseArgs } from "node:util"
 import { githubAppCommand } from "./github-app.ts"
 import { importFromCodex, importFromPi, listCredentials, login, loginProviders, logout } from "./login.ts"
 import { makeRenderer } from "./render.ts"
+import { rejected, resolveConnection, unreachable } from "./settings.ts"
 
 const { values: flags, positionals } = parseArgs({
   allowPositionals: true,
@@ -56,7 +57,9 @@ pi-cloud <command>
   tail <id>                                   print a session's live events
   rm   <id>                                   delete a session
 
-  PI_CLOUD_URL (default http://127.0.0.1:8787), PI_CLOUD_API_KEY`
+  Connects to the server set up by \`nix run .#deploy-cloudflare\` or \`pnpm deploy:cloudflare\` (saved in
+  ~/.config/pi-cloud/config.json), else http://127.0.0.1:8787. PI_CLOUD_URL, PI_CLOUD_API_KEY and
+  PI_CLOUD_SANDBOX_PROVIDER override it.`
 
 const createSession = Effect.gen(function*() {
   const client = yield* PiCloud
@@ -97,7 +100,7 @@ const gitOrigin = () => {
 const cloudSession = Effect.gen(function*() {
   const client = yield* PiCloud
   const origin = gitOrigin()
-  const provider = process.env.PI_CLOUD_SANDBOX_PROVIDER ?? "local"
+  const provider = resolved.sandboxProvider
   if (origin?.unpushed) write(`Note: the cloud session works from origin; ${origin.unpushed} are not there.\n`)
   const session = yield* client.sessions.create({
     payload: {
@@ -118,10 +121,15 @@ const cloudSession = Effect.gen(function*() {
   return { session, label: origin?.label }
 })
 
-const connection = {
-  url: flags.url ?? process.env.PI_CLOUD_URL ?? "http://127.0.0.1:8787",
-  apiKey: process.env.PI_CLOUD_API_KEY
-}
+const resolved = (() => {
+  try {
+    return resolveConnection(flags.url)
+  } catch (error) {
+    write(`${error instanceof Error ? error.message : String(error)}\n`)
+    process.exit(1)
+  }
+})()
+const connection = { url: resolved.url, apiKey: resolved.apiKey }
 
 const parseModel = (value: string) => {
   const [provider, ...modelId] = value.split("/")
@@ -288,6 +296,17 @@ if (command === "github-app") {
   })
 } else {
   program.pipe(
+    Effect.catchIf(
+      (error) => {
+        const failure = error as { _tag?: string; reason?: { _tag?: string } }
+        return failure?.reason?._tag === "TransportError" || failure?._tag === "Unauthorized"
+      },
+      (error) =>
+        Effect.sync(() => {
+          process.exitCode = 1
+          write(`${(error as { _tag?: string })._tag === "Unauthorized" ? rejected(connection.url) : unreachable(connection.url)}\n`)
+        })
+    ),
     Effect.provide(PiCloud.layer(connection)),
     NodeRuntime.runMain
   )
