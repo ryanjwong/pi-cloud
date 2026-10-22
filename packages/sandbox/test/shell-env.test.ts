@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { type RemoteShell, shellEnv } from "../src/ShellEnv.ts"
 
 const context = {} as Context
+const linux = process.platform === "linux"
 const withSignal = (signal: AbortSignal) => ({ abortSignal: signal }) as unknown as Context
 
 const localShell = (options: { stdin: boolean }): RemoteShell => ({
@@ -86,7 +87,7 @@ const exercise = async (env: ExecutionEnv, dir: string) => {
 
 describe("shellEnv", () => {
   for (const stdin of [true, false]) {
-    it(`matches Pi's Node environment for file operations (${stdin ? "stdin" : "base64"} writes)`, async () => {
+    it.skipIf(!linux)(`matches Pi's Node environment for file operations (${stdin ? "stdin" : "base64"} writes)`, async () => {
       const expected = await exercise(new NodeExecutionEnv({ cwd: join(root, "node") }), join(root, "node"))
       const actual = await exercise(shellEnv(localShell({ stdin }), { cwd: join(root, "shell") }), join(root, "shell"))
       const normalized = JSON.parse(JSON.stringify(actual).replaceAll(join(root, "shell"), join(root, "node")))
@@ -117,7 +118,7 @@ describe("shellEnv", () => {
     expect(missing.ok ? missing : missing.error.code).toBe("spawn_error")
   })
 
-  it("kills the whole process tree on timeout and abort", async () => {
+  it.skipIf(!linux)("kills the whole process tree on timeout and abort", async () => {
     const env = shellEnv(localShell({ stdin: true }), { cwd: root })
     const marker = `pi-cloud-test-${process.pid}-${Date.now()}`
     const started = Date.now()
@@ -148,7 +149,7 @@ describe("shellEnv", () => {
   })
 })
 
-registerEnvConformance({ describe, expect, it }, "shellEnv over a local shell", async (use) => {
+if (linux) registerEnvConformance({ describe, expect, it }, "shellEnv over a local shell", async (use) => {
   const dir = await mkdtemp(join(tmpdir(), "pi-cloud-conformance-"))
   const env = shellEnv(localShell({ stdin: true }), { cwd: dir })
   try {
@@ -159,7 +160,7 @@ registerEnvConformance({ describe, expect, it }, "shellEnv over a local shell", 
   }
 })
 
-describe("shellEnv against Pi's NodeExecutionEnv", () => {
+describe.skipIf(!linux)("shellEnv against Pi's NodeExecutionEnv", () => {
   const name = fc.constantFrom("a", "b c", "-x", "$HOME", "it's", 'q"t', "ü✓", "*", "back\\slash", "--", ".hidden", "~")
   const path = fc.array(name, { minLength: 1, maxLength: 3 }).map((parts) => parts.join("/"))
   const content = fc.oneof(fc.string({ unit: "grapheme", maxLength: 40 }), fc.uint8Array({ maxLength: 300 }), fc.constantFrom("", "\n", "a\r\nb", "\u0000x"))
