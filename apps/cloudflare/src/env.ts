@@ -1,4 +1,4 @@
-import type { DurableObjectNamespace } from "@cloudflare/workers-types"
+import type { DurableObjectLocationHint, DurableObjectNamespace } from "@cloudflare/workers-types"
 import { CloudflareEnv } from "@pi-cloud/config"
 import { ConfigProvider, Effect } from "effect"
 import type { ControlPlane } from "./ControlPlane.ts"
@@ -7,6 +7,7 @@ import type { SessionHost } from "./SessionHost.ts"
 export interface Env {
   readonly CONTROL_PLANE: DurableObjectNamespace<ControlPlane>
   readonly SESSION_HOST: DurableObjectNamespace<SessionHost>
+  readonly PI_CLOUD_LOCATION?: DurableObjectLocationHint
   readonly [setting: string]: unknown
 }
 
