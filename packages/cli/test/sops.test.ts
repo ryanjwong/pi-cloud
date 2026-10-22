@@ -24,9 +24,8 @@ describe("setYamlKeys", () => {
       "# comment",
       "ANTHROPIC_API_KEY: sk-ant",
       "SLACK_BOT_TOKEN: xoxb",
-      "",
       "GITHUB_APP_ID: \"77\"",
-      "GITHUB_APP_PRIVATE_KEY: |",
+      "GITHUB_APP_PRIVATE_KEY: |2",
       "  -----BEGIN RSA PRIVATE KEY-----",
       "  MIIabc",
       "  def==",
@@ -72,4 +71,33 @@ describe.skipIf(!hasSops)("writeSopsSecrets", () => {
       rmSync(dir, { recursive: true, force: true })
     }
   }, 30_000)
+})
+
+import fc from "fast-check"
+import { parse, stringify } from "yaml"
+
+describe("setYamlKeys invariants", () => {
+  const key = fc.stringMatching(/^[A-Z][A-Z0-9_]{0,10}$/)
+  const value = fc.oneof(
+    fc.string(),
+    fc.string({ unit: "grapheme" }),
+    // Shapes secrets take: PEM blocks, leading spaces, trailing newlines, YAML-looking text.
+    fc.array(fc.string({ unit: fc.constantFrom("a", " ", "-", ":", "#", "|", "'", '"', "\t", "\\", "é") }), { minLength: 2, maxLength: 5 }).map((lines) => lines.join("\n")),
+    fc.constantFrom("-----BEGIN RSA PRIVATE KEY-----\nMIIabc\n-----END RSA PRIVATE KEY-----\n", "  indented\nnext", "a\n\n", "\n", "", "null", "true", "123", "~", "- item", "key: value", "a\r\nb")
+  )
+  const doc = fc.dictionary(key, value, { maxKeys: 5 })
+
+  it("merges the given keys into any document, keeping everything else, and is idempotent", () => {
+    fc.assert(
+      fc.property(doc, fc.dictionary(key, value, { minKeys: 1, maxKeys: 4 }), (existing, values) => {
+        const text = Object.keys(existing).length === 0 ? "" : `# secrets\n${stringify(existing)}`
+        // Documents the YAML library itself writes faithfully (it does not, for some whitespace-only lines).
+        fc.pre(text === "" || JSON.stringify(parse(text)) === JSON.stringify(existing))
+        const once = setYamlKeys(text, values)
+        expect(parse(once) ?? {}).toEqual({ ...existing, ...values })
+        expect(setYamlKeys(once, values)).toBe(once)
+      }),
+      { numRuns: 2_000 }
+    )
+  })
 })

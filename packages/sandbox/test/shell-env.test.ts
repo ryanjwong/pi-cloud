@@ -6,6 +6,7 @@ import { execFileSync, spawn } from "node:child_process"
 import { mkdtemp, rm, symlink } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import fc from "fast-check"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { type RemoteShell, shellEnv } from "../src/ShellEnv.ts"
 
@@ -161,4 +162,86 @@ registerEnvConformance({ describe, expect, it }, "shellEnv over a local shell", 
     await env.cleanup(context)
     await rm(dir, { recursive: true, force: true })
   }
+})
+
+describe("shellEnv against Pi's NodeExecutionEnv", () => {
+  // Names that trip up shell quoting, options parsing and globbing.
+  const name = fc.constantFrom("a", "b c", "-x", "$HOME", "it's", 'q"t', "ü✓", "*", "back\\slash", "--", ".hidden", "~")
+  const path = fc.array(name, { minLength: 1, maxLength: 3 }).map((parts) => parts.join("/"))
+  const content = fc.oneof(fc.string({ unit: "grapheme", maxLength: 40 }), fc.uint8Array({ maxLength: 300 }), fc.constantFrom("", "\n", "a\r\nb", "\u0000x"))
+  type FileOp =
+    | { op: "write" | "append"; path: string; data: string | Uint8Array }
+    | { op: "readText" | "readBinary" | "list" | "info" | "exists" | "removeForce" | "remove"; path: string }
+    | { op: "mkdir"; path: string; recursive: boolean }
+    | { op: "rename"; path: string; to: string }
+    | { op: "truncate"; path: string; size: number }
+  const fileOp: fc.Arbitrary<FileOp> = fc.oneof(
+    { weight: 4, arbitrary: fc.record({ op: fc.constantFrom("write" as const, "append" as const), path, data: content }) },
+    { weight: 4, arbitrary: fc.record({ op: fc.constantFrom("readText" as const, "readBinary" as const, "list" as const, "info" as const, "exists" as const, "removeForce" as const, "remove" as const), path: fc.oneof(path, fc.constant(".")) }) },
+    { weight: 1, arbitrary: fc.record({ op: fc.constant("mkdir" as const), path, recursive: fc.boolean() }) },
+    { weight: 1, arbitrary: fc.record({ op: fc.constant("rename" as const), path, to: path }) },
+    { weight: 1, arbitrary: fc.record({ op: fc.constant("truncate" as const), path, size: fc.integer({ min: 0, max: 50 }) }) }
+  )
+
+  const apply = async (env: ExecutionEnv, dir: string, step: FileOp) => {
+    const at = (relative: string) => join(dir, relative)
+    const result = await (async () => {
+      switch (step.op) {
+        case "write": return env.writeFile(at(step.path), step.data, context)
+        case "append": return env.appendFile(at(step.path), step.data, context)
+        case "readText": return env.readTextFile(at(step.path), context)
+        case "readBinary": {
+          const read = await env.readBinaryFile(at(step.path), context)
+          return read.ok ? { ok: true as const, value: Array.from(read.value) } : read
+        }
+        case "list": {
+          const listed = await env.listDir(at(step.path), context)
+          return listed.ok ? { ok: true as const, value: listed.value.map((entry) => `${entry.kind}:${entry.name}`).sort() } : listed
+        }
+        case "info": {
+          const info = await env.fileInfo(at(step.path), context)
+          return info.ok ? { ok: true as const, value: { kind: info.value.kind, name: info.value.name, size: info.value.kind === "file" ? info.value.size : 0 } } : info
+        }
+        case "exists": return env.exists(at(step.path), context)
+        case "remove": return env.remove(at(step.path), undefined, context)
+        case "removeForce": return env.remove(at(step.path), { recursive: true, force: true }, context)
+        case "mkdir": return env.createDir(at(step.path), { recursive: step.recursive }, context)
+        case "rename": return env.renameFile(at(step.path), at(step.to), context)
+        case "truncate": return env.truncateFile(at(step.path), step.size, context)
+      }
+    })()
+    return result.ok ? { ok: result.value ?? null } : { error: (result.error as { code: string }).code }
+  }
+
+  /**
+   * Where the two knowingly differ, each case named: Pi's Node environment reports some errors only as `unknown`,
+   * and shellEnv names them.
+   */
+  const allowed = (step: FileOp, shell: unknown, node: unknown) => {
+    if (JSON.stringify(node) !== '{"error":"unknown"}') return false
+    const named = (shell as { error?: string }).error
+    // Removing a directory without `recursive`.
+    if (step.op === "remove") return named === "is_directory"
+    // Writing below a file: Node's parent creation fails without a code.
+    if (step.op === "write" || step.op === "append") return named === "not_directory"
+    return false
+  }
+
+  it("agrees on every result for any sequence of file operations", async () => {
+    await fc.assert(
+      fc.asyncProperty(fc.array(fileOp, { minLength: 1, maxLength: 12, size: "large" }), async (steps) => {
+        const run = await mkdtemp(join(root, "run-"))
+        const [mine, theirs] = [join(run, "1", "root"), join(run, "2", "root")]
+        execFileSync("mkdir", ["-p", mine, theirs])
+        const shell = shellEnv(localShell({ stdin: true }), { cwd: mine })
+        const node = new NodeExecutionEnv({ cwd: theirs })
+        for (const [index, step] of steps.entries()) {
+          const [a, b] = [await apply(shell, mine, step), await apply(node, theirs, step)]
+          if (allowed(step, a, b)) continue
+          expect(a, `step ${index}: ${JSON.stringify(step)}`).toEqual(b)
+        }
+      }),
+      { numRuns: 60 }
+    )
+  }, 300_000)
 })

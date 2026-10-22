@@ -1,3 +1,4 @@
+import type { Context } from "@earendil-works/chord"
 import type { ExecutionEnv } from "@earendil-works/pi-durable/env"
 
 /** Values shorter than this are not masked: they would match ordinary text. */
@@ -38,18 +39,58 @@ export class SecretMask {
     return value
   }
 
-  /** Mask command output as it streams. A secret split across two chunks is caught by the final result mask. */
+  /**
+   * Where `text` can be cut so that no secret straddles the cut and none can still be completed by what follows:
+   * everything before the cut can be masked and sent, the rest is held for the next chunk.
+   */
+  private safeCut(text: string): number {
+    let longest = 0
+    for (const value of this.secrets.keys()) longest = Math.max(longest, value.length)
+    let cut = Math.max(0, text.length - (longest - 1))
+    for (let moved = true; moved;) {
+      moved = false
+      for (const value of this.secrets.keys()) {
+        for (let at = text.indexOf(value, Math.max(0, cut - value.length + 1)); at !== -1 && at < cut; at = text.indexOf(value, at + 1)) {
+          if (at + value.length > cut) {
+            cut = at
+            moved = true
+          }
+        }
+      }
+    }
+    return cut
+  }
+
+  /**
+   * Mask command output as it streams. Each stream holds back just enough of its tail that a secret split across
+   * chunks is still masked whole, and sends the rest when the command ends, so streamed output (which clients see
+   * and Pi may store as progress) never carries a secret either.
+   */
   env(env: ExecutionEnv): ExecutionEnv {
     const masked = Object.create(env) as ExecutionEnv
-    masked.exec = (command, options, context) => {
+    masked.exec = async (command, options, context) => {
       const onOutput = options?.onOutput
-      return env.exec(
-        command,
-        onOutput === undefined
-          ? options
-          : { ...options, onOutput: (text, outputContext, info) => onOutput(this.text(text), outputContext, info) },
-        context
-      )
+      if (onOutput === undefined) return env.exec(command, options, context)
+      type Info = Parameters<typeof onOutput>[2]
+      const held = new Map<Info["stream"], { text: string; context: Context; info: Info }>()
+      const send = (text: string, outputContext: Context, info: Info) => {
+        if (text !== "") onOutput(this.text(text), outputContext, info)
+      }
+      try {
+        return await env.exec(command, {
+          ...options,
+          onOutput: (text, outputContext, info) => {
+            // Output before an omission is omitted, held text included, on either stream.
+            if (info.skipped !== undefined) held.clear()
+            const combined = (held.get(info.stream)?.text ?? "") + text
+            const cut = this.size === 0 ? combined.length : this.safeCut(combined)
+            held.set(info.stream, { text: combined.slice(cut), context: outputContext, info: { stream: info.stream } as Info })
+            send(combined.slice(0, cut), outputContext, info)
+          }
+        }, context)
+      } finally {
+        for (const { text, context: outputContext, info } of held.values()) send(text, outputContext, info)
+      }
     }
     return masked
   }

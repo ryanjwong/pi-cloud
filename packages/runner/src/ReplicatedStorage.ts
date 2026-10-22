@@ -35,7 +35,7 @@ const fromBase64 = (text: string) => {
 }
 
 /** Load a dump into an empty database: its schema, then its rows, in one transaction. */
-const load = async (database: SqliteDatabase, dump: StorageDump) => {
+export const loadDump = async (database: SqliteDatabase, dump: StorageDump) => {
   for (const statement of dump.schema) await database.exec(statement)
   await database.transaction(async (transaction) => {
     for (const table of dump.tables) {
@@ -83,7 +83,7 @@ export class ReplicatedStorage implements Storage {
     if (dump === undefined || database === undefined) return new ReplicatedStorage(remote, undefined, onDrop)
     const db = await database()
     try {
-      await load(db, dump)
+      await loadDump(db, dump)
       const local = await SqliteStorage.open(db, dump.prefix === undefined ? {} : { prefix: dump.prefix })
       return new ReplicatedStorage(remote, local, onDrop)
     } catch (error) {

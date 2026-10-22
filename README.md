@@ -465,6 +465,31 @@ the session's durable state, so a runner restarted elsewhere reconnects to the s
 **Clients** are projections of the same API and event stream. `packages/cli/src/render.ts` is the whole terminal
 renderer; a web UI or Slack bot is another renderer over `followEvents`.
 
+## Testing
+
+`pnpm test` runs everything (about a minute and a half). Beyond end-to-end tests of each feature, the guarantees
+below are stated as invariants and checked with [fast-check](https://fast-check.dev) against random inputs and
+operation sequences; a failure prints the smallest counterexample. Each property was checked by breaking the code
+on purpose and confirming the test fails.
+
+| Invariant | Checked by |
+|---|---|
+| At most one live lease per session; epochs only increase; a superseded token never validates again; abandoned leases are reported once | A model-based test of `LeaseManager` over random acquire, renew, release, expiry and removal sequences (`packages/core/test/lease.test.ts`) |
+| Every event subscriber, joining late or resuming after a disconnect, gets an ordered, duplicate-free, gapless stream that starts at a snapshot or right after its cursor | Random publishes, lease changes, subscribes and disconnects (`packages/core/test/events.test.ts`) |
+| Only the current lease holder commits; a retried request id applies once; commits get one gapless sequence | Concurrent commit waves from an old and a new holder over the real runner RPC (`apps/local/test/fencing.test.ts`) |
+| Every prompt appears once and is answered once, however often runners die | Random runner kills while clients retry with request ids; the test also checks that kills hit running sessions (`apps/local/test/exactly-once.test.ts`) |
+| A replica is an exact copy of its session's tables, and only of them | Random tables, types and values through `dumpSqlite`, JSON and `loadDump` (`apps/local/test/dump.test.ts`); session table prefixes never collide or overlap (`packages/storage-sqlite/test/prefix.test.ts`) |
+| Every public endpoint and every runner RPC refuses without credentials | Enumerated from the API and RPC definitions, so a new endpoint is covered automatically (`apps/local/test/auth-coverage.test.ts`) |
+| The Cloudflare Worker never forwards a path that any decoding or normalization puts outside the public API | 20,000 generated paths, read the ways servers and proxies read them (`apps/cloudflare/test/paths.test.ts`) |
+| No secret appears in masked results or in streamed output, however output is chunked; sealed credentials open only with their key and refuse tampering | `packages/sandbox/test/mask.test.ts`, `packages/core/test/secrets.test.ts` |
+| A sandbox's files behave exactly like Pi's local environment | Random file operation sequences with awkward names and binary contents, run against `shellEnv` and Pi's `NodeExecutionEnv`, compared result by result, with each known difference named (`packages/sandbox/test/shell-env.test.ts`) |
+| A session's GitHub token covers only repositories its spec names, of one account; a reused token always has five minutes left | `packages/github-app/test/github-app.test.ts` |
+| Writing secrets into `secrets.yaml` keeps every other key and reads back exactly; doing it twice changes nothing | Checked against a YAML parser, and against real `sops` and `age` when installed (`packages/cli/test/sops.test.ts`) |
+
+These tests found and fixed: streamed command output could carry a secret split across two chunks; two different
+session ids could share, or reach into, each other's tables (`.` and `%` both became `s___`); and `shellEnv`
+reported missing paths under a file, forced removals there, and renames into them differently from Pi.
+
 ## Guarantees and limits
 
 - **One writer per session.** Leases have a TTL (15 s by default) and runners renew them at a third of it. Every

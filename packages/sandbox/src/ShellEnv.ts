@@ -94,9 +94,14 @@ const FAILURES: Record<number, FileErrorCode> = {
   6: "invalid"
 }
 
-/** Shared helpers: `e` fails with not_found unless the path exists, `p` unless its parent directory does. */
-const PRELUDE = `e() { [ -e "$1" ] || [ -L "$1" ] || exit 2; }
-p() { d=$(dirname -- "$1"); [ -e "$d" ] || exit 2; [ -d "$d" ] || exit 4; }
+/**
+ * Shared helpers: `e` fails unless the path exists, `p` unless its parent directory does. A missing path fails as
+ * the kernel would: not_directory when its nearest existing ancestor is not a directory, else not_found.
+ */
+const PRELUDE = `m() { a=$(dirname -- "$1"); while [ ! -e "$a" ] && [ "$a" != / ] && [ "$a" != . ]; do a=$(dirname -- "$a"); done
+  [ -e "$a" ] && [ ! -d "$a" ] && exit 4; exit 2; }
+e() { [ -e "$1" ] || [ -L "$1" ] || m "$1"; }
+p() { d=$(dirname -- "$1"); [ -e "$d" ] || m "$d"; [ -d "$d" ] || exit 4; }
 `
 
 /** `stat` lines: kind, size, mtime with milliseconds where supported, then the name. */
@@ -493,7 +498,8 @@ s=$?; rm -f ${quote(pidFile)}; exit $s`
       const from = await absolute(source)
       const to = await absolute(destination)
       const result = await fileOp(
-        `e "$1"; p "$2"; if [ -d "$2" ] && [ ! -d "$1" ]; then exit 3; fi; mv -f -- "$1" "$2"`,
+        // In the kernel's order: both parents resolve before the source is looked up.
+        `p "$1"; p "$2"; e "$1"; if [ -d "$2" ] && [ ! -d "$1" ]; then exit 3; fi; mv -f -- "$1" "$2"`,
         from,
         [from, to],
         context
@@ -528,13 +534,16 @@ s=$?; rm -f ${quote(pidFile)}; exit $s`
     },
     createDir: async (path, dirOptions, context) => {
       const resolved = await absolute(path)
-      const script = (dirOptions?.recursive ?? true) ? `mkdir -p -- "$1"` : `p "$1"; mkdir -- "$1"`
+      const script = (dirOptions?.recursive ?? true)
+        ? `mkdir -p -- "$1" 2>/dev/null && exit 0; [ -e "$1" ] || m "$1"; exit 1`
+        : `p "$1"; mkdir -- "$1"`
       const result = await fileOp(script, resolved, [resolved], context)
       return result.ok ? ok(undefined) : result
     },
     remove: async (path, removeOptions, context) => {
       const resolved = await absolute(path)
-      const script = `if [ ! -e "$1" ] && [ ! -L "$1" ]; then [ "$2" = f ] && exit 0; exit 2; fi
+      // Force ignores a path that does not exist, not one that cannot (under a file).
+      const script = `if [ ! -e "$1" ] && [ ! -L "$1" ]; then (m "$1"); c=$?; [ $c = 2 ] && [ "$2" = f ] && exit 0; exit $c; fi
 if [ -d "$1" ] && [ ! -L "$1" ]; then [ "$3" = r ] || exit 3; rm -rf -- "$1"; else rm -f -- "$1"; fi`
       const args = [resolved, removeOptions?.force === true ? "f" : "", removeOptions?.recursive === true ? "r" : ""]
       const result = await fileOp(script, resolved, args, context)

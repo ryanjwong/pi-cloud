@@ -4,6 +4,22 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 
 /**
+ * A YAML value that reads back exactly. Multi-line printable text (a PEM key) becomes a literal block, readable in
+ * `sops edit`, with an explicit indentation (the first line may start with spaces) and the chomping that keeps its
+ * trailing newlines; anything else is a double-quoted string, which YAML reads as JSON does.
+ */
+const encodeValue = (value: string) => {
+  const body = value.replace(/\n+$/, "")
+  const trailing = value.length - body.length
+  const plain = /^[\x20-\x7e\n]*$/.test(value) && body.split("\n").every((line) => line === "" || /\S/.test(line))
+  // Lines of only spaces read back as empty in a block, so such values are quoted too.
+  if (!value.includes("\n") || body === "" || !plain) return JSON.stringify(value)
+  const chomp = trailing === 0 ? "-" : trailing === 1 ? "" : "+"
+  const lines = [...body.split("\n"), ...Array.from({ length: Math.max(0, trailing - 1) }, () => "")]
+  return `|2${chomp}\n${lines.map((line) => (line === "" ? "" : `  ${line}`)).join("\n")}`
+}
+
+/**
  * Set top-level keys of a YAML document, replacing any existing entry (with its indented continuation lines) and
  * appending the rest. Multi-line values become block scalars. Enough for a flat secrets file; nothing else is
  * touched.
@@ -12,19 +28,17 @@ export const setYamlKeys = (text: string, values: Readonly<Record<string, string
   const keys = new Set(Object.keys(values))
   const kept: Array<string> = []
   let skipping = false
-  for (const line of text.split("\n")) {
+  // Lines are newline-terminated: a final newline ends the last line rather than starting an empty one.
+  const lines = text === "" ? [] : text.replace(/\n$/, "").split("\n")
+  for (const line of lines) {
     const key = line.match(/^([A-Za-z0-9_]+)\s*:/)?.[1]
     if (key !== undefined) skipping = keys.has(key)
     else if (line.trim() !== "" && !/^\s/.test(line)) skipping = false
     if (!skipping) kept.push(line)
   }
-  while (kept.length > 0 && kept.at(-1)!.trim() === "") kept.pop()
-  const entries = Object.entries(values).map(([key, value]) =>
-    value.includes("\n")
-      ? `${key}: |\n${value.replace(/\n+$/, "").split("\n").map((line) => `  ${line}`).join("\n")}`
-      : `${key}: ${JSON.stringify(value)}`
-  )
-  return `${[...kept, ...(kept.length === 0 ? [] : [""]), ...entries].join("\n")}\n`
+  // Nothing is trimmed or inserted between: trailing lines may belong to the last value (a block scalar keeps them).
+  const head = kept.map((line) => `${line}\n`).join("")
+  return `${head}${Object.entries(values).map(([key, value]) => `${key}: ${encodeValue(value)}`).join("\n")}\n`
 }
 
 /**

@@ -43,8 +43,26 @@ CREATE TABLE IF NOT EXISTS credentials (provider_id TEXT PRIMARY KEY, sealed TEX
 const attempt = <A>(f: () => Promise<A>) =>
   Effect.tryPromise({ try: f, catch: (cause) => new StorageFailure({ message: cause instanceof Error ? cause.message : String(cause) }) })
 
-/** Each session's Pi tables carry its own prefix in the shared file. */
-export const sessionPrefix = (sessionId: string) => `s_${sessionId.replace(/[^A-Za-z0-9_]/g, "_")}_`
+/** The ids pi-cloud mints. Their tables keep the names they have always had. */
+const MINTED = /^ses_[0-9a-f]{32}$/
+
+/**
+ * Each session's Pi tables carry its own prefix in the shared file, and the prefixes must keep sessions apart:
+ * distinct ids never share one, and no prefix starts another (or one session's `LIKE 'prefix%'` would reach into
+ * another's tables). Any other id is escaped so that every `_` is followed by `u`, `h` or `x`, so the escape never
+ * contains `__`, which then ends the prefix.
+ */
+export const sessionPrefix = (sessionId: string) => {
+  if (MINTED.test(sessionId)) return `s_${sessionId}_`
+  let escaped = ""
+  for (const char of sessionId) {
+    if (/[A-Za-z0-9]/.test(char)) escaped += char
+    else if (char === "_") escaped += "_u"
+    else if (char === "-") escaped += "_h"
+    else escaped += `_x${char.codePointAt(0)!.toString(16).padStart(6, "0")}`
+  }
+  return `s_${escaped}__`
+}
 
 /** A shared database whose `close` leaves it open: Pi's storage closes what it was opened on. */
 const borrowed = (db: SqliteDatabase): SqliteDatabase => ({
