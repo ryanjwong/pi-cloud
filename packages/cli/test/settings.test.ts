@@ -43,19 +43,15 @@ describe("settings", () => {
     mkdirSync(checkout)
     mkdirSync(join(home, "sops", "age"), { recursive: true })
     const legacy = { secrets: join(checkout, "secrets.yaml"), sopsConfig: join(checkout, ".sops.yaml"), key }
+    writeFileSync(legacy.secrets, "PI_CLOUD_API_KEYS: old-key\n")
     if (hasSops) {
       execFileSync("age-keygen", ["-o", key], { stdio: "ignore" })
       const recipient = readFileSync(key, "utf8").match(/public key: (age1\w+)/)![1]!
       writeFileSync(legacy.sopsConfig, `creation_rules:\n  - path_regex: .*\\.yaml$\n    age: ${recipient}\n`)
-      writeFileSync(legacy.secrets, execFileSync("sops", ["encrypt", "--filename-override", legacy.secrets, "--input-type", "yaml", "--output-type", "yaml", "/dev/stdin"], {
-        cwd: checkout,
-        input: "PI_CLOUD_API_KEYS: old-key\n",
-        env: { ...process.env, SOPS_AGE_KEY_FILE: key }
-      }))
+      execFileSync("sops", ["encrypt", "--in-place", legacy.secrets], { cwd: checkout, env: { ...process.env, SOPS_AGE_KEY_FILE: key } })
     } else {
       writeFileSync(key, "AGE-SECRET-KEY-1TEST\n")
       writeFileSync(legacy.sopsConfig, "creation_rules: []\n")
-      writeFileSync(legacy.secrets, "PI_CLOUD_API_KEYS: old-key\n")
     }
     const before = Object.fromEntries(Object.entries(legacy).map(([name, file]) => [name, readFileSync(file, "utf8")]))
     writePrivate(paths().settings, JSON.stringify({ url: "https://old.example", sandboxProvider: "daytona", secretsFile: legacy.secrets }))

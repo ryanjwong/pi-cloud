@@ -27,7 +27,7 @@
             pname = "pi-cloud";
             inherit pnpm;
             fetcherVersion = 3;
-            hash = "sha256-Uv47CFSEb5me+bcdeCoqVfEtSYN6GI1vlcRAfW+70cU=";
+            hash = if pkgs.stdenv.hostPlatform.isDarwin then "sha256-2CtuP6BBTkZ0IO4Y99F0FGQtgueirVMw54Ek9/uLmrg=" else "sha256-PZ3+U9piIYEe+ntoJyxUyexKN76AJ6r+jbNL+861+gA=";
           };
           dontFixup = true;
         });

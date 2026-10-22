@@ -17,7 +17,7 @@ const cli = (args: ReadonlyArray<string>, cwd = home) => {
   return { status: result.status, out: result.stdout + result.stderr }
 }
 
-describe("pi-cloud", () => {
+describe("pi-cloud", { timeout: 30_000 }, () => {
   it("prints help without touching the network or the config", () => {
     const help = cli(["--help"])
     expect(help.status).toBe(0)

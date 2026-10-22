@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [claude/pi-cloud-control-plane]
+    branches: [main]
   pull_request:
 
 jobs:
