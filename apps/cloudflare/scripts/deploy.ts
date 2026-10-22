@@ -49,6 +49,8 @@ const wrangler = (args: ReadonlyArray<string>, options: { input?: string; captur
     child.on("close", (code) => done({ ok: code === 0, output }))
   })
 
+const clean = (value: string) => [...value].filter((char) => char >= " " && char !== "\u007f").join("").replace(/\[20[01]~/g, "").trim()
+
 const askSecret = (question: string) =>
   new Promise<string>((done) => {
     process.stdout.write(question)
@@ -63,7 +65,7 @@ const askSecret = (question: string) =>
           stdin.pause()
           stdin.off("data", onData)
           process.stdout.write("\n")
-          return done(value.trim())
+          return done(clean(value))
         }
         if (char === "\u0003") process.exit(130)
         if (char === "\u007f") value = value.slice(0, -1)
@@ -108,6 +110,9 @@ const current: Record<string, unknown> = existsSync(secretsFile)
   : {}
 const present = (name: string) => typeof current[name] === "string" && current[name] !== ""
 const added: Record<string, string> = {}
+for (const [name, value] of Object.entries(current)) {
+  if (typeof value === "string" && clean(value) !== value) added[name] = clean(value)
+}
 for (const name of REQUIRED) {
   if (!present(name)) {
     added[name] = randomBytes(32).toString("base64url")
