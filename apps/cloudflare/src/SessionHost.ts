@@ -1,4 +1,5 @@
 import { DurableObject } from "cloudflare:workers"
+import { registerBunOAuthFlows } from "@earendil-works/pi-ai/bun-oauth"
 import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic"
 import { openaiProvider } from "@earendil-works/pi-ai/providers/openai"
 import { openaiCodexProvider } from "@earendil-works/pi-ai/providers/openai-codex"
@@ -14,6 +15,8 @@ import { Option, Redacted } from "effect"
 import { CONTROL_PLANE, type Env, INTERNAL_URL, settings } from "./env.ts"
 
 const KEEPALIVE_MS = 20_000
+
+registerBunOAuthFlows()
 
 export class SessionHost extends DurableObject<Env> {
   #host: Promise<RunnerHost> | undefined
