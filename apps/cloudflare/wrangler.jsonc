@@ -1,6 +1,7 @@
 // pi-cloud on Cloudflare: one Worker, the control plane as one Durable Object, one Durable Object per session.
 //   pnpm --filter @pi-cloud/cloudflare exec wrangler secret put PI_CLOUD_API_KEYS   (required, as are PI_CLOUD_RUNNER_SECRET and
-//   PI_CLOUD_CREDENTIAL_KEY; then ANTHROPIC_API_KEY, ...). Until all three are set, the Worker answers 503.
+//   PI_CLOUD_CREDENTIAL_KEY; then ANTHROPIC_API_KEY, ..., and DAYTONA_API_KEY for sandboxes). Until all three are
+//   set, the Worker answers 503.
 //   pnpm --filter @pi-cloud/cloudflare run deploy
 {
   "name": "pi-cloud",

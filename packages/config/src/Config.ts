@@ -57,7 +57,11 @@ export const CloudflareEnv = Config.all({
   ),
   runnerSecret: Config.Redacted("PI_CLOUD_RUNNER_SECRET"),
   credentialKey: Config.Redacted("PI_CLOUD_CREDENTIAL_KEY"),
-  modelCredentials: ModelCredentials
+  modelCredentials: ModelCredentials,
+  /** Enables Daytona sandboxes, the only sandboxes a Worker can drive. */
+  daytonaApiKey: Config.option(Config.Redacted("DAYTONA_API_KEY")),
+  /** Lets sandboxes clone private repositories and push. */
+  githubToken: Config.option(Config.Redacted("GITHUB_TOKEN"))
 })
 export type CloudflareEnv = Config.Success<typeof CloudflareEnv>
 

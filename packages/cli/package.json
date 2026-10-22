@@ -7,7 +7,8 @@
     "pi-cloud": "./src/main.ts"
   },
   "exports": {
-    ".": "./src/render.ts"
+    ".": "./src/render.ts",
+    "./sops": "./src/sops.ts"
   },
   "dependencies": {
     "@pi-cloud/client": "workspace:*",

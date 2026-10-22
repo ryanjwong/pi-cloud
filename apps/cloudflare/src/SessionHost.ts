@@ -5,8 +5,11 @@ import { openaiCodexProvider } from "@earendil-works/pi-ai/providers/openai-code
 import { DurableObjectSqliteDatabase } from "@earendil-works/pi-durable/storage/sqlite/cloudflare"
 import { modelCredentialLookup } from "@pi-cloud/config"
 import type { WakeRequest } from "@pi-cloud/protocol"
-import { modelProviders, type ReplicaDatabase, RunnerHost } from "@pi-cloud/runner"
-import { Redacted } from "effect"
+import { CodingTools } from "@earendil-works/pi-durable/tools"
+import { extensions, modelProviders, type ReplicaDatabase, RunnerHost } from "@pi-cloud/runner"
+import { sandboxes } from "@pi-cloud/sandbox"
+import { daytonaSandboxes } from "@pi-cloud/sandbox-daytona"
+import { Option, Redacted } from "effect"
 import { CONTROL_PLANE, type Env, INTERNAL_URL, settings } from "./env.ts"
 
 /** How often a busy host re-arms its alarm. Each alarm is an event, which keeps the object resident. */
@@ -41,7 +44,19 @@ export class SessionHost extends DurableObject<Env> {
       // Straight to the control plane object, never over the public internet.
       fetch: ((input: RequestInfo | URL, init?: RequestInit) => controlPlane.fetch(new Request(input, init) as never)) as unknown as typeof fetch,
       modelCredentials: modelCredentialLookup(env),
-      plugins: [modelProviders(anthropicProvider, openaiProvider, openaiCodexProvider)],
+      plugins: [
+        modelProviders(anthropicProvider, openaiProvider, openaiCodexProvider),
+        // Pi's coding tools, run in a Daytona sandbox: a Worker has no filesystem or shell of its own.
+        extensions("coding", CodingTools),
+        sandboxes({
+          providers: Option.match(env.daytonaApiKey, {
+            onNone: () => [],
+            onSome: (apiKey) => [daytonaSandboxes({ apiKey: Redacted.value(apiKey) })]
+          })
+        })
+      ],
+      // The only secret a sandbox can ask for: GITHUB_TOKEN, to clone private repositories and push.
+      secrets: async (name) => (name === "GITHUB_TOKEN" ? Option.getOrUndefined(Option.map(env.githubToken, Redacted.value)) : undefined),
       replica: this.#replica
     })
   }

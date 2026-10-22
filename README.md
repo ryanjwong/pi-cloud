@@ -245,7 +245,10 @@ litestream restore -config litestream.yml -if-db-not-exists -if-replica-exists .
 sops exec-env secrets.yaml 'litestream replicate -config litestream.yml -exec "pnpm start"'
 ```
 
-**On Cloudflare** (`apps/cloudflare`), everything runs on Durable Objects, in the same architecture:
+**On Cloudflare** (`apps/cloudflare`), everything runs on Durable Objects, in the same architecture. One command sets
+it up: it creates your age key and points `.sops.yaml` at it if needed, generates pi-cloud's own secrets, asks for
+your model, Daytona and GitHub keys (Enter skips one), keeps them all encrypted in `secrets.yaml`, signs in to
+Cloudflare, deploys, and hands the Worker its secrets over stdin. It prints the lines that point `pi-cloud` at it.
 
 - the **control plane is one Durable Object**. Its SQLite is the central store, laid out exactly like
   `pi-cloud.sqlite` (the registry, bindings, credentials, and every session's Pi tables), with Cloudflare's
@@ -256,12 +259,9 @@ sops exec-env secrets.yaml 'litestream replicate -config litestream.yml -exec "p
   RPC is not reachable from outside.
 
 ```sh
-cd apps/cloudflare
-pnpm exec wrangler secret put PI_CLOUD_API_KEYS          # required, as are PI_CLOUD_RUNNER_SECRET and PI_CLOUD_CREDENTIAL_KEY
-pnpm exec wrangler secret put ANTHROPIC_API_KEY          # and OPENAI_API_KEY, ...
-pnpm run deploy                                          # wrangler deploy
-pnpm run dev                                             # the same, in a local workerd
-PI_CLOUD_URL=https://pi-cloud.<you>.workers.dev pi-cloud # Pi's TUI against it
+pnpm deploy:cloudflare     # everything: SOPS, secrets, sign-in, deploy; again to redeploy (it asks only for missing keys)
+sops secrets.yaml          # change a key, then pnpm deploy:cloudflare again
+pnpm --filter @pi-cloud/cloudflare run dev   # the same Worker in a local workerd
 ```
 
 ## Security
@@ -521,8 +521,10 @@ reported missing paths under a file, forced removals there, and renames into the
 - **Pi's agent needs a Node runner.** `@pi-cloud/pi` builds Pi's system prompt from the runner's `~/.pi/agent` and
   the sandbox: `AGENTS.md`/`CLAUDE.md` files are read through the sandbox, wherever it runs, but project skills
   (`.pi/skills`) load only from sandboxes on the runner's filesystem.
-- **On Cloudflare, so far:** runners have the model providers (Anthropic, OpenAI, ChatGPT/Codex logins) but no Pi
-  prompt, coding tools or sandbox; GitHub and Slack connectors are not wired; the WebSocket session channel
+- **On Cloudflare, so far:** runners have the model providers (Anthropic, OpenAI, ChatGPT/Codex logins) and Pi's
+  coding tools in Daytona sandboxes (`DAYTONA_API_KEY`; a Worker has no shell of its own, and the Daytona SDK is
+  tested on workerd against a stand-in API, not the live service), but not Pi's coding-agent prompt or subagents
+  (`@pi-cloud/pi` reads the runner's files, so it is Node-only); GitHub and Slack connectors are not wired; the WebSocket session channel
   (`/v1/sessions/:id/channel`) is Node-only, while the service API and REST work. Leases, event buffers and the
   service API's state live in the control plane object's memory: they last while anything talks to it (runners
   renew every few seconds), and clients reconnect if it is evicted. One object is one thread and 10 GB.
