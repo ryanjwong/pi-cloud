@@ -171,7 +171,7 @@ export const hostSession = Effect.fnUntraced(function*(
       }
     )
     for (const plugin of options.plugins) {
-      parts.push(await runSetup(plugin, { session, config: session.spec.plugins?.[plugin.name], secrets: sessionSecrets }))
+      parts.push(await runSetup(plugin, { session, secrets: session.resolved?.untrusted === true ? noSecrets : sessionSecrets }))
     }
     const credentials = options.modelCredentials
     const store = new RemoteCredentialStore({

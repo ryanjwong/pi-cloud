@@ -3,17 +3,13 @@
 ## Where secrets live
 
 All secrets live in one file, `secrets.yaml`, encrypted with [SOPS](https://github.com/getsops/sops) and age. Key
-names stay readable and values don't, so the file can be committed. `.sops.yaml` lists who can decrypt it: your
-age key, and each server's.
-
-`pnpm deploy:cloudflare` sets this up for you. By hand: create an age key, put the public key it prints in
-`.sops.yaml`, then encrypt the example file and edit it with `sops`.
+names stay readable and values don't. `pi-cloud init` (which `pi-cloud deploy cloudflare` runs first) creates
+`age.key`, `.sops.yaml` and `secrets.yaml` in `~/.config/pi-cloud` (`$XDG_CONFIG_HOME/pi-cloud`), all mode 0600,
+and never touches a checkout. To edit them, or to use them with the commands below:
 
 ```sh
-age-keygen -o ~/.config/sops/age/keys.txt
-cp secrets.example.yaml secrets.yaml
-sops encrypt --in-place secrets.yaml
-sops secrets.yaml
+export SOPS_AGE_KEY_FILE=~/.config/pi-cloud/age.key
+sops ~/.config/pi-cloud/secrets.yaml
 ```
 
 Every server reads settings through the same typed schema (`@pi-cloud/config`). A missing or malformed value
@@ -21,10 +17,10 @@ stops startup with a message naming it. How the values arrive:
 
 | Where | How |
 |---|---|
-| Your machine | `sops exec-env secrets.yaml '<command>'` decrypts into that one process's environment |
+| Your machine | `sops exec-env ~/.config/pi-cloud/secrets.yaml '<command>'` decrypts into that one process's environment |
 | NixOS | sops-nix files, passed to the service with systemd `LoadCredential` |
 | Containers | one file per setting in a directory named by `PI_CLOUD_SECRETS_DIR` |
-| Cloudflare | Worker secrets, set by `pnpm deploy:cloudflare` |
+| Cloudflare | Worker secrets, set by `pi-cloud deploy cloudflare` |
 
 Don't put secrets in `.env` or `.dev.vars`.
 
@@ -47,13 +43,13 @@ call the control plane object directly.
 The agent runs commands in a sandbox, and the text it reads (GitHub comments, Slack messages) is written by other
 people, so assume it can be talked into printing whatever its sandbox holds.
 
-- A sandbox gets only the secrets its template names, and only names listed in `SANDBOX_SECRETS`. Model keys and
-  the runner secret never reach a sandbox.
+- A sandbox gets only the secrets its operator template names, and only names listed in `SANDBOX_SECRETS`. Model
+  keys and the runner secret never reach a sandbox. Sessions can't add secrets; see [Security](security.md).
 - Secret values that do reach a sandbox are replaced with `[secret:NAME]` in command output and tool results
-  before anything is stored or streamed.
+  before anything is stored or streamed. This is cosmetic: the agent can still send a secret elsewhere.
 - Model keys and stored logins are used by the runner, outside the sandbox.
-- With a [GitHub App](integrations.md#github-app), a sandbox's `GITHUB_TOKEN` is limited to the session's own
-  repository and expires after an hour.
+- With a [GitHub App](integrations.md#github-app), a sandbox's `GITHUB_TOKEN` is limited to the repository the
+  server bound to the session and expires after an hour.
 
 ## Subscription logins
 

@@ -9,7 +9,7 @@ let home: string
 beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), "pi-cloud-settings-"))
   vi.stubEnv("XDG_CONFIG_HOME", home)
-  for (const name of ["PI_CLOUD_URL", "PI_CLOUD_API_KEY", "PI_CLOUD_SANDBOX_PROVIDER", "SOPS_AGE_KEY_FILE"]) vi.stubEnv(name, undefined)
+  for (const name of ["PI_CLOUD_URL", "PI_CLOUD_API_KEY", "SOPS_AGE_KEY_FILE"]) vi.stubEnv(name, undefined)
 })
 
 afterEach(() => {
@@ -39,11 +39,11 @@ describe("settings", () => {
   })
 
   it("takes the URL and key from flags, then the environment, then the saved target", () => {
-    saveTarget("cf", { kind: "cloudflare", url: "https://cf.example", sandboxProvider: "daytona" })
+    saveTarget("cf", { kind: "cloudflare", url: "https://cf.example" })
     writeFileSync(paths().secrets, "not sops")
     expect(() => resolveConnection()).toThrow(/Could not decrypt/)
     vi.stubEnv("PI_CLOUD_API_KEY", "env-key")
-    expect(resolveConnection()).toEqual({ url: "https://cf.example", apiKey: "env-key", sandboxProvider: "daytona" })
+    expect(resolveConnection()).toEqual({ url: "https://cf.example", apiKey: "env-key" })
     vi.stubEnv("PI_CLOUD_URL", "https://env.example")
     expect(resolveConnection().url).toBe("https://env.example")
     expect(resolveConnection("https://flag.example", "flag-key")).toMatchObject({ url: "https://flag.example", apiKey: "flag-key" })

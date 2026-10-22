@@ -4,17 +4,16 @@ import { entryText, PiCloud } from "@pi-cloud/client"
 import { piAgent } from "@pi-cloud/pi"
 import { extensions, modelProviders } from "@pi-cloud/runner"
 import { sandboxes } from "@pi-cloud/sandbox"
-import { dockerSandboxes } from "@pi-cloud/sandbox-docker"
+import { DEFAULT_IMAGE, dockerSandboxes } from "@pi-cloud/sandbox-docker"
 import { Effect } from "effect"
 import { execFileSync } from "node:child_process"
 import { afterEach, describe, expect, it } from "vitest"
 import { type LocalDeployment, startLocal } from "../src/index.ts"
 
 const docker = (...args: Array<string>) => execFileSync("docker", args, { stdio: "pipe" }).toString().trim()
-const IMAGE = "buildpack-deps:bookworm-scm"
 const available = (() => {
   try {
-    docker("image", "inspect", IMAGE)
+    docker("image", "inspect", DEFAULT_IMAGE)
     return true
   } catch {
     return false
@@ -55,7 +54,7 @@ describe.skipIf(!available)("Docker sandboxes", () => {
       (context) => {
         prompt = JSON.stringify(context)
         return toolUse("bash", {
-          command: "grep ^ID= /etc/os-release; pwd; echo token=$API_TOKEN; echo runner=${PI_CLOUD_TEST_RUNNER_ONLY:-unset}"
+          command: "grep ^ID= /etc/os-release; pwd; echo token=$API_TOKEN; echo runner=${PI_CLOUD_TEST_RUNNER_ONLY:-unset}; echo uid=$(id -u)"
         })
       },
       toolUse("write", { path: "notes/hello.txt", content: "hello from pi\n" }),
@@ -73,8 +72,13 @@ describe.skipIf(!available)("Docker sandboxes", () => {
           modelProviders(faux.provider),
           extensions("coding", CodingTools),
           piAgent(),
-          sandboxes({ providers: [dockerSandboxes({ image: IMAGE })] })
+          sandboxes({ providers: [dockerSandboxes()] })
         ]
+      },
+      settings: {
+        templates: {
+          box: { provider: "docker", user: "1000:1000", secrets: ["API_TOKEN"], setup: ["printf 'Always answer in haiku.\\n' > AGENTS.md"] }
+        }
       }
     })
 
@@ -85,9 +89,7 @@ describe.skipIf(!available)("Docker sandboxes", () => {
           spec: {
             model: { provider: "faux", modelId: "faux-1" },
             sandbox: "box",
-            sandboxes: {
-              box: { provider: "docker", cwd: "app", secrets: ["API_TOKEN"], setup: ["printf 'Always answer in haiku.\\n' > AGENTS.md"] }
-            }
+            sandboxes: { box: { template: "box", cwd: "app" } }
           }
         }
       })
@@ -106,6 +108,7 @@ describe.skipIf(!available)("Docker sandboxes", () => {
       expect(results[0]).toContain("/workspace/app")
       expect(results[0]).toContain("token=[secret:API_TOKEN]")
       expect(results[0]).toContain("runner=unset")
+      expect(results[0]).toContain("uid=1000")
       expect(results[3]).toContain("greetings from pi")
       expect(results[4]).toMatch(/timed out|timeout/i)
       expect(JSON.stringify(entries)).not.toContain("tok_in_the_container")
@@ -116,6 +119,19 @@ describe.skipIf(!available)("Docker sandboxes", () => {
       expect(docker("exec", container, "cat", "/workspace/app/notes/hello.txt")).toBe("greetings from pi")
       expect(docker("exec", container, "sh", "-c", "ps -eo args | grep -c '^sleep 60' || true")).toBe("0")
       expect(docker("inspect", container)).not.toContain("tok_in_the_container")
+      expect(docker("inspect", "--format", "{{.Config.Image}}", container)).toBe(DEFAULT_IMAGE)
     }).pipe(Effect.provide(PiCloud.layer({ url: deployment.url }))))
   }, 60_000)
+})
+
+describe("Docker sandbox options", () => {
+  it("refuses options and networks outside the allowlist before calling docker", async () => {
+    const provider = dockerSandboxes({ docker: "/nonexistent/docker" })
+    const refusal = (options: Record<string, string>) =>
+      Effect.runPromise(Effect.flip(provider.create({ key: "k", template: { provider: "docker", options }, env: {} }))).then((error) => error.message)
+    expect(await refusal({ privileged: "true" })).toContain(`option "privileged"`)
+    expect(await refusal({ network: "host" })).toContain(`network "host"`)
+    expect(await refusal({ network: "container:db" })).toContain(`network "container:db"`)
+    expect(await refusal({ network: "none", memory: "1g" })).toContain("Docker is not available")
+  })
 })

@@ -27,7 +27,7 @@ const dataDir = resolve(env.dataDir)
 Layer.launch(serve({
   port: env.port,
   host: env.host,
-  settings: { publicUrl: Option.getOrElse(env.publicUrl, () => `http://${env.host}:${env.port}`) },
+  settings: { ...env.settings, publicUrl: Option.getOrElse(env.publicUrl, () => `http://${env.host}:${env.port}`) },
   apiKeys: env.apiKeys.map((key) => Redacted.value(key)),
   runnerSecret,
   ...sqliteStores({ file: join(dataDir, "pi-cloud.sqlite"), credentialKey: Option.getOrUndefined(Option.map(env.credentialKey, Redacted.value)) }),

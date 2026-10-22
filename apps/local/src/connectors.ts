@@ -14,25 +14,20 @@ export const connectors = (env: ControlPlaneEnv): ReadonlyArray<Extension> => {
   const spec: SessionSpec = { model: { provider: provider!, modelId: model.join("/") } }
   const extensions: Array<Extension> = []
   if (Option.isSome(env.github)) {
-    const { webhookSecret, mention, sandboxProvider } = env.github.value
+    const { webhookSecret, mention, allowedAssociations, template } = env.github.value
     const repositorySpec = (repository: string): SessionSpec => ({
       ...spec,
       sandbox: "repo",
-      sandboxes: {
-        repo: {
-          provider: sandboxProvider,
-          repository: { url: `https://github.com/${repository}.git`, credential: "GITHUB_TOKEN" }
-        }
-      }
+      sandboxes: { repo: { template, repository: `https://github.com/${repository}.git` } }
     })
     extensions.push(
-      triggers([githubTrigger({ secret: Redacted.value(webhookSecret), mention: Option.getOrUndefined(mention), spec: repositorySpec })])
+      triggers([githubTrigger({ secret: Redacted.value(webhookSecret), mention, allowedAssociations, spec: repositorySpec })])
     )
   }
   if (Option.isSome(env.slack)) {
-    const { signingSecret, botToken } = env.slack.value
+    const { signingSecret, botToken, allowedUsers, allowedChannels } = env.slack.value
     extensions.push(
-      sources([slackSource({ signingSecret: Redacted.value(signingSecret), botToken: Redacted.value(botToken), spec })])
+      sources([slackSource({ signingSecret: Redacted.value(signingSecret), botToken: Redacted.value(botToken), allowedUsers, allowedChannels, spec })])
     )
   }
   return extensions

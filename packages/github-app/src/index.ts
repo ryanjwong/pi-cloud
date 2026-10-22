@@ -131,19 +131,6 @@ export const githubApp = (options: GithubAppOptions): GithubApp => {
   }
 }
 
-const GITHUB_REPOSITORY = /^(?:https:\/\/|git@)github\.com[/:]([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+?)(?:\.git)?\/?$/
-
-export const sessionRepositories = (session: Session): ReadonlyArray<string> => {
-  const found: Array<string> = []
-  const github = session.spec.metadata?.github as { repository?: unknown } | undefined
-  if (typeof github?.repository === "string") found.push(github.repository)
-  for (const template of Object.values(session.spec.sandboxes ?? {})) {
-    const match = template.repository?.url.match(GITHUB_REPOSITORY)
-    if (match !== null && match !== undefined) found.push(match[1]!)
-  }
-  return [...new Set(found.map((name) => name.toLowerCase()))]
-}
-
 export interface GithubAppTokensOptions {
   readonly name?: string
 }
@@ -152,10 +139,9 @@ export const githubAppTokens = (app: GithubApp, options: GithubAppTokensOptions 
   const secretName = options.name ?? "GITHUB_TOKEN"
   return async (session: Session, name: string): Promise<{ value: string; expiresAt: number } | undefined> => {
     if (name !== secretName) return undefined
-    const repositories = sessionRepositories(session)
-    if (repositories.length === 0) return undefined
-    const owner = repositories[0]!.split("/")[0]
-    const issued = await app.installationToken(repositories.filter((repository) => repository.split("/")[0] === owner))
+    const bound = session.resolved?.repository
+    if (bound === undefined || session.resolved?.untrusted === true) return undefined
+    const issued = await app.installationToken([bound])
     return { value: issued.token, expiresAt: issued.expiresAt }
   }
 }

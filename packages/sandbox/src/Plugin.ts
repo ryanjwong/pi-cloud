@@ -16,7 +16,7 @@ type StoredSandbox = {
 export const gitCredentialEnv = (credential: string): Record<string, string> => ({
   GIT_TERMINAL_PROMPT: "0",
   GIT_CONFIG_COUNT: "1",
-  GIT_CONFIG_KEY_0: "credential.helper",
+  GIT_CONFIG_KEY_0: "credential.https://github.com.helper",
   GIT_CONFIG_VALUE_0: `!f() { test "$1" = get && echo username=x-access-token && echo "password=$${credential}"; }; f`
 })
 
@@ -31,7 +31,6 @@ export const SandboxesDoc = defineDoc<{ active?: string; sandboxes: Record<strin
 
 export interface SandboxPluginOptions {
   readonly providers: ReadonlyArray<SandboxProvider>
-  readonly templates?: Readonly<Record<string, SandboxTemplate>>
 }
 
 const text = (value: string) => [{ type: "text" as const, text: value }]
@@ -41,7 +40,7 @@ export const sandboxes = (options: SandboxPluginOptions): RunnerPlugin =>
     name: "sandboxes",
     setup: (plugin: PluginContext) => {
       const providers = new Map(options.providers.map((provider) => [provider.name, provider]))
-      const templates: Record<string, SandboxTemplate> = { ...options.templates, ...plugin.session.spec.sandboxes }
+      const templates: Readonly<Record<string, SandboxTemplate>> = plugin.session.resolved?.sandboxes ?? {}
       const connections = new Map<string, Promise<ExecutionEnv>>()
       const mask = new SecretMask()
 
@@ -59,7 +58,7 @@ export const sandboxes = (options: SandboxPluginOptions): RunnerPlugin =>
           env[name] = value
           mask.add(name, value)
         }
-        const credential = template.repository?.credential
+        const credential = template.credential
         const token = credential === undefined ? undefined : await plugin.secrets(credential)
         if (credential !== undefined && token !== undefined) {
           env[credential] = token
@@ -89,7 +88,7 @@ export const sandboxes = (options: SandboxPluginOptions): RunnerPlugin =>
             const template = templates[stored.template] ?? { provider: stored.handle.provider }
             const env = await environment(template)
             const connected = mask.env(await Effect.runPromise(provider(stored.handle.provider).connect(stored.handle, env)))
-            return refreshing(connected, template.repository?.credential)
+            return refreshing(connected, template.credential)
           })()
           connection.catch(() => connections.delete(key))
           connections.set(key, connection)

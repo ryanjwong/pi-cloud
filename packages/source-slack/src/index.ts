@@ -31,6 +31,8 @@ export interface SlackSourceOptions {
   readonly botToken: string
   readonly name?: string
   readonly spec?: SessionSpec
+  readonly allowedUsers?: ReadonlyArray<string>
+  readonly allowedChannels?: ReadonlyArray<string>
   readonly apiUrl?: string
   readonly toleranceSeconds?: number
 }
@@ -62,6 +64,7 @@ export const slackSource = (options: SlackSourceOptions): Source => {
         const event = envelope.event
         if (envelope.type !== "event_callback" || event === undefined) return { messages: [] }
         if (event.bot_id !== undefined || event.subtype !== undefined || event.user === undefined) return { messages: [] }
+        if (!options.allowedUsers?.includes(event.user) && !options.allowedChannels?.includes(event.channel)) return { messages: [] }
 
         const thread = event.thread_ts ?? event.ts
         const message: InboundMessage = {

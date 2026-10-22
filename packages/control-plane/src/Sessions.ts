@@ -10,6 +10,8 @@ import type { JsonValue } from "@earendil-works/chord"
 import {
   type Binding,
   BindingStore,
+  ControlPlaneConfig,
+  type ControlPlaneSettings,
   EventHub,
   LeaseManager,
   SessionStore,
@@ -22,13 +24,17 @@ import {
   type CommandResult,
   ConversationBusy,
   type EventBatch,
+  OPERATOR_ONLY,
+  type Resolved,
   RunnerUnavailable,
+  type SandboxTemplate,
   Session,
   SessionId,
   SessionNotFound,
   type SessionCommand,
   type SessionSpec,
-  type SessionView
+  type SessionView,
+  SpecRejected
 } from "@pi-cloud/protocol"
 import { Clock, Context, Effect, Layer, Option, Semaphore, type Stream } from "effect"
 import { Runners } from "./Runners.ts"
@@ -40,15 +46,85 @@ const decodeCursor = (cursor: string): Cursor => JSON.parse(Buffer.from(cursor, 
 
 export type CommandError = SessionNotFound | RunnerUnavailable | ConversationBusy | CommandFailed
 
-export interface BindingInit {
+export interface Trust {
+  readonly repository?: string | undefined
+  readonly thread?: number | undefined
+  readonly untrusted?: boolean | undefined
+}
+
+export interface CreateInput extends Trust {
   readonly title?: string | undefined
   readonly spec?: SessionSpec | undefined
+}
+
+export interface BindingInit extends CreateInput {
   readonly source?: string | undefined
   readonly target?: JsonValue | undefined
 }
 
+const GITHUB_REPOSITORY = /^(?:https:\/\/|git@)github\.com[/:]([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+?)(?:\.git)?\/?$/
+const githubName = (url: string | undefined) => GITHUB_REPOSITORY.exec(url ?? "")?.[1]?.toLowerCase()
+const repositoryName = (url: string) => githubName(url) ?? url.toLowerCase()
+
+export const resolveSpec = (
+  spec: SessionSpec,
+  settings: Pick<ControlPlaneSettings, "templates" | "defaultSandbox">,
+  trust: Trust = {}
+): Effect.Effect<Resolved, SpecRejected> =>
+  Effect.gen(function*() {
+    const reject = (field: string, reason: string) => Effect.fail(new SpecRejected({ field, reason }))
+    if (spec.plugins !== undefined) return yield* reject("plugins", "plugins are configured by the operator")
+    if (spec.metadata?.["github"] !== undefined) return yield* reject("metadata.github", "only the server binds a repository")
+    const sandboxes: Record<string, SandboxTemplate> = { ...settings.templates }
+    let repository = trust.repository?.toLowerCase()
+    for (const [name, request] of Object.entries(spec.sandboxes ?? {})) {
+      const field = `sandboxes.${name}`
+      const operatorOnly = OPERATOR_ONLY.find((key) => request[key] !== undefined)
+      if (operatorOnly !== undefined) return yield* reject(`${field}.${operatorOnly}`, "only operator templates set this")
+      const templateName = request.template ?? settings.defaultSandbox
+      if (!Object.hasOwn(settings.templates, templateName)) {
+        return yield* reject(`${field}.template`, `no sandbox template named "${templateName}"`)
+      }
+      const template = settings.templates[templateName]!
+      const url = request.repository
+      if (url !== undefined && repositoryName(url) !== repository &&
+        !(template.repositories ?? []).some((allowed) => repositoryName(allowed) === repositoryName(url))) {
+        return yield* reject(`${field}.repository`, `template "${templateName}" does not allow ${url}`)
+      }
+      if (request.ref !== undefined && template.allowRef !== true) {
+        return yield* reject(`${field}.ref`, `template "${templateName}" does not allow choosing a ref`)
+      }
+      if (request.cwd !== undefined && (request.cwd.startsWith("/") || request.cwd.split("/").includes(".."))) {
+        return yield* reject(`${field}.cwd`, "must be a relative path inside the sandbox")
+      }
+      const target = url ?? template.repository?.url
+      sandboxes[name] = {
+        ...template,
+        ...(target === undefined
+          ? {}
+          : { repository: { ...template.repository, url: target, ref: request.ref ?? template.repository?.ref } }),
+        ...(request.cwd === undefined ? {} : { cwd: request.cwd }),
+        setup: [...(template.setup ?? []), ...(request.setup ?? [])]
+      }
+    }
+    if (spec.sandbox !== undefined && !Object.hasOwn(sandboxes, spec.sandbox)) {
+      return yield* reject("sandbox", `no sandbox named "${spec.sandbox}"`)
+    }
+    const named = [...Object.keys(spec.sandboxes ?? {}), ...(spec.sandbox === undefined ? [] : [spec.sandbox])]
+    repository ??= named.map((name) => githubName(sandboxes[name]?.repository?.url)).find((found) => found !== undefined)
+    const withoutSecrets = (template: SandboxTemplate) => ({ ...template, secrets: [], credential: undefined })
+    return {
+      sandboxes: trust.untrusted === true
+        ? Object.fromEntries(Object.entries(sandboxes).map(([name, template]) => [name, withoutSecrets(template)]))
+        : sandboxes,
+      ...(repository === undefined ? {} : { repository }),
+      ...(trust.thread === undefined ? {} : { thread: trust.thread }),
+      ...(trust.untrusted === true ? { untrusted: true } : {})
+    }
+  })
+
 export class Sessions extends Context.Service<Sessions, {
-  create(input: { readonly title?: string | undefined; readonly spec?: SessionSpec | undefined }): Effect.Effect<SessionView>
+  create(input: CreateInput): Effect.Effect<SessionView, SpecRejected>
   list(): Effect.Effect<ReadonlyArray<SessionView>>
   get(id: string): Effect.Effect<SessionView, SessionNotFound>
   remove(id: string): Effect.Effect<void, SessionNotFound>
@@ -60,13 +136,13 @@ export class Sessions extends Context.Service<Sessions, {
     readonly cursor?: string | undefined
   }): Effect.Effect<{ readonly entries: ReadonlyArray<unknown>; readonly next?: string | undefined }, SessionNotFound>
   conversations(id: string): Effect.Effect<ReadonlyArray<unknown>, SessionNotFound>
-  forKey(key: string, init: BindingInit): Effect.Effect<{ readonly binding: Binding; readonly created: boolean }>
+  forKey(key: string, init: BindingInit): Effect.Effect<{ readonly binding: Binding; readonly created: boolean }, SpecRejected>
   submission(id: string, submissionId: number): Effect.Effect<unknown, SessionNotFound>
 }>()("@pi-cloud/control-plane/Sessions") {
   static readonly layer: Layer.Layer<
     Sessions,
     never,
-    SessionStore | StateStore | LeaseManager | EventHub | BindingStore | Runners
+    SessionStore | StateStore | LeaseManager | EventHub | BindingStore | Runners | ControlPlaneConfig
   > = Layer.effect(
     Sessions,
     Effect.gen(function*() {
@@ -76,6 +152,7 @@ export class Sessions extends Context.Service<Sessions, {
       const runners = yield* Runners
       const hub = yield* EventHub
       const bindings = yield* BindingStore
+      const config = yield* ControlPlaneConfig
       const keyLocks = new Map<string, Semaphore.Semaphore>()
       const keyLock = (key: string) => {
         let lock = keyLocks.get(key)
@@ -120,11 +197,13 @@ export class Sessions extends Context.Service<Sessions, {
         }
       }
 
-      const create = Effect.fnUntraced(function*(input: { readonly title?: string | undefined; readonly spec?: SessionSpec | undefined }) {
+      const create = Effect.fnUntraced(function*(input: CreateInput) {
+        const spec = input.spec ?? {}
         const session = new Session({
           id: SessionId.make(`ses_${crypto.randomUUID().replaceAll("-", "")}`),
           title: input.title,
-          spec: input.spec ?? {},
+          spec,
+          resolved: yield* resolveSpec(spec, config, input),
           createdAt: yield* Clock.currentTimeMillis
         })
         yield* store.put(session).pipe(Effect.orDie)
@@ -136,9 +215,9 @@ export class Sessions extends Context.Service<Sessions, {
           const existing = yield* bindings.get(key).pipe(Effect.orDie)
           if (Option.isSome(existing)) {
             const alive = yield* store.get(existing.value.sessionId as SessionId).pipe(Effect.orDie)
-            if (Option.isSome(alive)) return { binding: existing.value, created: false }
+            if (Option.isSome(alive) && alive.value.resolved !== undefined) return { binding: existing.value, created: false }
           }
-          const session = yield* create({ title: init.title ?? key, spec: init.spec })
+          const session = yield* create({ ...init, title: init.title ?? key })
           const binding: Binding = {
             key,
             sessionId: session.id,
@@ -169,6 +248,9 @@ export class Sessions extends Context.Service<Sessions, {
         }),
         command: Effect.fnUntraced(function*(id, command) {
           const session = yield* find(id)
+          if (session.resolved === undefined) {
+            return yield* new CommandFailed({ message: "This session's spec predates server-side checks and is refused", reason: "SpecRejected" })
+          }
           return yield* settle(session.id, yield* runners.send(session, command))
         }),
         events: (id, after) => Effect.map(find(id), () => hub.subscribe(id, after)),

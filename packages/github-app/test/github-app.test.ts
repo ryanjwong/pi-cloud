@@ -1,7 +1,7 @@
 import type { Session } from "@pi-cloud/protocol"
 import { generateKeyPairSync, verify } from "node:crypto"
 import { describe, expect, it } from "vitest"
-import { githubApp, githubAppTokens, sessionRepositories } from "../src/index.ts"
+import { githubApp, githubAppTokens } from "../src/index.ts"
 
 const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 })
 const pkcs1 = privateKey.export({ type: "pkcs1", format: "pem" }).toString()
@@ -37,7 +37,8 @@ const fakeGithub = (options: { expiresInMs?: number } = {}) => {
   return { fetch, calls }
 }
 
-const session = (spec: Partial<Session["spec"]>): Session => ({ id: "s1", createdAt: 0, spec, runner: { state: "idle" } } as never)
+const session = (spec: unknown, repository?: string): Session =>
+  ({ id: "s1", createdAt: 0, spec, resolved: { sandboxes: {}, ...(repository === undefined ? {} : { repository }) } }) as never
 
 describe("GitHub App tokens", () => {
   it("signs its JWT with the App's key and mints tokens limited to the session's repositories", async () => {
@@ -76,66 +77,32 @@ describe("GitHub App tokens", () => {
     expect(() => githubApp({ appId: "1", privateKey: "not a key" })).toThrow(/not a PEM/)
   })
 
-  it("issues GITHUB_TOKEN only to sessions about a repository, for that repository's account", async () => {
+  it("issues GITHUB_TOKEN only for the repository the server bound, whatever the spec names", async () => {
     const github = fakeGithub()
     const issue = githubAppTokens(githubApp({ appId: "123", privateKey: pkcs1, fetch: github.fetch }))
-    const triggered = session({
-      metadata: { github: { repository: "acme/api", number: 7 } },
-      sandboxes: {
-        repo: { provider: "local", repository: { url: "https://github.com/acme/api.git", credential: "GITHUB_TOKEN" } },
-        docs: { provider: "local", repository: { url: "git@github.com:acme/docs.git" } },
-        elsewhere: { provider: "local", repository: { url: "https://github.com/other/thing" } },
-        private: { provider: "local", repository: { url: "https://gitlab.com/acme/api.git" } }
-      }
-    })
-    expect(sessionRepositories(triggered)).toEqual(["acme/api", "acme/docs", "other/thing"])
+    const spec = {
+      metadata: { github: { repository: "other/thing", number: 7 } },
+      sandboxes: { elsewhere: { repository: "https://github.com/other/thing" } }
+    }
+    expect(await issue(session(spec, "acme/api"), "GITHUB_TOKEN")).toEqual({ value: "ghs_1", expiresAt: expect.any(Number) })
+    expect(github.calls.at(-1)!.body.repositories).toEqual(["api"])
+    expect(await issue(session(spec, "acme/api"), "OPENAI_API_KEY")).toBeUndefined()
+    expect(await issue(session(spec), "GITHUB_TOKEN")).toBeUndefined()
+    expect(await issue({ id: "s1", createdAt: 0, spec } as never, "GITHUB_TOKEN")).toBeUndefined()
+  })
 
-    expect(await issue(triggered, "GITHUB_TOKEN")).toEqual({ value: "ghs_1", expiresAt: expect.any(Number) })
-    expect(github.calls.at(-1)!.body.repositories).toEqual(["api", "docs"])
-    expect(await issue(triggered, "OPENAI_API_KEY")).toBeUndefined()
-    expect(await issue(session({}), "GITHUB_TOKEN")).toBeUndefined()
+  it("never mints a token for an untrusted session", async () => {
+    const github = fakeGithub()
+    const issue = githubAppTokens(githubApp({ appId: "123", privateKey: pkcs1, fetch: github.fetch }))
+    const untrusted = { id: "s1", createdAt: 0, spec: {}, resolved: { sandboxes: {}, repository: "acme/api", untrusted: true } }
+    expect(await issue(untrusted as never, "GITHUB_TOKEN")).toBeUndefined()
+    expect(github.calls).toEqual([])
   })
 })
 
 import fc from "fast-check"
 
 describe("GitHub App invariants", () => {
-  const owner = fc.constantFrom("acme", "Acme", "other", "x-y")
-  const repo = fc.constantFrom("api", "API", "web", "docs.site", "a_b")
-  const url = fc.tuple(owner, repo, fc.constantFrom("https://github.com/%o/%r.git", "https://github.com/%o/%r", "git@github.com:%o/%r.git", "https://gitlab.com/%o/%r.git", "https://github.com/%o/%r/", "file:///%o/%r"))
-    .map(([o, r, shape]) => shape.replace("%o", o).replace("%r", r))
-  const spec = fc.record({
-    thread: fc.option(fc.tuple(owner, repo).map(([o, r]) => `${o}/${r}`), { nil: undefined }),
-    urls: fc.array(url, { maxLength: 4 })
-  })
-
-  it("only ever asks for repositories the session names, all of one account", async () => {
-    await fc.assert(
-      fc.asyncProperty(spec, async ({ thread, urls }) => {
-        const asked: Array<ReadonlyArray<string>> = []
-        const app = { installationToken: async (repositories: ReadonlyArray<string>) => (asked.push(repositories), { token: "t", expiresAt: Date.now() + 3_600_000 }) }
-        const s = session({
-          ...(thread === undefined ? {} : { metadata: { github: { repository: thread, number: 1 } } }),
-          sandboxes: Object.fromEntries(urls.map((u, index) => [`t${index}`, { provider: "local", repository: { url: u } }]))
-        })
-        const named = sessionRepositories(s)
-        const issued = await githubAppTokens(app)(s, "GITHUB_TOKEN")
-        if (named.length === 0) {
-          expect(issued).toBeUndefined()
-          expect(asked).toEqual([])
-          return
-        }
-        expect(asked).toHaveLength(1)
-        const [repositories] = asked
-        expect(repositories!.length).toBeGreaterThan(0)
-        for (const repository of repositories!) expect(named).toContain(repository)
-        expect(new Set(repositories!.map((r) => r.split("/")[0]))).toEqual(new Set([named[0]!.split("/")[0]]))
-        if (thread !== undefined) expect(named[0]).toBe(thread.toLowerCase())
-        for (const repository of named) expect(repository).toMatch(/^[a-z0-9_.-]+\/[a-z0-9_.-]+$/)
-      }),
-      { numRuns: 1_000 }
-    )
-  })
 
   it("never hands out a cached token within five minutes of its expiry", async () => {
     const step = fc.oneof(

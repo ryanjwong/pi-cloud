@@ -27,6 +27,7 @@ if (!isLoopback(control.host)) {
 const deployment = await startLocal({
   port: control.port,
   host: control.host,
+  settings: control.settings,
   apiKeys: control.apiKeys.map((key) => Redacted.value(key)),
   runnerSecret: secret(control.runnerSecret),
   ...sqliteStores({ file: join(dataDir, "pi-cloud.sqlite"), credentialKey: secret(control.credentialKey) }),

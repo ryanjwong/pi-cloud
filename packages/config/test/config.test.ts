@@ -3,7 +3,7 @@ import { type Config, ConfigProvider, Effect, Exit, Option, Redacted } from "eff
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { afterEach, describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it, onTestFinished } from "vitest"
 import { ControlPlaneEnv, modelCredentialLookup, RunnerEnv, sandboxSecretLookup, SETTINGS } from "../src/index.ts"
 
 let dir: string | undefined
@@ -56,6 +56,51 @@ describe("ControlPlaneEnv", () => {
     expect(Option.isSome(env.github)).toBe(true)
     expect(Option.isNone(env.slack)).toBe(true)
     expect(env.apiKeys.map((key: Redacted.Redacted<string>) => Redacted.value(key))).toEqual(["a", "b"])
+  })
+})
+
+const value = <A>(exit: Exit.Exit<A, unknown>) => (exit as Exit.Success<A, unknown>).value
+
+describe("server config", () => {
+  it("defaults to isolated docker sandboxes and no local provider", async () => {
+    const control = value(await load(ControlPlaneEnv, { GITHUB_WEBHOOK_SECRET: "gh" }))
+    expect(control.settings.templates).toEqual({
+      scratch: { provider: "docker", user: "1000:1000" },
+      github: { provider: "docker", user: "1000:1000", credential: "GITHUB_TOKEN" }
+    })
+    expect(Option.getOrThrow(control.github).allowedAssociations).toEqual(["OWNER", "MEMBER", "COLLABORATOR"])
+    const runner = value(await load(RunnerEnv, {}))
+    expect(runner.unsafeLocalSandbox).toBe(false)
+  })
+
+  it("reads a typed config file that environment variables override", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-cloud-server-config-"))
+    onTestFinished(() => rm(root, { recursive: true, force: true }))
+    const file = join(root, "pi-cloud.config.json")
+    await writeFile(file, JSON.stringify({
+      models: { default: "openai/gpt-6" },
+      sandbox: { default: "api", templates: { api: { provider: "docker", repositories: ["acme/api"] } } },
+      triggers: { github: { mention: "@bot" }, slack: { allowedUsers: ["U1"] } },
+      unsafeLocalSandbox: true
+    }))
+    const env = { PI_CLOUD_CONFIG: file, GITHUB_WEBHOOK_SECRET: "gh", SLACK_SIGNING_SECRET: "s", SLACK_BOT_TOKEN: "t" }
+    const control = value(await load(ControlPlaneEnv, { ...env, GITHUB_MENTION: "@pi" }))
+    expect(control.model).toBe("openai/gpt-6")
+    expect(control.settings.defaultSandbox).toBe("api")
+    expect(control.settings.templates.api).toEqual({ provider: "docker", repositories: ["acme/api"] })
+    expect(Option.getOrThrow(control.github).mention).toBe("@pi")
+    expect(Option.getOrThrow(control.slack).allowedUsers).toEqual(["U1"])
+    expect(value(await load(RunnerEnv, env)).unsafeLocalSandbox).toBe(true)
+  })
+
+  it("refuses a bad config, naming the schema path", async () => {
+    const bad = (config: unknown, env: Record<string, string> = {}) => load(ControlPlaneEnv, { PI_CLOUD_CONFIG: JSON.stringify(config), ...env })
+    const exit = await bad({ sandbox: { templates: { api: { provider: "docker", setup: "pnpm i" } } } })
+    expect(Exit.isFailure(exit)).toBe(true)
+    expect(String(exit)).toContain(`["sandbox"]["templates"]["api"]["setup"]`)
+    expect(String(await bad({ sandboxes: {} }))).toContain(`["sandboxes"]`)
+    expect(String(await bad({ sandbox: { default: "scrach" } }))).toContain("sandbox.default")
+    expect(String(await bad({ triggers: { github: { template: "constructor" } } }, { GITHUB_WEBHOOK_SECRET: "gh" }))).toContain("triggers.github.template")
   })
 })
 

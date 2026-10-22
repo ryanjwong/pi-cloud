@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { NodeRuntime } from "@effect/platform-node"
-import { type CommandResult, followEvents, openChannel, PiCloud } from "@pi-cloud/client"
+import { type CommandResult, followEvents, openChannel, PiCloud, VERSION } from "@pi-cloud/client"
 import { runTui } from "@pi-cloud/tui"
 import { Cause, Deferred, Effect, Stream } from "effect"
 import { execFileSync } from "node:child_process"
@@ -69,7 +69,7 @@ pi-cloud <command>
 
   new  [--model provider/model] [--title t] [--sandbox template]
                                               create a session, print its id; --sandbox names the template
-                                              (from the runner's SANDBOX_TEMPLATES_FILE) the agent works in
+                                              (from the server config) the agent works in
   ls                                          list sessions
   chat [id] [--model ...] [--sandbox ...]      talk to a session (creates one without an id)
   send <id> <message...>                      send one message and stream the answer
@@ -77,7 +77,7 @@ pi-cloud <command>
   rm   <id>                                   delete a session
 
   Connects to the target saved by \`pi-cloud deploy\` (~/.config/pi-cloud/config.json), else http://127.0.0.1:8787.
-  --url and --api-key, then PI_CLOUD_URL and PI_CLOUD_API_KEY, override it; PI_CLOUD_SANDBOX_PROVIDER picks the sandbox.`
+  --url and --api-key, then PI_CLOUD_URL and PI_CLOUD_API_KEY, override it.`
 
 if (flags.help === true || command === "help") {
   write(`${usage}\n`)
@@ -105,13 +105,22 @@ if (local !== undefined) {
   process.exit()
 }
 
+const defaultModel = Effect.gen(function*() {
+  const server = yield* Effect.flatMap(PiCloud, (client) => client.serverDetails()).pipe(Effect.orElseSucceed(() => undefined))
+  if (server !== undefined && server.version !== VERSION) {
+    process.stderr.write(`Note: pi-cloud at ${connection.url} runs ${server.version} and this CLI ${VERSION}; run \`pi-cloud update\`.\n`)
+  }
+  return parseModel(flags.model ?? process.env.PI_CLOUD_MODEL ?? server?.defaultModel ?? "anthropic/claude-opus-5-5")
+})
+
 const createSession = Effect.gen(function*() {
   const client = yield* PiCloud
+  const model = yield* defaultModel
   return yield* client.sessions.create({
     payload: {
       title: flags.title,
       spec: {
-        model: parseModel(flags.model ?? "anthropic/claude-opus-5-5"),
+        model,
         ...(flags.sandbox === undefined ? {} : { sandbox: flags.sandbox }),
         ...(flags.instructions === undefined ? {} : { instructions: flags.instructions })
       }
@@ -144,25 +153,28 @@ const gitOrigin = () => {
 
 const cloudSession = Effect.gen(function*() {
   const client = yield* PiCloud
+  const model = yield* defaultModel
   const origin = gitOrigin()
-  const provider = resolved.sandboxProvider
   if (origin?.note) write(`Note: ${origin.note}.\n`)
-  const session = yield* client.sessions.create({
-    payload: {
-      title: flags.title ?? origin?.label,
-      spec: {
-        model: parseModel(flags.model ?? process.env.PI_CLOUD_MODEL ?? "anthropic/claude-opus-5-5"),
-        sandbox: "home",
-        sandboxes: {
-          home: origin === undefined
-            ? { provider }
-            : { provider, repository: { url: origin.url, ref: origin.branch, credential: "GITHUB_TOKEN" } }
-        },
-        ...(origin === undefined ? {} : { metadata: { origin: { url: origin.url, branch: origin.branch } } }),
-        ...(flags.instructions === undefined ? {} : { instructions: flags.instructions })
+  const create = (home: { readonly repository?: string; readonly ref?: string }) =>
+    client.sessions.create({
+      payload: {
+        title: flags.title ?? origin?.label,
+        spec: {
+          model,
+          sandbox: "home",
+          sandboxes: { home },
+          ...(origin === undefined ? {} : { metadata: { origin: { url: origin.url, branch: origin.branch } } }),
+          ...(flags.instructions === undefined ? {} : { instructions: flags.instructions })
+        }
       }
-    }
-  })
+    })
+  const session = yield* create(origin === undefined ? {} : { repository: origin.url, ref: origin.branch }).pipe(
+    Effect.catchTag("SpecRejected", (error) =>
+      origin === undefined || !error.field.startsWith("sandboxes.home.")
+        ? Effect.fail(error)
+        : Effect.andThen(Effect.sync(() => write(`Note: ${error.message}; the cloud session starts without the repository.\n`)), create({})))
+  )
   return { session, label: origin?.label }
 })
 

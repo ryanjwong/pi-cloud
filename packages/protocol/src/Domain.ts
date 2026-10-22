@@ -1,4 +1,4 @@
-import { Schema } from "effect"
+import { Effect, Schema } from "effect"
 
 export const SessionId = Schema.String.pipe(Schema.brand("SessionId"))
 export type SessionId = typeof SessionId.Type
@@ -11,12 +11,12 @@ export type ModelRef = typeof ModelRef.Type
 
 export const SandboxTemplate = Schema.Struct({
   provider: Schema.String,
-  repository: Schema.optional(Schema.Struct({
-    url: Schema.String,
-    ref: Schema.optional(Schema.String),
-    credential: Schema.optional(Schema.String)
-  })),
+  repository: Schema.optional(Schema.Struct({ url: Schema.String, ref: Schema.optional(Schema.String) })),
+  credential: Schema.optional(Schema.String),
+  repositories: Schema.optional(Schema.Array(Schema.String)),
+  allowRef: Schema.optional(Schema.Boolean),
   image: Schema.optional(Schema.String),
+  user: Schema.optional(Schema.String),
   setup: Schema.optional(Schema.Array(Schema.String)),
   cwd: Schema.optional(Schema.String),
   env: Schema.optional(Schema.Record(Schema.String, Schema.String)),
@@ -25,21 +25,44 @@ export const SandboxTemplate = Schema.Struct({
 })
 export type SandboxTemplate = typeof SandboxTemplate.Type
 
+const operatorOnly = Schema.optional(Schema.Unknown)
+
+export const OPERATOR_ONLY = ["provider", "image", "user", "env", "secrets", "options", "repositories", "allowRef", "credential"] as const
+
+export const SandboxRequest = Schema.Struct({
+  template: Schema.optional(Schema.String),
+  repository: Schema.optional(Schema.String),
+  ref: Schema.optional(Schema.String),
+  cwd: Schema.optional(Schema.String),
+  setup: Schema.optional(Schema.Array(Schema.String)),
+  ...Object.fromEntries(OPERATOR_ONLY.map((key) => [key, operatorOnly])) as Record<typeof OPERATOR_ONLY[number], typeof operatorOnly>
+})
+export type SandboxRequest = typeof SandboxRequest.Type
+
 export const SessionSpec = Schema.Struct({
   model: Schema.optional(ModelRef),
   thinkingLevel: Schema.optional(Schema.String),
   instructions: Schema.optional(Schema.String),
-  sandboxes: Schema.optional(Schema.Record(Schema.String, SandboxTemplate)),
+  sandboxes: Schema.optional(Schema.Record(Schema.String, SandboxRequest)),
   sandbox: Schema.optional(Schema.String),
-  plugins: Schema.optional(Schema.Record(Schema.String, Schema.Json)),
+  plugins: operatorOnly,
   metadata: Schema.optional(Schema.Record(Schema.String, Schema.Json))
 })
 export type SessionSpec = typeof SessionSpec.Type
 
+export const Resolved = Schema.Struct({
+  sandboxes: Schema.Record(Schema.String, SandboxTemplate),
+  repository: Schema.optional(Schema.String),
+  thread: Schema.optional(Schema.Number),
+  untrusted: Schema.optional(Schema.Boolean)
+})
+export type Resolved = typeof Resolved.Type
+
 export class Session extends Schema.Class<Session>("@pi-cloud/protocol/Session")({
   id: SessionId,
   title: Schema.optional(Schema.String),
-  spec: SessionSpec,
+  spec: SessionSpec.pipe(Schema.catchDecoding(() => Effect.succeedSome({}))),
+  resolved: Schema.optional(Resolved),
   createdAt: Schema.Number
 }) {}
 

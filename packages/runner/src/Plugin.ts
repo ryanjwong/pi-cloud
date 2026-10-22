@@ -21,7 +21,6 @@ export const envSecrets: SecretResolver = async (name) => globalThis.process?.en
 
 export interface PluginContext {
   readonly session: Session
-  readonly config: unknown
   readonly secrets: SecretResolver
 }
 

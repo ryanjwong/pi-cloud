@@ -1,5 +1,5 @@
-import { CredentialStore, parsePosition, type VersionedCredential } from "@pi-cloud/core"
-import { CommandFailed, type CredentialInfo, PublicApi, type SessionId, type Submitted } from "@pi-cloud/protocol"
+import { ControlPlaneConfig, CredentialStore, parsePosition, type VersionedCredential } from "@pi-cloud/core"
+import { CommandFailed, type CredentialInfo, PublicApi, type SessionId, type Submitted, VERSION } from "@pi-cloud/protocol"
 import { Effect, Layer, Option } from "effect"
 import { HttpApiBuilder } from "effect/http-api"
 import { SERVICES_PATH } from "../services/ServiceHost.ts"
@@ -54,9 +54,22 @@ export const CredentialsApiLive = HttpApiBuilder.group(PublicApi, "credentials",
     .handle("delete", ({ params }) => credentials.remove(params.providerId).pipe(Effect.orDie))
 }))
 
-export const SystemApiLive = HttpApiBuilder.group(PublicApi, "system", (handlers) =>
-  Effect.succeed(handlers
-    .handle("health", () => Effect.void)
-    .handle("server", () => Effect.succeed({ servicesPath: SERVICES_PATH }))))
+const info = { version: VERSION, servicesPath: SERVICES_PATH }
 
-export const PublicApiHandlers = Layer.mergeAll(SessionsApiLive, CredentialsApiLive, SystemApiLive)
+export const ServerApiLive = HttpApiBuilder.group(PublicApi, "server", Effect.fn(function*(handlers) {
+  const config = yield* ControlPlaneConfig
+  return handlers.handle("serverDetails", () =>
+    Effect.succeed({
+      ...info,
+      defaultModel: config.defaultModel,
+      defaultSandbox: config.defaultSandbox,
+      sandboxTemplates: Object.keys(config.templates)
+    }))
+}))
+
+export const SystemApiLive = HttpApiBuilder.group(PublicApi, "system", (handlers) =>
+  handlers
+    .handle("health", () => Effect.void)
+    .handle("server", () => Effect.succeed(info)))
+
+export const PublicApiHandlers = Layer.mergeAll(SessionsApiLive, CredentialsApiLive, ServerApiLive, SystemApiLive)

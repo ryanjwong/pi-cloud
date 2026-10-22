@@ -48,14 +48,15 @@ describe("the service API", () => {
           piAgent(),
           sandboxes({ providers: [localSandboxes({ root })] })
         ]
-      }
+      },
+      settings: { templates: { home: { provider: "local" } } }
     })
     const connection = await connectServices({ url: deployment.url })
     try {
       const directory = await connection.sessions()
       const created = await directory.create({
         title: "demo",
-        spec: { model: { provider: "faux", modelId: "deep" }, sandbox: "home", sandboxes: { home: { provider: "local" } } }
+        spec: { model: { provider: "faux", modelId: "deep" }, sandbox: "home" }
       })
       await until(() => directory.sessions.value.some((session) => session.id === created.id), "the directory")
       expect(directory.sessions.value.find((session) => session.id === created.id)?.title).toBe("demo")
