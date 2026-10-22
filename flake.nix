@@ -72,7 +72,8 @@
           buildPhase = "runHook preBuild; HOME=$TMPDIR pnpm test; runHook postBuild";
           installPhase = "touch $out";
         };
-      });
+      } // nixpkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux (nixpkgs.lib.mapAttrs' (name: value: nixpkgs.lib.nameValuePair "nixos-${name}" value)
+        (import ./nix/tests.nix { inherit pkgs; module = self.nixosModules.default; })));
 
       devShells = forAllSystems (pkgs: {
         default = pkgs.mkShell {
