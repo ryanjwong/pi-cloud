@@ -4,27 +4,11 @@ import type { StorageDump, StorageFailure } from "@pi-cloud/protocol"
 import { Context, Effect, Layer } from "effect"
 import { storageFailure } from "./SessionStore.ts"
 
-/**
- * Where each session's durable agent state lives. An implementation hands out one Pi Durable `Storage` per
- * session, so any backend that passes Pi's storage conformance suite plugs in here: memory, SQLite, Postgres,
- * an object store, ...
- *
- * The control plane is the only process that touches these stores. Runners reach them through the fenced
- * storage RPC, so a backend needs no locking of its own: the control plane serializes each session's commits
- * and checks the writer's lease before applying them.
- */
 export class StateStore extends Context.Service<StateStore, {
-  /** The session's storage, opened on first use and shared afterwards. */
   open(sessionId: string): Effect.Effect<Storage, StorageFailure>
-  /** Close and delete the session's state. */
   remove(sessionId: string): Effect.Effect<void, StorageFailure>
-  /**
-   * A consistent copy of the session's SQLite tables, for runners to read from locally; undefined when the backend
-   * is not SQLite. Called with the session's commits held off.
-   */
   dump(sessionId: string): Effect.Effect<StorageDump | undefined, StorageFailure>
 }>()("@pi-cloud/control-plane/StateStore") {
-  /** Build a `StateStore` from a function that opens one session's storage. Opened stores close with the layer. */
   static readonly fromOpener = (options: {
     readonly open: (sessionId: string) => Promise<Storage>
     readonly remove?: (sessionId: string) => Promise<void>
@@ -66,7 +50,6 @@ export class StateStore extends Context.Service<StateStore, {
           Effect.tryPromise({
             try: async () => {
               if (options.dump === undefined) return undefined
-              // The session's storage exists before its tables can be copied.
               await open(sessionId).pipe(Effect.runPromise)
               return options.dump(sessionId)
             },
@@ -76,7 +59,6 @@ export class StateStore extends Context.Service<StateStore, {
       })
     )
 
-  /** Pi's in-memory storage per session. Nothing survives a restart. */
   static readonly memory: Layer.Layer<StateStore> = StateStore.fromOpener({
     open: async () => new MemoryStorage()
   })

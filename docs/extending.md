@@ -11,7 +11,7 @@ import { definePlugin, extensions, modelProviders, RunnerHost } from "@pi-cloud/
 const deploy = definePlugin({
   name: "deploy",
   setup: ({ session, config, secrets }) => ({
-    extensions: [deployExtension],                          // a Pi extension with your tools
+    extensions: [deployExtension],
     commands: { "deploy.status": async () => ({ ok: true }) }
   })
 })
@@ -19,7 +19,7 @@ const deploy = definePlugin({
 new RunnerHost({ plugins: [modelProviders(anthropicProvider), extensions("coding", CodingTools), deploy] })
 ```
 
-`config` is the session spec's `plugins.deploy` entry. `secrets(name)` resolves a secret on the runner, so values
+`deployExtension` is a Pi extension holding your tools. `config` is the session spec's `plugins.deploy` entry. `secrets(name)` resolves a secret on the runner, so values
 never pass through the control plane. `setup` may return the parts directly, as a promise, or as an Effect. The
 full list of parts is `PluginParts` in `packages/runner/src/Plugin.ts`; the default plugin set is in
 `apps/local/src/plugins.ts`.
@@ -72,15 +72,17 @@ Sessions can also bring their own templates in their spec. `spec.sandbox` names 
 
 ## Control plane services
 
-Every store and service in `ControlPlane.layer` is an Effect layer you can replace:
+Every store and service in `ControlPlane.layer` is an Effect layer you can replace. `dispatcher` decides how
+runners are started; `sqliteStores` provides the sessions, state, bindings and credentials stores; `leases`,
+`events`, `clientAuth` and `sessionSecrets` are optional replacements; `extensions` add routes.
 
 ```ts
 ControlPlane.layer({
   settings: { publicUrl },
-  dispatcher: RunnerDispatcher.http({ url: runnerUrl, secret }),   // how runners are started
-  ...sqliteStores({ file: "pi-cloud.sqlite" }),                   // sessions, state, bindings, credentials
-  leases, events, clientAuth, sessionSecrets,                     // optional replacements
-  extensions: [triggers([...]), sources([...])]                   // extra routes
+  dispatcher: RunnerDispatcher.http({ url: runnerUrl, secret }),
+  ...sqliteStores({ file: "pi-cloud.sqlite" }),
+  leases, events, clientAuth, sessionSecrets,
+  extensions: [triggers([...]), sources([...])]
 })
 ```
 
@@ -90,11 +92,12 @@ A state store is any Pi Durable `Storage`. Check yours with Pi's suite, `registe
 ## Clients
 
 `@pi-cloud/client` has the typed REST client, `followEvents` for live output, and `connectServices` for the
-service API, which is what the TUI uses:
+service API, which is what the TUI uses. `follow` keeps a conversation reference working as the session moves
+between runners:
 
 ```ts
 const connection = await connectServices({ url, apiKey })
-const main = await follow(() => connection.conversation(sessionId))   // follows the session across runners
+const main = await follow(() => connection.conversation(sessionId))
 main.current.view.subscribe(render)
 await main.current.prompt({ message: "hi" })
 ```

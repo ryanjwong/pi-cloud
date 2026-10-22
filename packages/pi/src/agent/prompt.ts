@@ -1,6 +1,3 @@
-// Vendored from Pi (github.com/earendil-works/pi, v1.1.0), packages/coding-agent/src/experimental/durable/prompt.ts.
-// MIT License, Copyright (c) 2025 Mario Zechner. Changed: imports of Pi internals go through ../internal.ts, and
-// project context files are read through the execution environment, which may be a sandbox on another machine.
 import type { Context } from "@earendil-works/chord";
 import { defineExtension, type PromptInput, section } from "@earendil-works/pi-durable";
 import type { ExecutionEnv } from "@earendil-works/pi-durable/env";
@@ -26,12 +23,10 @@ const CONTRIBUTIONS = {
 	write: writeToolSystemPromptContribution,
 };
 
-/** pi's context file names, in the order it looks for them in each directory. */
 const CONTEXT_FILES = ["AGENTS.override.md", "AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"];
 
 type ContextFile = { path: string; content: string };
 
-/** The agent directory's own context file, on the runner. */
 function globalContextFile(agentDir: string): ContextFile | undefined {
 	for (const name of CONTEXT_FILES) {
 		const path = join(agentDir, name);
@@ -40,10 +35,6 @@ function globalContextFile(agentDir: string): ContextFile | undefined {
 	return undefined;
 }
 
-/**
- * The first context file of `cwd` and of each ancestor, outermost first, read from the environment the tools run in.
- * One command finds them all, so a remote sandbox costs one round trip plus one per file.
- */
 async function environmentContextFiles(env: ExecutionEnv, cwd: string, context: Context): Promise<ContextFile[]> {
 	const names = CONTEXT_FILES.map((name) => `'${name}'`).join(" ");
 	const script = `d="$1"; while :; do for f in ${names}; do if [ -f "$d/$f" ]; then printf '%s\\n' "$d/$f"; break; fi; done; [ "$d" = / ] && break; d=$(dirname -- "$d"); done`;
@@ -58,13 +49,8 @@ async function environmentContextFiles(env: ExecutionEnv, cwd: string, context: 
 	return files;
 }
 
-/** pi's section order; `buildSystemPromptSections()` omits the ones without content. */
 const KEYS = ["preamble", "tools", "rules", "docs", "project_context", "skills", "cwd"] as const;
 
-/**
- * pi's system prompt as one extension: the sections of `buildSystemPromptSections()` for the request's tools and the
- * conversation's directory. Context files and skills load once per directory, like pi at startup.
- */
 export function createPiPrompt(settings: SettingsManager, fallbackCwd: string) {
 	type Resources = { contextFiles: ContextFile[]; skills: Skill[] };
 	const resources = new Map<string, Promise<Resources>>();
@@ -85,7 +71,6 @@ export function createPiPrompt(settings: SettingsManager, fallbackCwd: string) {
 		}
 		return found;
 	};
-	// The sections of one request render from one build.
 	const built = new WeakMap<PromptInput, Promise<Record<string, string>>>();
 	const build = (input: PromptInput, context: Context): Promise<Record<string, string>> => {
 		let sections = built.get(input);
@@ -116,7 +101,6 @@ export function createPiPrompt(settings: SettingsManager, fallbackCwd: string) {
 	};
 	return defineExtension({
 		name: "pi-prompt",
-		// The built sections carry their own tags.
 		sections: KEYS.map((key) => section(key, async (input, context) => (await build(input, context))[key], { tag: false })),
 	});
 }

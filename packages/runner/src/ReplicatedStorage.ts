@@ -22,7 +22,6 @@ import { type SqliteDatabase, SqliteStorage, type SqliteValue } from "@earendil-
 import type { StorageDump } from "@pi-cloud/protocol"
 import type { RemoteStorage } from "./RemoteStorage.ts"
 
-/** Opens an empty local SQLite database for a session's replica: in memory on Node, a Durable Object's own, ... */
 export type ReplicaDatabase = () => Promise<SqliteDatabase>
 
 const quoteName = (name: string) => `"${name.replaceAll('"', '""')}"`
@@ -34,7 +33,6 @@ const fromBase64 = (text: string) => {
   return bytes
 }
 
-/** Load a dump into an empty database: its schema, then its rows, in one transaction. */
 export const loadDump = async (database: SqliteDatabase, dump: StorageDump) => {
   for (const statement of dump.schema) await database.exec(statement)
   await database.transaction(async (transaction) => {
@@ -53,18 +51,10 @@ export const loadDump = async (database: SqliteDatabase, dump: StorageDump) => {
   })
 }
 
-/**
- * A session's storage with reads served from a local replica. The replica starts as a copy of the control plane's
- * SQLite tables and applies every commit after the control plane has: this runner is the session's only writer
- * while it holds the lease, so the replica is never behind on anything it reads. Pi's SQLite storage numbers
- * commits from its own tables, so both copies must agree on each commit's sequence; if they ever disagree, or the
- * replica fails, it is dropped and reads go to the control plane again.
- */
 export class ReplicatedStorage implements Storage {
   private readonly remote: RemoteStorage
   private local: SqliteStorage | undefined
   private readonly onDrop: (reason: string) => void
-  /** Commits run one at a time, so the replica applies them in the control plane's order. */
   private committing: Promise<unknown> = Promise.resolve()
 
   private constructor(remote: RemoteStorage, local: SqliteStorage | undefined, onDrop: (reason: string) => void) {
@@ -73,7 +63,6 @@ export class ReplicatedStorage implements Storage {
     this.onDrop = onDrop
   }
 
-  /** Storage over `remote`, with a replica loaded from `dump` when there is one and a database to load it into. */
   static async open(
     remote: RemoteStorage,
     dump: StorageDump | undefined,
@@ -93,7 +82,6 @@ export class ReplicatedStorage implements Storage {
     }
   }
 
-  /** Whether reads are served locally. */
   get replicated(): boolean {
     return this.local !== undefined
   }
@@ -129,7 +117,6 @@ export class ReplicatedStorage implements Storage {
     return result
   }
 
-  // IDs are minted by the remote storage, which owns the namespace for this lease.
   mintId<I extends Id<string>>(): Promise<I> {
     return this.remote.mintId<I>()
   }
@@ -196,7 +183,6 @@ export class ReplicatedStorage implements Storage {
     await Promise.all([this.remote.close(context), local?.close(context)])
   }
 
-  /** Stop at once, as a crash would. */
   abandon(): void {
     this.remote.abandon()
   }

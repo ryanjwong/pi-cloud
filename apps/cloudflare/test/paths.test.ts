@@ -2,7 +2,6 @@ import fc from "fast-check"
 import { describe, expect, it } from "vitest"
 import { forwarded } from "../src/paths.ts"
 
-/** Ways a server, proxy or router might read a path: each must agree that a forwarded path is public. */
 const decodeAll = (path: string) => {
   let current = path
   for (let round = 0; round < 4; round++) {
@@ -37,7 +36,6 @@ const firstSegment = (path: string) => path.replace(/^\/+/, "").split("/")[0]!
 const segment = fc.constantFrom(
   "v1", "internal", "INTERNAL", "Internal", "runner", "sessions", "pi", "health", "docs", "openapi.json", "", ".", "..",
   "%2e", "%2E%2E", "%2f", "%2F", "%5c", "%69nternal", "%2569nternal", "\\", "..\\internal", ";x", "v1;", "%00", "~", "x",
-  // Traversals hidden inside one segment, for readers that decode before they split.
   "..%2f..%2finternal", "%2e%2e%2f%2e%2e%2finternal", "x%2f..%2f..%2finternal", "%252e%252e%252finternal", "..%5c..%5cinternal"
 )
 const rawPath = fc.array(segment, { minLength: 1, maxLength: 6 }).map((segments) => `/${segments.join("/")}`)
@@ -46,7 +44,6 @@ describe("the Worker's public paths", () => {
   it("never forwards a path that any reading of it puts outside the public API", () => {
     fc.assert(
       fc.property(rawPath, (raw) => {
-        // What the Worker sees: the URL as the runtime parsed it.
         const path = new URL(`https://pi.example${raw}`).pathname
         if (!forwarded(path)) return
         for (const reading of readings(path)) {

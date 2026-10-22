@@ -12,14 +12,7 @@ import {
 import { Session, SessionId, type StorageDump, StorageFailure } from "@pi-cloud/protocol"
 import { Context, Effect, Layer, Option, Schema } from "effect"
 
-/**
- * The control plane's database: one SQLite database and one connection, shared by every store, through Pi's async
- * SQLite adapter (Node's `node:sqlite`, a Durable Object's storage, ...). The adapter queues each operation behind any
- * open transaction, so the stores never interleave with a commit, and the database is the whole state of the control
- * plane.
- */
 export class SqliteFile extends Context.Service<SqliteFile, SqliteDatabase>()("@pi-cloud/storage-sqlite/SqliteFile") {
-  /** The database `open` returns, with pi-cloud's tables created; closed with the layer. */
   static readonly layer = (open: () => Promise<SqliteDatabase>): Layer.Layer<SqliteFile> =>
     Layer.effect(
       SqliteFile,
@@ -43,15 +36,8 @@ CREATE TABLE IF NOT EXISTS credentials (provider_id TEXT PRIMARY KEY, sealed TEX
 const attempt = <A>(f: () => Promise<A>) =>
   Effect.tryPromise({ try: f, catch: (cause) => new StorageFailure({ message: cause instanceof Error ? cause.message : String(cause) }) })
 
-/** The ids pi-cloud mints. Their tables keep the names they have always had. */
 const MINTED = /^ses_[0-9a-f]{32}$/
 
-/**
- * Each session's Pi tables carry its own prefix in the shared file, and the prefixes must keep sessions apart:
- * distinct ids never share one, and no prefix starts another (or one session's `LIKE 'prefix%'` would reach into
- * another's tables). Any other id is escaped so that every `_` is followed by `u`, `h` or `x`, so the escape never
- * contains `__`, which then ends the prefix.
- */
 export const sessionPrefix = (sessionId: string) => {
   if (MINTED.test(sessionId)) return `s_${sessionId}_`
   let escaped = ""
@@ -64,7 +50,6 @@ export const sessionPrefix = (sessionId: string) => {
   return `s_${escaped}__`
 }
 
-/** A shared database whose `close` leaves it open: Pi's storage closes what it was opened on. */
 const borrowed = (db: SqliteDatabase): SqliteDatabase => ({
   exec: (sql) => db.exec(sql),
   run: (sql, ...params) => db.run(sql, ...params),
@@ -83,14 +68,12 @@ const toBase64 = (bytes: Uint8Array) => {
 const quoteName = (name: string) => `"${name.replaceAll('"', '""')}"`
 const escapeLike = (prefix: string) => prefix.replace(/[\\%_]/g, (c) => `\\${c}`)
 
-/** The tables, indexes, triggers and views of one prefix, tables first. */
 const objectsOf = (executor: SqliteExecutor, prefix: string) =>
   executor.all<{ type: string; name: string; sql: string }>(
     `SELECT type, name, sql FROM sqlite_master WHERE sql IS NOT NULL AND name LIKE ? ESCAPE '\\' ORDER BY type = 'table' DESC, rowid`,
     `${escapeLike(prefix)}%`
   )
 
-/** One session's Pi tables, read in one transaction: the schema statements, then the rows. */
 export const dumpSqlite = (db: SqliteDatabase, prefix: string): Promise<StorageDump> =>
   db.transaction(async (transaction) => {
     const objects = await objectsOf(transaction, prefix)
@@ -113,7 +96,6 @@ export const dumpSqlite = (db: SqliteDatabase, prefix: string): Promise<StorageD
     return { prefix, schema: objects.map((object) => object.sql), tables }
   })
 
-/** Pi Durable's own SQLite storage for every session, in the shared file. */
 const state: Layer.Layer<StateStore, never, SqliteFile> = Layer.unwrap(Effect.map(SqliteFile, (db) =>
   StateStore.fromOpener({
     open: (sessionId) => SqliteStorage.open(borrowed(db), { prefix: sessionPrefix(sessionId) }),
@@ -173,10 +155,6 @@ const bindings: Layer.Layer<BindingStore, never, SqliteFile> = Layer.effect(Bind
   })
 }))
 
-/**
- * Credentials, sealed with AES-256-GCM when `key` is given (see `credentialSealer`). Writes are compare-and-swap on
- * the version, inside one transaction.
- */
 const credentials = (key: string | undefined): Layer.Layer<CredentialStore, never, SqliteFile> =>
   Layer.effect(CredentialStore, Effect.map(SqliteFile, (db) => {
     const sealer = credentialSealer(key)
@@ -219,12 +197,6 @@ const credentials = (key: string | undefined): Layer.Layer<CredentialStore, neve
     })
   }))
 
-/**
- * Every control-plane store in one SQLite database: the session registry, each session's Pi state (tables prefixed
- * per session), bindings, and credentials. The layers share one connection when built together, as
- * `ControlPlane.layer` builds its stores. `sqliteStores` in `./node` opens a file; on Cloudflare, pass a Durable
- * Object's storage (`new DurableObjectSqliteDatabase(ctx.storage)`).
- */
 export const sqliteStoresOn = (
   open: () => Promise<SqliteDatabase>,
   options: { readonly credentialKey?: string | undefined } = {}

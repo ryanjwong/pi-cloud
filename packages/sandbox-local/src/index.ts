@@ -7,13 +7,8 @@ import { join, resolve } from "node:path"
 
 const safe = (key: string) => key.replace(/[^a-zA-Z0-9._-]/g, "_")
 
-/** Variables a shell needs to behave normally. Nothing else from the runner's environment reaches a sandbox. */
 const BASE_VARIABLES = ["PATH", "LANG", "LC_ALL", "TZ", "TERM"] as const
 
-/**
- * Run every command with exactly `env`: Pi's Node environment otherwise merges the runner's whole `process.env`
- * (model keys, the runner secret, ...) into each command.
- */
 export const isolate = (env: ExecutionEnv, variables: Readonly<Record<string, string>>): ExecutionEnv => {
   const isolated = Object.create(env) as ExecutionEnv
   isolated.exec = (command, options, context) =>
@@ -21,12 +16,6 @@ export const isolate = (env: ExecutionEnv, variables: Readonly<Record<string, st
   return isolated
 }
 
-/**
- * Sandboxes as directories on the runner's machine. File access is not isolated (it is the same machine), but the
- * environment is: commands see a minimal base, `HOME` set to the sandbox, and only the variables and secrets the
- * template grants. For development, tests, and trusted single-user setups. The same key always maps to the same
- * directory, so creation is idempotent.
- */
 export const localSandboxes = (options: { readonly root: string; readonly name?: string }): SandboxProvider => {
   const name = options.name ?? "local"
   const root = resolve(options.root)

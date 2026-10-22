@@ -6,13 +6,14 @@ All secrets live in one file, `secrets.yaml`, encrypted with [SOPS](https://gith
 names stay readable and values don't, so the file can be committed. `.sops.yaml` lists who can decrypt it: your
 age key, and each server's.
 
-`pnpm deploy:cloudflare` sets this up for you. By hand:
+`pnpm deploy:cloudflare` sets this up for you. By hand: create an age key, put the public key it prints in
+`.sops.yaml`, then encrypt the example file and edit it with `sops`.
 
 ```sh
-age-keygen -o ~/.config/sops/age/keys.txt     # prints your public key; put it in .sops.yaml
+age-keygen -o ~/.config/sops/age/keys.txt
 cp secrets.example.yaml secrets.yaml
 sops encrypt --in-place secrets.yaml
-sops secrets.yaml                             # edit
+sops secrets.yaml
 ```
 
 Every server reads settings through the same typed schema (`@pi-cloud/config`). A missing or malformed value
@@ -60,14 +61,14 @@ Instead of API keys, sessions can use a ChatGPT Plus/Pro, Claude Pro/Max or GitH
 from your machine with Pi's own login flow, and the tokens are stored, encrypted, on the control plane. Every runner
 uses them and refreshes them when they expire.
 
-```sh
-pi-cloud login openai-codex          # ChatGPT, in the browser
-pi-cloud login anthropic             # Claude Pro/Max
-pi-cloud login --from-codex          # reuse `codex login`
-pi-cloud login --from-pi anthropic   # reuse a login made with Pi
-pi-cloud auth                        # list what is stored
-pi-cloud logout anthropic
-```
+| Command | |
+|---|---|
+| `pi-cloud login openai-codex` | ChatGPT, in the browser |
+| `pi-cloud login anthropic` | Claude Pro/Max |
+| `pi-cloud login --from-codex` | reuse the login of `codex login` |
+| `pi-cloud login --from-pi anthropic` | reuse a login made with Pi |
+| `pi-cloud auth` | list what is stored |
+| `pi-cloud logout anthropic` | remove a login |
 
 Check your provider's terms first; Anthropic, for one, restricts using Claude Pro/Max logins outside its own apps.
 An imported login is shared with the tool it came from: when one side refreshes the token, the other may be signed

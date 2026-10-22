@@ -11,7 +11,6 @@ afterEach(async () => {
   if (dir !== undefined) await rm(dir, { recursive: true, force: true })
 })
 
-/** Environment variables first, then a secrets directory: the same order the servers use. */
 const load = async <A>(config: Config.Config<A>, env: Record<string, string>, files: Record<string, string> = {}) => {
   dir = await mkdtemp(join(tmpdir(), "pi-cloud-config-"))
   for (const [name, value] of Object.entries(files)) await writeFile(join(dir, name), `${value}\n`)
@@ -39,9 +38,7 @@ describe("RunnerEnv", () => {
     const secrets = sandboxSecretLookup(env)
     expect(await secrets("GITHUB_TOKEN")).toBe("ghp-file")
     expect(await secrets("NPM_TOKEN")).toBe("npm-123")
-    // Not listed in SANDBOX_SECRETS, so never handed to a sandbox even though it is configured.
     expect(await secrets("ANTHROPIC_API_KEY")).toBeUndefined()
-    // Secrets never print their value.
     expect(String(env.sandboxSecrets.GITHUB_TOKEN)).not.toContain("ghp-file")
   })
 

@@ -76,7 +76,6 @@ describe("GitHub trigger", () => {
       expect(userTexts(afterFirst)[0]).toContain("Comment on pull request #7 by @octocat")
       expect(userTexts(afterFirst)[0]).toContain("why is CI red?")
 
-      // Another comment on the same pull request reaches the same session; a redelivery is not submitted twice.
       const second = yield* Effect.promise(() => deliver(comment("@pi it's the retry logic"), "d2"))
       expect(second.json.sessions).toEqual([sessionId])
       yield* Effect.promise(() => deliver(comment("@pi it's the retry logic"), "d2"))

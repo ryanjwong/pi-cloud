@@ -52,7 +52,6 @@ describe("the service API", () => {
     })
     const connection = await connectServices({ url: deployment.url })
     try {
-      // The directory lives on the control plane's host.
       const directory = await connection.sessions()
       const created = await directory.create({
         title: "demo",
@@ -61,7 +60,6 @@ describe("the service API", () => {
       await until(() => directory.sessions.value.some((session) => session.id === created.id), "the directory")
       expect(directory.sessions.value.find((session) => session.id === created.id)?.title).toBe("demo")
 
-      // The session and its conversations live on its runner, woken by the first reference.
       const session = await connection.session(created.id)
       const main = await connection.conversation(created.id)
       expect(main.configuration.value.model).toEqual({ provider: "faux", modelId: "deep" })
@@ -72,7 +70,6 @@ describe("the service API", () => {
       const result = await main.waitForPrompt({ operationId: response.accepted ? response.operationId : "" })
       expect(result).toEqual({ status: "done", text: "Three files." })
 
-      // The view is Pi Durable's, replicated; the subagent is another conversation, listed by the session.
       const entries = () => (main.view.value as ConversationView).entries
       await until(() => entries().some((entry) => entry.kind === "pi.assistant"), "the transcript")
       await until(() => session.conversations.value.length === 2, "the subagent's conversation")
@@ -82,7 +79,6 @@ describe("the service API", () => {
       expect(JSON.stringify(subagent.view.value)).toContain("There are three files.")
       expect(session.tasks.value).toBeDefined()
 
-      // Controls: thinking levels and model switching, clamped by the runner.
       await main.cycleThinking()
       await until(() => main.configuration.value.thinkingLevel !== "off", "a thinking level")
       await main.selectModel({ provider: "faux", modelId: "plain" })
@@ -90,7 +86,6 @@ describe("the service API", () => {
       expect(main.configuration.value.thinkingLevel).toBe("off")
       await expect(main.cycleThinking()).rejects.toThrow(/does not support thinking/)
 
-      // Held references keep the runner; it stays past its idle time.
       await new Promise((resolve) => setTimeout(resolve, 3_000))
       expect(directory.sessions.value.find((item) => item.id === created.id)?.runner.state).toBe("running")
       subagent.release()
@@ -118,8 +113,6 @@ describe("the service API", () => {
       const first = await followed.current.prompt({ message: "one" })
       expect(await followed.current.waitForPrompt({ operationId: first.accepted ? first.operationId : "" })).toEqual({ status: "done", text: "before" })
 
-      // The runner dies without releasing its lease. The control plane notices and the link to its host closes, so
-      // the reference is gone; following it gets it again, which wakes a new runner with the same durable state.
       await local.runners.kill()
       const texts = () => {
         try {

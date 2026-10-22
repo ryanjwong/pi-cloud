@@ -4,7 +4,6 @@ import type { AddressInfo } from "node:net"
 import { join } from "node:path"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 
-// The Daytona SDK is written for Node; this runs it on workerd, as session objects do, against a stand-in API.
 const port = 48_000 + Math.floor(Math.random() * 1_000)
 let wrangler: ChildProcess | undefined
 let api: Server
@@ -20,7 +19,7 @@ beforeAll(async () => {
     })
   })
   await new Promise<void>((resolve) => api.listen(0, "127.0.0.1", resolve))
-  wrangler = spawn("npx", ["wrangler", "dev", "-c", "test/daytona-probe.jsonc", "--port", String(port), "--ip", "127.0.0.1"], {
+  wrangler = spawn("npx", ["wrangler", "dev", "-c", "test/daytona-probe.json", "--port", String(port), "--ip", "127.0.0.1"], {
     cwd: join(import.meta.dirname, ".."),
     env: { ...process.env, WRANGLER_SEND_METRICS: "false", CI: "1" },
     stdio: "ignore",
@@ -43,7 +42,6 @@ describe("Daytona sandboxes on workerd", () => {
     const url = `http://127.0.0.1:${(api.address() as AddressInfo).port}`
     const response = await fetch(`http://127.0.0.1:${port}/?api=${encodeURIComponent(url)}`, { signal: AbortSignal.timeout(60_000) })
     const { exit } = await response.json() as { exit: string }
-    // The REST calls (the SDK also opens an event socket of its own): look the sandbox up by its key, then create it.
     const rest = received.filter((call) => !call.path.startsWith("/socket.io/"))
     expect(rest.map((call) => `${call.method} ${call.path}`)).toEqual(expect.arrayContaining(["POST /sandbox"]))
     expect(rest[0]!.path).toMatch(/^\/sandbox\/pi-cloud-probe-home-[0-9a-f]+$/)

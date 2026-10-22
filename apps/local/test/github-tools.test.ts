@@ -37,7 +37,6 @@ const toolUse = (name: string, args: Parameters<typeof fauxToolCall>[1]) =>
 
 type Received = { method: string; path: string; authorization: string | undefined; body: any }
 
-/** A stand-in for the GitHub REST API that records what it receives. */
 const fakeGithub = async () => {
   const received: Array<Received> = []
   api = createServer((request, response) => {
@@ -111,7 +110,6 @@ describe("GitHub tools", () => {
         body: { head: "pi/fix", base: "main", title: "Fix the flake", body: "" }
       }
     ])
-    // The agent is told which thread it is on, and the token never reaches the model.
     expect(prompt).toContain("This session is about acme/api#7")
     expect(prompt).not.toContain("ghs_test")
   }, 30_000)
@@ -143,7 +141,6 @@ describe("repository sandboxes", () => {
         prompt = JSON.stringify(context)
         return toolUse("sandbox_create", { template: "api" })
       },
-      // What git would hand an HTTPS remote, and what the clone left on disk.
       toolUse("bash", {
         command: "git branch --show-current && cat README.md && printf 'protocol=https\\nhost=github.com\\n\\n' | git credential fill"
       }),
@@ -202,7 +199,6 @@ describe("GitHub App", () => {
     execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "add", "."], { cwd: origin })
     execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "--quiet", "-m", "init"], { cwd: origin })
 
-    // GitHub: the App's endpoints, minting tokens that expire within the runner's refresh margin, and the REST API.
     const issued: Array<{ token: string; repositories: Array<string> }> = []
     const comments: Array<string | undefined> = []
     api = createServer((request, response) => {
@@ -256,7 +252,6 @@ describe("GitHub App", () => {
       }))),
       runner: {
         idleMs: 5_000,
-        // The runner has no GitHub token of its own.
         plugins: [
           modelProviders(faux.provider),
           extensions("coding", CodingTools),
@@ -287,19 +282,15 @@ describe("GitHub App", () => {
       )
       const results = entries.filter((entry: any) => entry.kind === "pi.tool-result").map((entry) => entryText(entry as never))
 
-      // Every token was for the session's repository only.
       expect(issued.length).toBeGreaterThanOrEqual(3)
       expect(issued.every((token) => JSON.stringify(token.repositories) === '["api"]')).toBe(true)
-      // The comment went out with an App token.
       expect(comments).toHaveLength(1)
       expect(issued.map((token) => `Bearer ${token.token}`)).toContain(comments[0])
-      // Each command saw a token issued for it (tokens rotate faster than the runner's refresh margin here).
       const seen = results.slice(1).map((result) => result.split("\n")[0]!.split("").reverse().join(""))
       expect(seen[0]).toMatch(/^ghs_app_\d+$/)
       expect(seen[1]).toMatch(/^ghs_app_\d+$/)
       expect(seen[0]).not.toBe(seen[1])
       expect(results[1]).toContain("password=[secret:GITHUB_TOKEN]")
-      // No token reaches the transcript or the model.
       for (const { token } of issued) {
         expect(JSON.stringify(entries)).not.toContain(token)
         expect(prompts).not.toContain(token)

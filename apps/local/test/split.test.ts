@@ -10,7 +10,6 @@ import { createServer, type Server } from "node:http"
 import { Readable } from "node:stream"
 import { describe, expect, it } from "vitest"
 
-/** Serve a fetch-style handler on Node, the way any substrate would expose the runner host. */
 const serveFetch = (port: number, handler: (request: Request) => Promise<Response>) =>
   new Promise<Server>((resolve) => {
     const server = createServer(async (req, res) => {
@@ -34,7 +33,6 @@ describe("split deployment", () => {
     const faux = fauxProvider()
     faux.setResponses([fauxAssistantMessage("answered by a remote runner")])
 
-    // A runner host without a secret and a pinned control plane accepts no wake requests at all.
     const open = new RunnerHost({ plugins: [] })
     const wake = (headers: Record<string, string> = {}) =>
       new Request("http://runner/wake", { method: "POST", headers, body: JSON.stringify({ sessionId: "x", controlPlaneUrl: "http://evil.example" }) })
@@ -44,7 +42,6 @@ describe("split deployment", () => {
     const runners = new RunnerHost({ plugins: [modelProviders(faux.provider)], secret, controlPlaneUrl: controlUrl, idleMs: 2_000 })
     const runnerServer = await serveFetch(base + 1, runners.handler)
 
-    // An unauthenticated wake is refused.
     const refused = await fetch(`http://127.0.0.1:${base + 1}/wake`, {
       method: "POST",
       body: JSON.stringify({ sessionId: "x", controlPlaneUrl: controlUrl })
@@ -70,7 +67,6 @@ describe("split deployment", () => {
 
     try {
       await new Promise((resolve) => setTimeout(resolve, 300))
-      // Without the runner secret, the runner RPC answers nothing: no session state, no stored credentials.
       for (const authorization of [undefined, "Bearer wrong", "Bearer client-key"]) {
         const response = await fetch(`${controlUrl}/internal/runner`, {
           method: "POST",

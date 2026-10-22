@@ -13,7 +13,6 @@ const auth = { authorization: `Bearer ${apiKey}` }
 let state: string
 let wrangler: ChildProcess | undefined
 
-/** The Worker in a local workerd, with its Durable Objects' SQLite in `state`. */
 const start = async () => {
   wrangler = spawn("npx", ["wrangler", "dev", "--port", String(port), "--ip", "127.0.0.1", "--persist-to", state,
     "--var", `PI_CLOUD_API_KEYS:${apiKey}`, "--var", "PI_CLOUD_RUNNER_SECRET:test-runner-secret", "--var",
@@ -48,29 +47,23 @@ const entries = (view: unknown) => (view as ConversationView).entries.map((entry
 
 describe("pi-cloud on Cloudflare (local workerd)", () => {
   it("runs sessions in their own objects against the control plane's central store, across restarts", async () => {
-    // Without an API key, nothing.
     expect((await fetch(`${url}/v1/sessions`)).status).toBe(401)
     expect((await fetch(`${url}/v1/pi`)).status).toBe(401)
 
     const connection = await connectServices({ url, apiKey })
     const created = await (await connection.sessions()).create({ title: "on cloudflare", spec: {} })
-    // The first reference wakes the session's object, which takes the lease, loads its replica and links back.
     const main = await connection.conversation(created.id)
     const first = await main.prompt({ message: "hello from workerd" })
     expect(first.accepted).toBe(true)
-    // No model is configured on this Worker, so Pi settles the prompt unanswered; it is committed all the same.
     expect(await main.waitForPrompt({ operationId: first.accepted ? first.operationId : "" })).toEqual({ status: "unanswered", reason: "no_model" })
     expect(entries(main.view.value)).toEqual(["pi.user"])
     main.release()
     await connection.close()
 
-    // The runner RPC is not public, however its path is spelled.
     for (const path of ["/internal/runner/", "//internal/runner/", "/%69nternal/runner/", "/v1/../internal/runner/", "/v1/%2e%2e/internal/runner/", "/v1%2F..%2Finternal/runner/"]) {
       expect((await fetch(`${url}${path}`, { method: "POST", headers: auth })).status, path).toBe(404)
     }
 
-    // Everything is in the control plane object's SQLite: a fresh runtime has the session, and a fresh session
-    // object continues it from a copy.
     await stop()
     await start()
     const listed = await fetch(`${url}/v1/sessions`, { headers: auth }).then((response) => response.json()) as Array<{ id: string; title?: string }>

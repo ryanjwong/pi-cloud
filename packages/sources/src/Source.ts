@@ -7,31 +7,22 @@ import type { TriggerRejected, TriggerRequest } from "@pi-cloud/triggers"
 import { Effect, Fiber, Layer, Schedule, Schema, Stream } from "effect"
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http"
 
-/** A message that arrived through a source, addressed to the session bound to `key`. */
 export interface InboundMessage {
-  /** Stable identity of the conversation outside, e.g. a Slack thread. Same key, same session. */
   readonly key: string
   readonly content: UserContent
-  /** Where replies go, in the source's own terms (channel, thread, ...). Stored on the binding. */
   readonly target: JsonValue
-  /** Deduplicates redelivered messages. */
   readonly requestId?: string | undefined
-  /** Title and spec for the session, used only when the key has no session yet. */
   readonly title?: string | undefined
   readonly spec?: SessionSpec | undefined
   readonly whenBusy?: WhenBusy | undefined
-  /** Only deliver if the key already has a session, e.g. an unaddressed reply in a thread the agent is in. */
   readonly onlyIfBound?: boolean | undefined
 }
 
-/** What `receive` makes of one inbound request. */
 export interface Received {
   readonly messages: ReadonlyArray<InboundMessage>
-  /** Replaces the default `200 ok` response, e.g. to answer a URL-verification challenge. */
   readonly response?: { readonly status?: number; readonly json: unknown } | undefined
 }
 
-/** An assistant message to send back out. */
 export interface Reply {
   readonly sessionId: string
   readonly entryId: number
@@ -42,10 +33,6 @@ export class DeliveryFailed extends Schema.TaggedError<DeliveryFailed>()("Delive
   message: Schema.String
 }) {}
 
-/**
- * A two-way connection: chat platforms, issue trackers, anything people talk to the agent through. `receive`
- * turns inbound requests into messages; `deliver` sends the agent's replies back to a binding's target.
- */
 export interface Source {
   readonly name: string
   readonly receive: (request: TriggerRequest) => Effect.Effect<Received, TriggerRejected>
@@ -67,18 +54,12 @@ const textOf = (entry: any): string =>
     )
     .join("")
 
-/** Assistant entries newly visible in one event, oldest first. */
 const assistantEntries = (event: Event): ReadonlyArray<any> => {
   if (event.type === "message_end" && event.entry?.kind === "pi.assistant") return [event.entry]
   if (event.type === "snapshot") return (event.entries ?? []).filter((entry: any) => entry?.kind === "pi.assistant")
   return []
 }
 
-/**
- * Mount sources at `POST {path}/{name}` and deliver replies. Every binding a source owns gets a follower that
- * watches its session and sends each new assistant message with text through `deliver`, once: the newest
- * delivered entry is recorded on the binding, so a restart picks up where it stopped.
- */
 export const sources = (
   list: ReadonlyArray<Source>,
   options: { readonly path?: `/${string}` } = {}
@@ -123,7 +104,6 @@ export const sources = (
       followers.set(initial.key, fiber)
     })
 
-    // Resume following every binding these sources own.
     for (const source of list) {
       for (const binding of yield* bindings.list(source.name).pipe(Effect.orDie)) yield* follow(binding, source)
     }

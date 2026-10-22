@@ -4,10 +4,6 @@ import { registerStorageConformance } from "@earendil-works/pi-durable/testing"
 import { describe, expect, it } from "vitest"
 import { RemoteStorage, StorageBackendError } from "../src/RemoteStorage.ts"
 
-/**
- * RemoteStorage over a transport that behaves like the control plane: JSON both ways, null back to undefined, and
- * the backend's failures reported as such (request errors as Pi's `StorageRequestError`).
- */
 const remoteOver = (backend: MemoryStorage) =>
   new RemoteStorage(async (method, args) => {
     const decoded = JSON.parse(JSON.stringify(args)).map((arg: unknown) => arg === null ? undefined : arg)

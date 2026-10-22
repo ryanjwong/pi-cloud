@@ -1,12 +1,5 @@
-# Streaming backups of the control plane's database (everything it keeps is in DATA_DIR/pi-cloud.sqlite).
-# Run the server under Litestream so every change reaches object storage within a second:
-#   litestream restore -config litestream.yml -if-db-not-exists -if-replica-exists .data/pi-cloud.sqlite
-#   sops exec-env secrets.yaml 'litestream replicate -config litestream.yml -exec "pnpm start"'
-# Credentials come from LITESTREAM_ACCESS_KEY_ID and LITESTREAM_SECRET_ACCESS_KEY (keep them in secrets.yaml).
-# On NixOS, set services.pi-cloud.backup instead.
 dbs:
   - path: ${DATA_DIR}/pi-cloud.sqlite
     replicas:
       - url: s3://my-bucket/pi-cloud
-        # Cloudflare R2; omit for AWS S3.
         endpoint: https://<account-id>.r2.cloudflarestorage.com

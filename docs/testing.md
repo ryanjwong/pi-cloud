@@ -1,9 +1,12 @@
 # Testing
 
 ```sh
-pnpm test         # everything, about a minute and a half
+pnpm test
 pnpm typecheck
+pnpm lint
 ```
+
+`pnpm test` runs everything in about a minute and a half.
 
 Docker tests need a running Docker daemon. The SOPS tests run only when `sops` and `age` are installed (they are in
 `nix develop`).

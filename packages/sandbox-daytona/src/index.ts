@@ -5,24 +5,17 @@ import { createHash } from "node:crypto"
 import { posix } from "node:path"
 
 export interface DaytonaSandboxOptions {
-  /** Provider name templates refer to. Default `daytona`. */
   readonly name?: string
-  /** Defaults to `DAYTONA_API_KEY`, as the SDK reads it. */
   readonly apiKey?: string
   readonly apiUrl?: string
-  /** Region. */
   readonly target?: string
-  /** Snapshot for templates that name no `image`. Default: Daytona's default snapshot. */
   readonly snapshot?: string
-  /** Minutes of inactivity before Daytona stops a sandbox (0 never). The sandbox restarts on the next command. */
   readonly autoStopInterval?: number
-  /** A configured client, instead of the options above. */
   readonly client?: Daytona
 }
 
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`
 
-/** Daytona names are short and lowercase: keep a readable prefix of the key and a hash of all of it. */
 const sandboxName = (key: string) => {
   const readable = key.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40)
   return `pi-cloud-${readable}-${createHash("sha256").update(key).digest("hex").slice(0, 10)}`
@@ -36,11 +29,6 @@ const started = async (sandbox: Sandbox) => {
   else await sandbox.start()
 }
 
-/**
- * Commands run one per Daytona session: the script is started asynchronously, its output streamed back, and the
- * session deleted when it ends or is aborted. Variables are exported at the top of the script, so they travel to
- * Daytona with the command and are never stored on the sandbox.
- */
 const daytonaShell = (sandbox: Sandbox): RemoteShell => {
   const once = async (script: string, run: Parameters<RemoteShell["run"]>[1]) => {
     const session = `pi-cloud-${crypto.randomUUID()}`
@@ -60,7 +48,6 @@ const daytonaShell = (sandbox: Sandbox): RemoteShell => {
         (chunk) => run.onStdout?.(chunk),
         (chunk) => run.onStderr?.(chunk)
       )
-      // The exit code is recorded a moment after the output ends.
       for (let attempt = 0; attempt < 50; attempt++) {
         const command = await sandbox.process.getSessionCommand(session, cmdId)
         if (typeof command.exitCode === "number") return command.exitCode
@@ -81,7 +68,6 @@ const daytonaShell = (sandbox: Sandbox): RemoteShell => {
       try {
         return await once(script, run)
       } catch (error) {
-        // An auto-stopped sandbox is started again, once.
         await sandbox.refreshData()
         if (sandbox.state === "started" || run.signal?.aborted) throw error
         await started(sandbox)
@@ -92,11 +78,6 @@ const daytonaShell = (sandbox: Sandbox): RemoteShell => {
   }
 }
 
-/**
- * Sandboxes as Daytona sandboxes: isolated VMs that persist while stopped, so a session's sandbox survives runner
- * restarts and idle periods. Creation is keyed by name, so retrying a create finds the same sandbox. A template's
- * `image` builds from that image, with `options.cpu`, `options.memory` and `options.disk` (GiB) as resources.
- */
 export const daytonaSandboxes = (options: DaytonaSandboxOptions = {}): SandboxProvider => {
   const name = options.name ?? "daytona"
   let client = options.client
@@ -133,7 +114,6 @@ export const daytonaSandboxes = (options: DaytonaSandboxOptions = {}): SandboxPr
                 ? await daytona().create({ ...base, ...(options.snapshot === undefined ? {} : { snapshot: options.snapshot }) })
                 : await daytona().create({ ...base, image: template.image, resources })
             } catch (error) {
-              // Lost a race with a concurrent create of the same sandbox.
               sandbox = await find(sandboxId)
               if (sandbox === undefined) throw error
             }

@@ -1,7 +1,3 @@
-// Vendored from Pi (github.com/earendil-works/pi, v1.1.0), packages/coding-agent/src/experimental/durable/tui.ts:
-// Pi's own TUI for durable sessions, built from its interactive components. MIT License, Copyright (c) 2025 Mario
-// Zechner. Changed: imports of Pi internals go through ./internal.ts, the view types live in ./View.ts,
-// and the terminal can be passed in.
 import type { AssistantMessage, ToolResultMessage, Usage, UserMessage } from "@earendil-works/pi-ai";
 import type {
 	ConversationId,
@@ -66,7 +62,6 @@ const SELECT_THEME: SelectListTheme = {
 	noMatch: (text) => theme.fg("warning", text),
 };
 
-/** A filterable list in place of the editor. */
 class ListSelector extends Container implements Focusable {
 	readonly #input = new Input();
 	readonly #listContainer = new Container();
@@ -123,7 +118,6 @@ class ListSelector extends Container implements Focusable {
 	}
 }
 
-/** The summary that replaced earlier context: collapsed to one line until expanded. */
 class CompactionComponent extends Box {
 	readonly #summary: string;
 
@@ -175,20 +169,15 @@ class DurableTui {
 	readonly #editorContainer = new Container();
 	readonly #editor: CustomEditor;
 	readonly #cwd: string;
-	/** The newest card per call ID; provider call IDs may repeat across turns. */
 	readonly #tools = new Map<string, ToolExecutionComponent>();
-	/** Every card shown, also older ones whose call ID a later turn reused. */
 	readonly #cards: ToolExecutionComponent[] = [];
-	/** Call IDs whose cards the streaming answer created; its entry takes them over. */
 	readonly #streamingCalls = new Set<string>();
 	readonly #summaries: CompactionComponent[] = [];
-	/** Tool output and summaries shown in full; toggled like pi. */
 	#expanded = false;
 	#renderedEntryIds: number[] = [];
 	#streaming: AssistantMessageComponent | undefined;
 	#indicator: StatusIndicator | undefined;
 	#statusText = "";
-	/** Set when the transcript was rebuilt: the next render repaints the screen and shows the end. */
 	#rebuilt = false;
 	#transcript: ScrollView;
 
@@ -222,7 +211,6 @@ class DurableTui {
 		this.#editorContainer.addChild(this.#editor);
 		this.#footer.addChild(this.#footerStats);
 		this.#footer.addChild(this.#footerHints);
-		// One empty line between the transcript and everything below it.
 		const content = new Container();
 		content.addChild(this.#chat);
 		content.addChild(new Spacer(1));
@@ -268,7 +256,6 @@ class DurableTui {
 		this.#ui.stop();
 	}
 
-	/** Finish every card: a running bash card keeps a timer until it gets a final result. */
 	#discardTools(): void {
 		for (const component of this.#cards) component.updateResult({ content: [], isError: false }, false);
 		this.#cards.length = 0;
@@ -291,7 +278,6 @@ class DurableTui {
 		const live = (view.conversation.docs["pi.live"] ?? {}) as LiveState;
 		this.#syncTranscript(view.conversation.entries);
 		const message = live.generation?.message as AssistantMessage | undefined;
-		// A partial without its entry was dropped, for example by a retry: render the transcript again.
 		if (message === undefined && this.#streaming !== undefined) this.#rebuild(view.conversation.entries);
 		if (message !== undefined) this.#syncStreaming(message);
 		for (const slot of live.tools ?? []) {
@@ -327,7 +313,6 @@ class DurableTui {
 		if (graph === undefined) return;
 		const nodes = Object.values(graph.tasks);
 		const lines: string[] = [theme.fg("accent", `Tasks (${nodes.length} live, /tasks to hide)`)];
-		// A conversation-owned task sits under the task that owns its conversation, when that task is live.
 		const owned = new Set(nodes.flatMap((node) => node.conversations));
 		const children = (node: TaskGraphNode) =>
 			nodes.filter(
@@ -416,7 +401,6 @@ class DurableTui {
 	}
 
 	#syncTranscript(entries: readonly EntryRecord[]): void {
-		// Compaction and resets replace the head of the active transcript.
 		if (this.#renderedEntryIds.some((id, index) => entries[index]?.id !== id)) this.#rebuild(entries);
 		for (const entry of entries.slice(this.#renderedEntryIds.length)) {
 			this.#addEntry(entry);
@@ -447,12 +431,10 @@ class DurableTui {
 			if (this.#streaming === undefined) this.#chat.addChild(component);
 			this.#streaming = undefined;
 			component.updateContent(message, false);
-			// Only a tool-calling answer runs its calls; an aborted, failed, or truncated one never does.
 			const ran = message.stopReason === "toolUse";
 			for (const content of message.content) {
 				if (content.type !== "toolCall") continue;
 				const streamed = this.#streamingCalls.has(content.id);
-				// Only cards the stream already showed are kept for calls that never run.
 				if (!ran && !streamed) continue;
 				const card = this.#tool(content.name, content.id, content.arguments, !streamed);
 				card.setArgsComplete();
@@ -494,7 +476,6 @@ class DurableTui {
 		this.#chat.addChild(new Text(theme.fg("muted", text), 1, 0));
 	}
 
-	/** The card of a call; `fresh` starts a new one for a call ID an earlier turn used. */
 	#tool(name: string, callId: string, args?: unknown, fresh = false): ToolExecutionComponent {
 		const existing = fresh ? undefined : this.#tools.get(callId);
 		if (existing !== undefined) {
@@ -558,9 +539,7 @@ function totalUsage(state: UsageState): Usage {
 	return total;
 }
 
-/** Context size from the newest successful answer after the newest compaction; unknown before one. */
 function contextTokens(entries: readonly EntryRecord[]): number | undefined {
-	// Kept entries follow the summary in the view but are older than it; only later answers measure the new context.
 	const compacted = Math.max(0, ...entries.filter((entry) => entry.kind === "pi.compaction").map((entry) => entry.id));
 	for (const entry of [...entries].reverse()) {
 		const message = entry.model?.[0];
@@ -579,7 +558,6 @@ export async function runDurableTui(
 	terminal?: Terminal,
 ): Promise<void> {
 	setCapabilityOverrides(settings.getTerminalCapabilityOverrides());
-	// The system theme until the controller resolves the user's theme against the terminal's colors.
 	initTheme();
 	let exit = (): void => {};
 	const exited = new Promise<void>((resolve) => {
@@ -651,7 +629,6 @@ export async function runDurableTui(
 		cycleThinking: () => void controller.cycleThinking(),
 	}, terminal);
 
-	// pi's theme handling: the theme setting (also light/dark pairs) resolved against the terminal's reported colors.
 	const themes = new InteractiveThemeController(view.ui, {
 		getSettingsManager: () => settings,
 		showError: (message) => console.error(message),

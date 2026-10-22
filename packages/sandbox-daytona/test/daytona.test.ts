@@ -10,10 +10,6 @@ import { daytonaSandboxes } from "../src/index.ts"
 
 const context = {} as Context
 
-/**
- * A stand-in for Daytona's API, shaped like the SDK calls the provider makes: session commands run in a local `sh`
- * and stream their output, and sandboxes start stopped.
- */
 const fakeDaytona = (workdir: string) => {
   const sandboxes = new Map<string, any>()
   const calls: Array<string> = []

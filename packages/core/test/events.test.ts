@@ -19,7 +19,6 @@ const step: fc.Arbitrary<Step> = fc.oneof(
 
 const after = (a: StreamPosition, b: StreamPosition) => a.epoch > b.epoch || (a.epoch === b.epoch && a.seq > b.seq)
 const key = (batch: EventBatch) => `${batch.epoch}:${batch.seq}`
-/** Let forked subscribers drain what has been published. */
 const settle = Effect.gen(function*() {
   for (let index = 0; index < 20; index++) yield* Effect.yieldNow
 })
@@ -32,7 +31,6 @@ describe("EventHub invariants", () => {
           const hub = Context.get(yield* Layer.build(EventHub.memory({ logLimit: 4 })), EventHub)
           let epoch = 1
           let seq = 0
-          // A new lease starts every conversation with a snapshot, as runners do.
           const needsSnapshot = new Set([0, 1])
           const published: Array<EventBatch> = []
           type Subscriber = { start: number; end?: number; cursor?: StreamPosition; received: Array<EventBatch>; fiber: Fiber.Fiber<void> }
@@ -67,7 +65,6 @@ describe("EventHub invariants", () => {
                 disconnected.push(leaving)
               }
             } else {
-              // A reconnecting client resumes from the last batch it saw before it dropped; meanwhile more was published.
               const previous = disconnected.pop()?.received.at(-1)
               const cursor = current.resume && previous !== undefined ? { epoch: previous.epoch, seq: previous.seq } : undefined
               const received: Array<EventBatch> = []
@@ -81,24 +78,19 @@ describe("EventHub invariants", () => {
           }
 
           for (const { start, end, cursor, received } of subscribers) {
-            // No duplicates.
             expect(new Set(received.map(key)).size).toBe(received.length)
             for (const conversation of [0, 1]) {
               const mine = received.filter((batch) => batch.conversationId === conversation)
               const all = published.filter((batch) => batch.conversationId === conversation)
-              // In order.
               for (let index = 1; index < mine.length; index++) expect(after(mine[index]!, mine[index - 1]!)).toBe(true)
-              // Everything published after the subscriber joined arrives.
               const live = published.slice(start, end).filter((batch) => batch.conversationId === conversation)
               for (const batch of live) expect(mine.map(key)).toContain(key(batch))
               if (mine.length === 0) continue
               const first = mine[0]!
               const startsAtSnapshot = (first.events[0] as { type: string }).type === "snapshot"
               if (cursor === undefined || !after(first, cursor) || startsAtSnapshot) {
-                // A fresh view starts at a snapshot, and then nothing is skipped.
                 expect(startsAtSnapshot).toBe(true)
               } else {
-                // A resumed one carries straight on from the cursor: the next batch after it, nothing skipped.
                 const next = all.find((batch) => after(batch, cursor))
                 expect(key(first)).toBe(key(next!))
               }

@@ -4,38 +4,20 @@ import { Clock, Context, Effect, Layer, Option } from "effect"
 export interface Lease {
   readonly sessionId: string
   readonly runnerId: string
-  /** Fencing token: writes are accepted only from the current token. */
   readonly token: string
-  /** Increases with every new lease on the session. */
   readonly epoch: number
   readonly expiresAt: number
 }
 
-/**
- * Decides which runner may write to a session. There is at most one live lease per session; a lease that is not
- * renewed before it expires can be taken by another runner, and every later write with the old token fails.
- */
 export class LeaseManager extends Context.Service<LeaseManager, {
-  /** Take the lease, or renew it when `token` is the current one. */
   acquire(sessionId: string, runnerId: string, token: string | undefined): Effect.Effect<Lease, LeaseHeld>
   renew(sessionId: string, token: string): Effect.Effect<Lease, LeaseLost>
-  /** Give the lease up cleanly: the runner finished all work it knew about. */
   release(sessionId: string, token: string): Effect.Effect<void>
-  /** Fail unless `token` holds the session's lease right now. */
   validate(sessionId: string, token: string): Effect.Effect<Lease, LeaseLost>
   current(sessionId: string): Effect.Effect<Option.Option<Lease>>
-  /**
-   * Sessions whose lease expired without a release since the last call: their runner died, possibly mid-run,
-   * so they should be woken to resume.
-   */
   takeAbandoned(): Effect.Effect<ReadonlyArray<string>>
-  /** Forget the session entirely. */
   remove(sessionId: string): Effect.Effect<void>
 }>()("@pi-cloud/control-plane/LeaseManager") {
-  /**
-   * Leases in process memory. Correct for one control-plane process; a horizontally scaled control plane needs
-   * a shared implementation whose check is atomic with the state store's commit.
-   */
   static readonly memory = (options: { readonly ttlMs: number }): Layer.Layer<LeaseManager> =>
     Layer.sync(LeaseManager, () => {
       const leases = new Map<string, Lease>()

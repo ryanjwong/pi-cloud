@@ -1,7 +1,6 @@
 import type { EventBatch } from "@pi-cloud/protocol"
 import { Context, Effect, Layer, PubSub, Stream } from "effect"
 
-/** Where a client last left a session's event stream. */
 export interface StreamPosition {
   readonly epoch: number
   readonly seq: number
@@ -14,25 +13,17 @@ export const parsePosition = (value: string | undefined): StreamPosition | undef
 
 const isSnapshot = (batch: EventBatch) => (batch.events[0] as { type?: unknown } | undefined)?.type === "snapshot"
 
-/**
- * Fans live agent events out to every client watching a session. Runners publish Pi's per-commit event batches;
- * the hub keeps each conversation's batches since its newest snapshot, so a client that joins late gets the
- * snapshot and everything after it, then live batches.
- */
 export class EventHub extends Context.Service<EventHub, {
-  /** Returns `needsSnapshot` when the buffered log is long enough that the runner should send a fresh snapshot. */
   publish(sessionId: string, batches: ReadonlyArray<EventBatch>): Effect.Effect<{ readonly needsSnapshot: boolean }>
-  /** Buffered batches (resuming after `after` when possible), then live ones. */
   subscribe(sessionId: string, after: StreamPosition | undefined): Stream.Stream<EventBatch>
   remove(sessionId: string): Effect.Effect<void>
 }>()("@pi-cloud/control-plane/EventHub") {
   static readonly memory = (options: { readonly logLimit: number }): Layer.Layer<EventHub> =>
-    Layer.effect(
+    Layer.sync(
       EventHub,
-      Effect.gen(function*() {
+      () => {
         interface Topic {
           readonly pubsub: PubSub.PubSub<EventBatch>
-          /** Per conversation: the newest snapshot batch and every batch after it. */
           readonly logs: Map<number, Array<EventBatch>>
         }
         const topics = new Map<string, Topic>()
@@ -77,7 +68,6 @@ export class EventHub extends Context.Service<EventHub, {
           subscribe: (sessionId, after) =>
             Stream.unwrap(Effect.gen(function*() {
               const { pubsub, logs } = yield* topic(sessionId)
-              // Subscribe before reading the log so nothing published in between is lost.
               const subscription = yield* PubSub.subscribe(pubsub)
               const buffered = replay(logs, after)
               const seen = new Map<number, StreamPosition>()
@@ -100,6 +90,6 @@ export class EventHub extends Context.Service<EventHub, {
               return found === undefined ? Effect.void : PubSub.shutdown(found.pubsub)
             })
         })
-      })
+      }
     )
 }

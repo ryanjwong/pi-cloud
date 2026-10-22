@@ -7,7 +7,6 @@ import { writeSopsSecrets } from "./sops.ts"
 export interface GithubAppFlags {
   readonly org?: string | undefined
   readonly name?: string | undefined
-  /** The control plane's public URL, for the App's webhook. */
   readonly url?: string | undefined
   readonly secrets?: string | undefined
   readonly print?: boolean | undefined
@@ -16,12 +15,7 @@ export interface GithubAppFlags {
 
 const isLocal = (url: string) => /^https?:\/\/(127\.|localhost|\[::1\])/.test(url)
 
-/**
- * `pi-cloud github-app`: create pi-cloud's GitHub App from its manifest in the browser, and store its ID, private
- * key and webhook secret in the SOPS secrets file, ready for the control plane.
- */
 export const githubAppCommand = async (flags: GithubAppFlags, write: (text: string) => void) => {
-  // GitHub must reach the webhook: a loopback URL gets an App for tokens only.
   const publicUrl = flags.url === undefined || isLocal(flags.url) ? undefined : flags.url
   const options = { ...(flags.name === undefined ? {} : { name: flags.name }), ...(publicUrl === undefined ? {} : { publicUrl }) }
   if (flags.manifest === true) {

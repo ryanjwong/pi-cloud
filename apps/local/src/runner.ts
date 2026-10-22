@@ -1,6 +1,3 @@
-// A runner host alone: accepts wake requests and attaches back to the control plane (CONTROL_PLANE_URL).
-//   sops exec-env secrets.yaml 'node src/runner.ts'
-// Any machine, container, or platform that can run this and reach the control plane can host sessions.
 import { modelCredentialLookup, RunnerEnv, sandboxSecretLookup } from "@pi-cloud/config"
 import { RunnerHost } from "@pi-cloud/runner"
 import { memoryReplica } from "@pi-cloud/runner/node"
@@ -11,8 +8,6 @@ import { load } from "./env.ts"
 import { defaultPlugins } from "./plugins.ts"
 
 const env = await load(RunnerEnv)
-// Wake requests must carry the shared secret, and the runner only ever attaches to the pinned control plane: a
-// forged wake could otherwise send it, with its model keys and sandbox secrets, to someone else's.
 if (Option.isNone(env.runnerSecret) || Option.isNone(env.controlPlaneUrl)) {
   console.error("Set PI_CLOUD_RUNNER_SECRET and CONTROL_PLANE_URL to run a runner host.")
   process.exit(1)
@@ -23,7 +18,6 @@ const host = new RunnerHost({
   controlPlaneUrl: env.controlPlaneUrl.value,
   modelCredentials: modelCredentialLookup(env),
   secrets: sandboxSecretLookup(env),
-  // Reads from a local copy of each session; commits still go through the control plane.
   replica: memoryReplica
 })
 

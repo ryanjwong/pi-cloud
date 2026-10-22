@@ -1,8 +1,3 @@
-// pi-cloud on Cloudflare in one command, from the repository root:
-//   pnpm deploy:cloudflare
-// Sets up SOPS (an age key and .sops.yaml) if needed, generates pi-cloud's own secrets, asks for the keys only you
-// have, keeps all of them encrypted in secrets.yaml, deploys the Worker and hands it the secrets. Run it again any
-// time: it only asks for what is missing, and redeploys.
 import { MODEL_CREDENTIALS } from "@pi-cloud/config"
 import { writeSopsSecrets } from "@pi-cloud/cli/sops"
 import { spawn, spawnSync } from "node:child_process"
@@ -13,13 +8,11 @@ import { dirname, join, resolve } from "node:path"
 
 const root = resolve(import.meta.dirname, "../../..")
 const app = resolve(import.meta.dirname, "..")
-/** Where secrets.yaml and .sops.yaml live: the repository root. */
 const secretsDir = process.env.PI_CLOUD_SECRETS_DIR ?? root
 const secretsFile = join(secretsDir, "secrets.yaml")
 const sopsConfig = join(secretsDir, ".sops.yaml")
 const PLACEHOLDER = /age1replacewithyourpublickey\w*/
 
-/** What the Worker reads: the three it cannot run without, then the optional ones. */
 const REQUIRED = ["PI_CLOUD_API_KEYS", "PI_CLOUD_RUNNER_SECRET", "PI_CLOUD_CREDENTIAL_KEY"] as const
 const ASKED = [
   { name: "ANTHROPIC_API_KEY", why: "Anthropic models (or skip, and sign in with Claude Pro/Max later: pi-cloud login anthropic)" },
@@ -55,7 +48,6 @@ const wrangler = (args: ReadonlyArray<string>, options: { input?: string; captur
     child.on("close", (code) => done({ ok: code === 0, output }))
   })
 
-/** Read a line without echoing it, for keys. */
 const askSecret = (question: string) =>
   new Promise<string>((done) => {
     process.stdout.write(question)
@@ -80,14 +72,12 @@ const askSecret = (question: string) =>
     stdin.on("data", onData)
   })
 
-// ----- 1. Tools
 step("Checking tools")
 for (const tool of ["sops", "age-keygen"]) {
   if (!has(tool)) fail(`${tool} is missing. Install it: brew install sops age   (or run inside: nix develop)`)
 }
 console.log("  sops, age: ok")
 
-// ----- 2. Your age key, and .sops.yaml naming it
 step("Setting up SOPS")
 const keyFile = process.env.SOPS_AGE_KEY_FILE ?? (process.platform === "darwin" && process.env.XDG_CONFIG_HOME === undefined
   ? join(homedir(), "Library/Application Support/sops/age/keys.txt")
@@ -107,7 +97,6 @@ if (PLACEHOLDER.test(config)) {
   console.log(`  .sops.yaml now encrypts to your key (${publicKey.slice(0, 16)}…)`)
 }
 
-// ----- 3. secrets.yaml: generate pi-cloud's own secrets, ask for yours
 step("Secrets (encrypted in secrets.yaml)")
 const current: Record<string, unknown> = existsSync(secretsFile)
   ? (() => {
@@ -135,14 +124,12 @@ if (process.stdin.isTTY) {
   }
 }
 if (Object.keys(added).length > 0) {
-  // SOPS finds .sops.yaml from the working directory.
   process.chdir(secretsDir)
   writeSopsSecrets(secretsFile, added)
   console.log(`  saved ${Object.keys(added).join(", ")} to secrets.yaml`)
 }
 const secrets: Record<string, string> = { ...(current as Record<string, string>), ...added }
 
-// ----- 4. Cloudflare
 step("Signing in to Cloudflare")
 const whoami = await wrangler(["whoami"], { capture: true })
 if (!whoami.ok || /not authenticated|You are not/i.test(whoami.output)) {
@@ -156,10 +143,8 @@ const url = deployed.output.match(/https:\/\/[\w.-]+\.workers\.dev/)?.[0]
 
 step("Handing the secrets to the Worker")
 const forwarded = Object.fromEntries(FORWARDED.filter((name) => typeof secrets[name] === "string" && secrets[name] !== "").map((name) => [name, secrets[name]]))
-// Through stdin, never a command line or a file.
 if (!(await wrangler(["secret", "bulk"], { input: JSON.stringify(forwarded) })).ok) fail("wrangler secret bulk failed (see above)")
 
-// ----- 5. Ready
 if (url !== undefined) {
   step(`Waiting for ${url}`)
   let ready = false

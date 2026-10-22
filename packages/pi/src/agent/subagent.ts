@@ -1,5 +1,3 @@
-// Vendored from Pi (github.com/earendil-works/pi, v1.1.0), packages/coding-agent/src/experimental/durable/subagent.ts.
-// MIT License, Copyright (c) 2025 Mario Zechner. Unchanged.
 import type { Context } from "@earendil-works/chord";
 import { type AssistantMessage, Type } from "@earendil-works/pi-ai";
 import {
@@ -18,11 +16,6 @@ async function answerText(api: ToolExecutionApi, answer: EntryId, context: Conte
 	return message?.content.flatMap((content) => (content.type === "text" ? [content.text] : [])).join("") ?? "";
 }
 
-/**
- * A foreground subagent: each call creates a child conversation owned by the call's task, runs the task there, and
- * returns the child's answer. Aborting the call aborts the child. The child outlives the call, so the user can switch
- * to it and keep talking.
- */
 export const Subagent: Extension = defineExtension({
 	name: "subagent",
 	tools: [
@@ -31,13 +24,11 @@ export const Subagent: Extension = defineExtension({
 			description:
 				"Delegate a self-contained task to a subagent with the same tools and get its answer back. Give it everything it needs to know; it does not see this conversation.",
 			parameters: Type.Object({ task: Type.String({ description: "What the subagent should do" }) }),
-			// A rerun after a crash finds the child it created and the submission it made.
 			replay: "safe",
 			execute: async (args, api, context) => {
 				const child = await api.commit(async (tx) => {
 					const existing = (await tx.scanConversations({ ownerTaskId: api.taskId }, 1)).items[0];
 					if (existing !== undefined) return existing.id;
-					// Starts as a copy of this conversation's agent; without this extension it cannot delegate further.
 					const created = await tx.createConversation({ ownership: { kind: "task", taskId: api.taskId } });
 					await configure(tx, created.id, { extensions: { remove: [Subagent] } });
 					return created.id;

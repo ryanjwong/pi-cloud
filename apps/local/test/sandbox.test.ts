@@ -26,15 +26,12 @@ const toolUse = (name: string, args: Parameters<typeof fauxToolCall>[1]) =>
 describe("sandboxes", () => {
   it("lets the agent request a sandbox from a template and work inside it", async () => {
     root = await mkdtemp(join(tmpdir(), "pi-cloud-sandboxes-"))
-    // Something in the runner's own environment that must never reach a sandbox.
     process.env.PI_CLOUD_LEAK_CANARY = "canary-must-not-leak"
     const faux = fauxProvider()
     faux.setResponses([
       toolUse("bash", { command: "pwd" }),
       toolUse("sandbox_create", { template: "repo" }),
       toolUse("bash", { command: "cat README.md && echo $GREETING && printf %s \"$PI_CLOUD_TEST_SECRET\" > secret.txt" }),
-      // A prompt-injected agent tries to exfiltrate: the environment holds only what the template granted, and the
-      // granted secret comes back masked.
       toolUse("bash", { command: "env; echo token=$PI_CLOUD_TEST_SECRET" }),
       fauxAssistantMessage("All done")
     ])
@@ -80,7 +77,6 @@ describe("sandboxes", () => {
       const { entries } = yield* client.sessions.entries({ params: { id: session.id }, query: { limit: 1000 } })
       const results = entries.filter((entry: any) => entry.kind === "pi.tool-result").map((entry) => entryText(entry as never))
 
-      // Before a sandbox exists, file and shell tools have nowhere to run.
       expect(results[0]).toMatch(/environment/i)
       expect(results[1]).toContain("ready and active")
       expect(results[2]).toContain("project readme")
@@ -91,7 +87,6 @@ describe("sandboxes", () => {
       expect(results[3]).not.toContain("canary-must-not-leak")
       expect(results[3]).not.toContain("ANTHROPIC")
 
-      // The secret reached the sandbox, but never the transcript.
       const secret = yield* Effect.promise(() => readFile(join(root!, `${session.id}_repo`, "secret.txt"), "utf8"))
       expect(secret).toBe("s3cret-value")
       expect(JSON.stringify(entries)).not.toContain("s3cret-value")

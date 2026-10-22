@@ -14,7 +14,6 @@ describe("GitHub App manifest", () => {
       hook_attributes: { url: "https://pi.example.com/v1/triggers/github", active: true },
       default_events: [...APP_EVENTS]
     })
-    // Without a public URL: tokens only, no webhook.
     const tokensOnly = appManifest({ name: "pi-acme", redirectUrl: "http://127.0.0.1:1/callback" })
     expect(tokensOnly.name).toBe("pi-acme")
     expect(tokensOnly).not.toHaveProperty("hook_attributes")
@@ -33,7 +32,6 @@ describe("GitHub App manifest", () => {
     const created = createApp({ org: "acme", name: "pi-acme", publicUrl: "https://pi.example.com", fetch, open: (url) => (opened = url) })
     while (opened === "") await new Promise((resolve) => setTimeout(resolve, 10))
 
-    // The browser loads the local page, which posts the manifest to GitHub...
     const html = await (await globalThis.fetch(opened)).text()
     const action = html.match(/action="([^"]+)"/)![1]!.replaceAll("&amp;", "&")
     expect(action).toMatch(/^https:\/\/github\.com\/organizations\/acme\/settings\/apps\/new\?state=[0-9a-f]{32}$/)
@@ -41,7 +39,6 @@ describe("GitHub App manifest", () => {
     expect(manifest.redirect_url).toBe(`${opened}/callback`)
     expect(manifest.hook_attributes.url).toBe("https://pi.example.com/v1/triggers/github")
 
-    // ...and GitHub sends it back with a code; a redirect with another state is refused.
     const state = new URL(action).searchParams.get("state")!
     expect((await globalThis.fetch(`${opened}/callback?code=forged&state=other`)).status).toBe(400)
     const done = await globalThis.fetch(`${opened}/callback?code=c0de&state=${state}`)

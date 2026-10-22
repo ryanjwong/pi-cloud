@@ -4,26 +4,18 @@ import { ConfigProvider, Effect } from "effect"
 import type { ControlPlane } from "./ControlPlane.ts"
 import type { SessionHost } from "./SessionHost.ts"
 
-/** The Worker's bindings: the two Durable Object classes, and settings and secrets (`wrangler secret put`). */
 export interface Env {
   readonly CONTROL_PLANE: DurableObjectNamespace<ControlPlane>
   readonly SESSION_HOST: DurableObjectNamespace<SessionHost>
   readonly [setting: string]: unknown
 }
 
-/** The one control plane object. */
 export const CONTROL_PLANE = "control-plane"
 
-/**
- * The URL runners are told to reach the control plane at. They never resolve it: their requests go to the control
- * plane object's stub.
- */
 export const INTERNAL_URL = "https://control-plane.internal"
 
-/** Settings the deployment cannot run without; the message names what to set. */
 export class NotConfigured extends Error {}
 
-/** The deployment's settings, from the Worker's string bindings. */
 export const settings = async (env: Env): Promise<CloudflareEnv> => {
   const result = await Effect.runPromise(
     Effect.gen(function*() {

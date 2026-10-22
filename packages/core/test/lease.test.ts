@@ -20,13 +20,11 @@ const runner = fc.integer({ min: 0, max: RUNNERS.length - 1 })
 const op: fc.Arbitrary<Op> = fc.oneof(
   { weight: 4, arbitrary: fc.record({ op: fc.constant("acquire" as const), session, runner, token: fc.constantFrom("latest" as const, "none" as const, "oldest" as const) }) },
   { weight: 3, arbitrary: fc.record({ op: fc.constantFrom("renew" as const, "release" as const, "validate" as const), session, runner, token: fc.constantFrom("latest" as const, "oldest" as const) }) },
-  // Around the TTL boundary, where expiry bugs live.
   { weight: 3, arbitrary: fc.record({ op: fc.constant("advance" as const), ms: fc.oneof(fc.integer({ min: 0, max: 2 * TTL }), fc.constantFrom(TTL - 1, TTL, TTL + 1)) }) },
   { weight: 2, arbitrary: fc.record({ op: fc.constant("takeAbandoned" as const) }) },
   { weight: 1, arbitrary: fc.record({ op: fc.constant("remove" as const), session }) }
 )
 
-/** The specification, as plainly as it can be written. */
 class Model {
   leases = new Map<string, { runner: string; token: string; epoch: number; expiresAt: number }>()
   epochs = new Map<string, number>()
@@ -44,10 +42,8 @@ describe("LeaseManager invariants", () => {
         const time = manualClock()
         const leases = Context.get(Effect.runSync(Effect.scoped(Layer.build(LeaseManager.memory({ ttlMs: TTL })))), LeaseManager)
         const model = new Model()
-        // What each runner has been granted, per session, oldest first.
         const held = new Map<string, Array<string>>()
         const heldBy = (s: string, r: string) => held.get(`${s}/${r}`) ?? []
-        // Every token ever issued per session, in order, with its epoch.
         const issued = new Map<string, Array<Lease>>()
         const tokens = new Set<string>()
 
@@ -65,7 +61,6 @@ describe("LeaseManager invariants", () => {
               const exit = time.run(leases.acquire(s, r, token))
               const live = model.live(s, now)
               if (live === undefined) {
-                // Free (or expired): a new lease, with the next epoch and a token never seen before.
                 expect(Exit.isSuccess(exit)).toBe(true)
                 const lease = (exit as Exit.Success<Lease>).value
                 const epoch = (model.epochs.get(s) ?? 0) + 1
@@ -80,7 +75,6 @@ describe("LeaseManager invariants", () => {
                 held.set(`${s}/${r}`, [...mine, lease.token])
                 issued.set(s, [...(issued.get(s) ?? []), lease])
               } else if (token !== undefined && token === live.token) {
-                // Re-attaching with the current token extends the same lease.
                 expect(Exit.isSuccess(exit)).toBe(true)
                 const lease = (exit as Exit.Success<Lease>).value
                 expect([lease.token, lease.epoch, lease.expiresAt]).toEqual([live.token, live.epoch, now + TTL])
@@ -130,17 +124,13 @@ describe("LeaseManager invariants", () => {
             }
           }
 
-          // After every step, for every session:
           const after = time.now()
           for (const s of SESSIONS) {
             const all = issued.get(s) ?? []
-            // Epochs strictly increase, across expiry, release and removal alike.
             for (let index = 1; index < all.length; index++) expect(all[index]!.epoch).toBeGreaterThan(all[index - 1]!.epoch)
-            // At most one token validates: the newest one, and only while it is live.
             const valid = all.filter((lease) => Exit.isSuccess(time.run(leases.validate(s, lease.token))))
             expect(valid.length).toBeLessThanOrEqual(1)
             if (valid.length === 1) expect(valid[0]!.token).toBe(all.at(-1)!.token)
-            // `current` agrees with the model.
             const current = time.run(leases.current(s)) as Exit.Success<Option.Option<Lease>>
             expect(Option.getOrUndefined(current.value)?.token).toBe(model.live(s, after)?.token)
           }

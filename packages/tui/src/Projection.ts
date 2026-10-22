@@ -2,19 +2,16 @@ import type { ConversationId, ConversationView, ModelRef } from "@earendil-works
 import { type ClientOptions, connectServices, type Followed, follow, type ServiceConnection } from "@pi-cloud/client"
 import type { ConversationSummary, DurableController, DurableView, DurableViewSource, Notice } from "./pi/View.ts"
 
-/** Pi Durable's root conversation. */
 const ROOT = 1 as ConversationId
 
 export interface ProjectionOptions extends ClientOptions {
   readonly sessionId: string
-  /** Where the session's code lives, shown in the footer, e.g. `acme/api@main`. */
   readonly label?: string
 }
 
 export interface Projection {
   readonly source: DurableViewSource
   readonly controller: DurableController
-  /** Resolves once the session's objects have their state. */
   readonly ready: Promise<void>
   close(): Promise<void>
 }
@@ -26,11 +23,6 @@ const followSession = (connection: ServiceConnection, id: string) => follow(() =
 const followConversation = (connection: ServiceConnection, id: string, conversation: number) =>
   follow(() => connection.conversation(id, conversation))
 
-/**
- * Pi's durable TUI contract (`DurableViewSource`, `DurableController`) projected from the service API: every value
- * is the state of a Chord object on the session's runner, every action a call on it. Nothing runs locally but
- * rendering.
- */
 export const project = (options: ProjectionOptions): Projection => {
   const listeners = new Set<() => void>()
   const notify = () => listeners.forEach((listener) => listener())
@@ -47,7 +39,6 @@ export const project = (options: ProjectionOptions): Projection => {
   let shown: { readonly id: ConversationId; readonly followed: Followed<ConversationRef> } | undefined
   const subscriptions = new Map<object, Array<() => void>>()
 
-  /** Re-render on every change of a reference's state, and follow it to its replacement. */
   const observe = <R>(followed: Followed<R>, members: (ref: R) => ReadonlyArray<{ subscribe(listener: () => void): () => void }>) => {
     const attach = (ref: R) => {
       for (const unsubscribe of subscriptions.get(followed) ?? []) unsubscribe()

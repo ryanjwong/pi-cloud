@@ -8,7 +8,6 @@
       systems = [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ];
       forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
 
-      # Node 22.18+ runs the workspace's TypeScript directly, so the package is the sources plus node_modules.
       workspace = pkgs: { pname, buildPhase ? "runHook preBuild; runHook postBuild", installPhase, doCheck ? false }:
         let
           nodejs = pkgs.nodejs_22;
@@ -28,8 +27,6 @@
             pname = "pi-cloud";
             inherit pnpm;
             fetcherVersion = 3;
-            # Not yet computed: the first `nix build` prints the real hash; paste it here. Update it whenever
-            # pnpm-lock.yaml changes.
             hash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
           };
           dontFixup = true;
@@ -37,12 +34,6 @@
     in
     {
       packages = forAllSystems (pkgs: rec {
-        # The whole workspace with its dependencies, plus entry points:
-        #   pi-cloud          terminal client
-        #   pi-cloud-server   control plane and runner in one process (state in $DATA_DIR)
-        #   pi-cloud-control  control plane alone, waking runners over HTTP ($RUNNER_URL)
-        #   pi-cloud-runner   runner host alone, attaching to $CONTROL_PLANE_URL
-        #   pi-cloud-config   which settings and secrets are set, and where from
         pi-cloud = workspace pkgs {
           pname = "pi-cloud";
           installPhase = ''
@@ -95,14 +86,10 @@
 
       formatter = forAllSystems (pkgs: pkgs.nixpkgs-fmt);
 
-      # Run pi-cloud as a systemd service. Secrets are files (typically from sops-nix) handed to the service with
-      # systemd's LoadCredential, so they are readable only by the service, never appear in the Nix store or the
-      # environment, and are read through the same typed config as everywhere else.
       nixosModules.default = { config, lib, pkgs, ... }:
         let
           cfg = config.services.pi-cloud;
           programs = { all-in-one = "pi-cloud-server"; control-plane = "pi-cloud-control"; runner = "pi-cloud-runner"; };
-          # Runners keep no state; only a control plane has a database to back up.
           backup = cfg.backup.enable && cfg.role != "runner";
           database = "/var/lib/pi-cloud/pi-cloud.sqlite";
           litestreamConfig = pkgs.writeText "pi-cloud-litestream.yml" (builtins.toJSON {
@@ -191,7 +178,6 @@
                 ExecStart =
                   if backup then "${pkgs.litestream}/bin/litestream replicate -config ${litestreamConfig} -exec ${cfg.package}/bin/${programs.${cfg.role}}"
                   else "${cfg.package}/bin/${programs.${cfg.role}}";
-                # A host that starts without the database restores it from the replica first.
                 ExecStartPre = lib.optional backup
                   "${pkgs.litestream}/bin/litestream restore -config ${litestreamConfig} -if-db-not-exists -if-replica-exists ${database}";
                 EnvironmentFile = lib.optional (backup && cfg.backup.environmentFile != null) cfg.backup.environmentFile;

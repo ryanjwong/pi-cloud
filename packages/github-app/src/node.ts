@@ -4,11 +4,8 @@ import type { AddressInfo } from "node:net"
 import { type AppManifestOptions, appManifest, convertManifestCode, type CreatedApp } from "./manifest.ts"
 
 export interface CreateAppOptions extends Omit<AppManifestOptions, "redirectUrl"> {
-  /** Create the App under this organization instead of the signed-in user. */
   readonly org?: string
-  /** Port of the local page that hands the manifest to GitHub and receives the redirect. Default: any free one. */
   readonly port?: number
-  /** Called with the local URL to open in a browser. */
   readonly open: (url: string) => void
   readonly webUrl?: string
   readonly apiUrl?: string
@@ -22,12 +19,6 @@ const page = (title: string, body: string) =>
   `<!doctype html><meta charset="utf-8"><title>${escapeHtml(title)}</title>` +
   `<body style="font:16px system-ui;max-width:36rem;margin:4rem auto;padding:0 1rem">${body}</body>`
 
-/**
- * Create pi-cloud's GitHub App with the manifest flow: a page on 127.0.0.1 posts the manifest to GitHub, the person
- * reviews it and clicks Create, and GitHub redirects back here with a code that is exchanged for the App's ID,
- * private key and webhook secret. GitHub has no way to create an App without that click. A random `state`
- * ties the redirect to this run.
- */
 export const createApp = (options: CreateAppOptions): Promise<CreatedApp> =>
   new Promise((resolve, reject) => {
     const state = randomBytes(16).toString("hex")

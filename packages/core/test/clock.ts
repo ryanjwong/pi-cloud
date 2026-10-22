@@ -1,6 +1,5 @@
 import { Clock, Effect } from "effect"
 
-/** A clock that only moves when told to, for testing time-dependent services deterministically. */
 export const manualClock = (start = 1_000_000) => {
   let now = start
   const clock: Clock.Clock = {

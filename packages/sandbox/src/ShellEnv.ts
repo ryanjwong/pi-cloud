@@ -20,22 +20,10 @@ import {
 } from "@earendil-works/pi-durable/env"
 import { posix } from "node:path"
 
-/**
- * A shell inside a sandbox that is not on the runner's machine: a container, a VM, a hosted sandbox. Implement
- * `run` (and, where the substrate has a faster native path, the optional file transfers) and `shellEnv` turns it
- * into the full `ExecutionEnv` Pi's tools use, with every file operation done through POSIX shell utilities.
- */
 export interface RemoteShell {
-  /** The file namespace: equal for every connection to the same sandbox. */
   readonly id: string
-  /** Whether `run` passes `stdin` to the script. Without it, writes go through base64 command arguments. */
   readonly stdin?: boolean
-  /**
-   * Run a POSIX `sh` script and resolve with its exit code once it ended and its output was delivered. Aborting
-   * `signal` should stop waiting and release what the call holds; the process itself is killed by `shellEnv`.
-   */
   run(script: string, options: RemoteRunOptions): Promise<number>
-  /** Overwrite a file with `content`, natively. Expected failures throw a `FileError`. */
   writeFile?(path: string, content: Uint8Array, signal: AbortSignal | undefined): Promise<void>
   close?(): Promise<void>
 }
@@ -50,9 +38,7 @@ export interface RemoteRunOptions {
 
 export interface ShellEnvOptions {
   readonly cwd: string
-  /** Variables for every command: the template's env and resolved secrets. */
   readonly env?: Readonly<Record<string, string>>
-  /** How often `watch` compares snapshots of the watched files. Default 1 s. */
   readonly watchIntervalMs?: number
 }
 
@@ -85,7 +71,6 @@ const toBase64 = (bytes: Uint8Array) => {
   return btoa(binary)
 }
 
-/** Exit codes the file scripts use for expected failures. */
 const FAILURES: Record<number, FileErrorCode> = {
   2: "not_found",
   3: "is_directory",
@@ -94,17 +79,12 @@ const FAILURES: Record<number, FileErrorCode> = {
   6: "invalid"
 }
 
-/**
- * Shared helpers: `e` fails unless the path exists, `p` unless its parent directory does. A missing path fails as
- * the kernel would: not_directory when its nearest existing ancestor is not a directory, else not_found.
- */
 const PRELUDE = `m() { a=$(dirname -- "$1"); while [ ! -e "$a" ] && [ "$a" != / ] && [ "$a" != . ]; do a=$(dirname -- "$a"); done
   [ -e "$a" ] && [ ! -d "$a" ] && exit 4; exit 2; }
 e() { [ -e "$1" ] || [ -L "$1" ] || m "$1"; }
 p() { d=$(dirname -- "$1"); [ -e "$d" ] || m "$d"; [ -d "$d" ] || exit 4; }
 `
 
-/** `stat` lines: kind, size, mtime with milliseconds where supported, then the name. */
 const STAT = `st() { stat -c '%F|%s|%.3Y|%n' -- "$@" 2>/dev/null || stat -c '%F|%s|%Y|%n' -- "$@"; }
 `
 
@@ -115,23 +95,13 @@ const KINDS: Record<string, FileKind> = {
   "symbolic link": "symlink"
 }
 
-/** Exit code the exec wrapper uses when the working directory is missing; confirmed with a second check. */
 const NO_CWD = 199
-/** Exit code the exec wrapper uses when an argv program does not exist; confirmed with a second check. */
 const NO_PROGRAM = 198
-/** Output kept for a spill file before older output is dropped. */
 const MAX_SPILL_BYTES = 64 * 1024 * 1024
-/** Base64 bytes per command when a shell takes no stdin. */
 const WRITE_CHUNK = 48 * 1024
 const MAX_TIMEOUT_MS = 2_147_483_647
-/** For internal file operations that must not be cut short: only `abortSignal` is read, and this one has none. */
 const DETACHED = {} as Context
 
-/**
- * An `ExecutionEnv` over a `RemoteShell`. Paths are POSIX paths inside the sandbox. Commands run in their own
- * session (via `setsid` where available) and an abort or timeout kills the whole process group, then any
- * descendants that left it. `watch` polls.
- */
 export const shellEnv = (shell: RemoteShell, options: ShellEnvOptions): ExecutionEnv => {
   const baseEnv = options.env ?? {}
   const active = new Set<string>()
@@ -145,13 +115,11 @@ export const shellEnv = (shell: RemoteShell, options: ShellEnvOptions): Executio
       try {
         normalized = decodeURIComponent(new URL(normalized).pathname)
       } catch {
-        // Keep malformed URLs as ordinary paths, as the Node environment does.
       }
     }
     return posix.isAbsolute(normalized) ? posix.resolve(normalized) : posix.resolve(cwd, normalized)
   }
 
-  /** Run a script with positional arguments and collect its output. */
   const capture = async (
     script: string,
     args: ReadonlyArray<string>,
@@ -185,7 +153,6 @@ export const shellEnv = (shell: RemoteShell, options: ShellEnvOptions): Executio
   const aborted = (context: Context, path?: string) =>
     context.abortSignal?.aborted ? err<never, FileError>(new FileError("aborted", "aborted", path)) : undefined
 
-  /** A file script: exit 0 is success, the codes in `FAILURES` are expected failures. */
   const fileOp = async (
     script: string,
     path: string,
@@ -260,7 +227,6 @@ done
   ): Promise<Result<void, FileError>> => {
     const resolved = await absolute(path)
     const bytes = typeof content === "string" ? encoder.encode(content) : content
-    // Like Pi's Node environment, writes and appends create missing parent directories.
     const check = `mkdir -p -- "$(dirname -- "$1")" || exit 4; [ -d "$1" ] && exit 3; `
     if (!append && shell.writeFile !== undefined) {
       const checked = await fileOp(check + "exit 0", resolved, [resolved], context)
@@ -292,7 +258,6 @@ done
     return result.ok ? ok(text(result.value).trim()) : result
   }
 
-  /** Kill the process group a command runs in and anything it spawned. */
   const kill = (pidFile: string) =>
     capture(
       `[ -f "$1" ] || exit 0
@@ -341,7 +306,6 @@ s=$?; rm -f ${quote(pidFile)}; exit $s`
     const interrupt = (reason: "timeout" | "aborted") => {
       if (interrupted !== undefined) return
       interrupted = reason
-      // Kill inside the sandbox, again in case the command had not recorded its pid yet, then stop waiting.
       void kill(pidFile).then(() => setTimeout(() => !settled && void kill(pidFile), 1_000))
       setTimeout(() => local.abort(), 3_000).unref?.()
     }
@@ -349,7 +313,6 @@ s=$?; rm -f ${quote(pidFile)}; exit $s`
     signal?.addEventListener("abort", onAbort, { once: true })
     const timer = timeout === undefined ? undefined : setTimeout(() => interrupt("timeout"), timeout * 1000)
 
-    // Output is counted against the spill thresholds and, once over them, kept for the spill file.
     const spill = execOptions?.spill
     const seen: Array<Uint8Array> = []
     let seenBytes = 0
@@ -498,7 +461,6 @@ s=$?; rm -f ${quote(pidFile)}; exit $s`
       const from = await absolute(source)
       const to = await absolute(destination)
       const result = await fileOp(
-        // In the kernel's order: both parents resolve before the source is looked up.
         `p "$1"; p "$2"; e "$1"; if [ -d "$2" ] && [ ! -d "$1" ]; then exit 3; fi; mv -f -- "$1" "$2"`,
         from,
         [from, to],
@@ -513,7 +475,6 @@ s=$?; rm -f ${quote(pidFile)}; exit $s`
       const info = await fileInfo(resolved, context)
       if (!info.ok) return info
       if (info.value.kind !== "directory") return err(new FileError("not_directory", `not_directory: ${resolved}`, resolved))
-      // Entries are read at the first page, as a directory stream reads them.
       return ok(dirReader(resolved, (readContext) => listDir(resolved, readContext)))
     },
     watch: (targets, onChange, context) =>
@@ -542,7 +503,6 @@ s=$?; rm -f ${quote(pidFile)}; exit $s`
     },
     remove: async (path, removeOptions, context) => {
       const resolved = await absolute(path)
-      // Force ignores a path that does not exist, not one that cannot (under a file).
       const script = `if [ ! -e "$1" ] && [ ! -L "$1" ]; then (m "$1"); c=$?; [ $c = 2 ] && [ "$2" = f ] && exit 0; exit $c; fi
 if [ -d "$1" ] && [ ! -L "$1" ]; then [ "$3" = r ] || exit 3; rm -rf -- "$1"; else rm -f -- "$1"; fi`
       const args = [resolved, removeOptions?.force === true ? "f" : "", removeOptions?.recursive === true ? "r" : ""]
@@ -646,11 +606,6 @@ const dirReader = (path: string, list: (context: Context) => Promise<Result<Arra
   }
 }
 
-/**
- * `watch` by comparing snapshots: every interval, one command lists what is watched (kind, size, mtime, inode per
- * path), and the paths whose line changed are reported. A change undone between two snapshots is missed, which
- * `mode: "polling"` tells the host.
- */
 const pollingWatch = async (
   targets: ReadonlyArray<WatchTarget>,
   onChange: (change: WatchChange) => void,
@@ -664,7 +619,6 @@ const pollingWatch = async (
   const aborted = abortedAt(context, targets[0]?.path ?? "")
   if (aborted) return aborted
   const resolved = await Promise.all(targets.map(async (target) => ({ ...target, path: await options.resolve(target.path) })))
-  // Per target: the target itself (followed if a link), then its entries, pruning excluded names.
   const parts = resolved.map((target, index) => {
     const prune = [...(target.exclude?.hidden === true ? [`-name '.*'`] : []), ...(target.exclude?.names ?? []).map((name) => `-name ${quote(name)}`)]
     const depth = target.recursive === true ? "" : "-maxdepth 1"
@@ -672,7 +626,6 @@ const pollingWatch = async (
     return `t="$${index + 1}"; if [ -e "$t" ] || [ -L "$t" ]; then stat -L -c "$S" -- "$t" 2>/dev/null || stat -c "$S" -- "$t"
   [ -d "$t" ] && find "$t" -mindepth 1 ${depth} ${pruning} -exec stat -c "$S" -- {} + 2>/dev/null; fi`
   })
-  // Nanosecond mtimes where `stat` has them (GNU), whole seconds otherwise.
   const script = [`S='%F|%s|%.9Y|%i|%n'; stat -c "$S" / >/dev/null 2>&1 || S='%F|%s|%Y|%i|%n'`, ...parts, "exit 0"].join("\n")
   const LIMIT = 50_000
   const take = async (): Promise<Map<string, string> | FileError> => {
@@ -698,7 +651,6 @@ const pollingWatch = async (
     const next = await take().catch((error: unknown) => new FileError("unknown", String(error)))
     if (isClosed) return
     if (next instanceof FileError) {
-      // A sandbox that stopped answering: say coverage was uncertain, and give up after a few tries.
       if (++failures >= 3) {
         isClosed = true
         return onChange({ error: next })

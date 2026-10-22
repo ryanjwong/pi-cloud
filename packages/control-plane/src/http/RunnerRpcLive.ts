@@ -11,7 +11,6 @@ import { RunnerAuth } from "./Auth.ts"
 const call = (storage: Storage, method: StorageMethod, args: ReadonlyArray<unknown>): Promise<unknown> => {
   const fn = (storage as unknown as Record<string, (...args: Array<unknown>) => Promise<unknown>>)[method]
   if (typeof fn !== "function") return Promise.reject(new Error(`Unknown storage method ${method}`))
-  // `undefined` travels as `null`; no Storage argument is legitimately `null`.
   return fn.call(storage, ...args.map((arg) => arg === null ? undefined : arg), BACKGROUND_CONTEXT)
 }
 
@@ -26,7 +25,6 @@ export const RunnerRpcLive = RunnerRpcs.toLayer(Effect.gen(function*() {
   const sessionSecrets = yield* SessionSecrets
   const store = yield* SessionStore
 
-  /** Recent commits per session by request id, so a retried commit returns its first result instead of applying again. */
   const commits = new Map<string, Map<string, unknown>>()
   const remember = (sessionId: string, requestId: string, value: unknown) => {
     let recent = commits.get(sessionId)
@@ -35,7 +33,6 @@ export const RunnerRpcLive = RunnerRpcs.toLayer(Effect.gen(function*() {
     if (recent.size > 64) recent.delete(recent.keys().next().value!)
   }
 
-  /** One commit at a time per session, checked against the lease at the moment it applies. */
   const commitLocks = new Map<string, Semaphore.Semaphore>()
   const commitLock = (sessionId: string) => {
     let lock = commitLocks.get(sessionId)
@@ -119,7 +116,6 @@ export const RunnerRpcLive = RunnerRpcs.toLayer(Effect.gen(function*() {
     StorageDump: ({ sessionId, token }, { headers }) =>
       Effect.gen(function*() {
         yield* auth.check(headers).pipe(Effect.orDie)
-        // Between commits, so the copy and the runner's later commits line up.
         const dump = yield* commitLock(sessionId).withPermits(1)(
           Effect.andThen(leases.validate(sessionId, token), states.dump(sessionId))
         )

@@ -15,7 +15,6 @@ afterEach(async () => {
 
 const port = () => 41_000 + Math.floor(Math.random() * 10_000)
 
-/** Events of a session until `until` matches, as one flat list. */
 const collect = (sessionId: string, until: (event: { type: string }) => boolean) =>
   followEvents(sessionId).pipe(
     Stream.flatMap((batch: EventBatch) => Stream.fromIterable(batch.events as ReadonlyArray<{ type: string }>)),
@@ -45,14 +44,12 @@ describe("pi-cloud end to end", () => {
       expect(types[0]).toBe("snapshot")
       expect(types).toContain("message_end")
 
-      // Retrying with the same requestId returns the original submission instead of asking twice.
       const retried = yield* client.sessions.submit({
         params: { id: session.id },
         payload: { content: "Say hello", requestId: "first" }
       })
       expect(retried.submissionId).toBe(submitted.submissionId)
 
-      // The transcript is read straight from the control plane's state store.
       const { entries } = yield* client.sessions.entries({ params: { id: session.id }, query: {} })
       const assistant = entries.find((entry: any) => entry.kind === "pi.assistant") as any
       expect(entryText(assistant)).toBe("Hello from a runner")

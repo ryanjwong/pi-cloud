@@ -35,7 +35,6 @@ describe("credentialSealer", () => {
         const sealer = credentialSealer(key)
         const sealed = sealer.seal(value)
         expect(sealer.open(sealed)).toEqual(value)
-        // Two seals of one value differ (fresh IV), and neither shows it.
         expect(sealer.seal(value)).not.toBe(sealed)
         for (const field of Object.values(value)) if (typeof field === "string" && field.length >= 4) expect(sealed).not.toContain(field)
       })
@@ -49,9 +48,8 @@ describe("credentialSealer", () => {
         const sealed = credentialSealer(key).seal(value)
         const bytes = Buffer.from(sealed.slice("aes256gcm:".length), "base64")
         bytes[at % bytes.length] = bytes[at % bytes.length]! ^ flip
-        expect(() => credentialSealer(key).open(`aes256gcm:${bytes.toString("base64")}`)).toThrow()
-        expect(() => credentialSealer(other).open(sealed)).toThrow()
-        // A sealed value cannot be read without the key at all.
+        expect(() => credentialSealer(key).open(`aes256gcm:${bytes.toString("base64")}`)).toThrow(/unable to authenticate/)
+        expect(() => credentialSealer(other).open(sealed)).toThrow(/unable to authenticate/)
         expect(() => credentialSealer(undefined).open(sealed)).toThrow(/encrypted/)
       })
     )

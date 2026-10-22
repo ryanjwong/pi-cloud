@@ -9,15 +9,12 @@ import { githubTrigger } from "@pi-cloud/trigger-github"
 import { triggers } from "@pi-cloud/triggers"
 import { Option, Redacted } from "effect"
 
-/** The triggers and sources whose secrets are configured. Sessions they create use `PI_CLOUD_MODEL`. */
 export const connectors = (env: ControlPlaneEnv): ReadonlyArray<Extension> => {
   const [provider, ...model] = env.model.split("/")
   const spec: SessionSpec = { model: { provider: provider!, modelId: model.join("/") } }
   const extensions: Array<Extension> = []
   if (Option.isSome(env.github)) {
     const { webhookSecret, mention, sandboxProvider } = env.github.value
-    // Each GitHub thread's session works in a sandbox of its repository, authenticated with GITHUB_TOKEN: the GitHub
-    // App's installation token for that repository, or else the runner's own (listed in SANDBOX_SECRETS).
     const repositorySpec = (repository: string): SessionSpec => ({
       ...spec,
       sandbox: "repo",
@@ -41,10 +38,6 @@ export const connectors = (env: ControlPlaneEnv): ReadonlyArray<Extension> => {
   return extensions
 }
 
-/**
- * Secrets the control plane issues to sessions: with a GitHub App (`GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`),
- * `GITHUB_TOKEN` is an installation token for the session's repository. The App's key stays here.
- */
 export const sessionSecrets = (env: ControlPlaneEnv) =>
   Option.match(env.githubApp, {
     onNone: () => SessionSecrets.none,

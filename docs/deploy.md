@@ -28,11 +28,16 @@ On `127.0.0.1` it needs no secrets. On any other `HOST` it refuses to start with
 
 The control plane wakes runners over HTTP, and runners connect back. Both sides share `PI_CLOUD_RUNNER_SECRET`.
 
-```sh
-# runner machine: CONTROL_PLANE_URL, PI_CLOUD_RUNNER_SECRET, model keys
-sops exec-env secrets.yaml 'node apps/local/src/runner.ts'
+On the runner machine, with `CONTROL_PLANE_URL`, `PI_CLOUD_RUNNER_SECRET` and the model keys set:
 
-# control plane machine: RUNNER_URL, PI_CLOUD_API_KEYS, PI_CLOUD_RUNNER_SECRET, PI_CLOUD_CREDENTIAL_KEY
+```sh
+sops exec-env secrets.yaml 'node apps/local/src/runner.ts'
+```
+
+On the control plane machine, with `RUNNER_URL`, `PI_CLOUD_API_KEYS`, `PI_CLOUD_RUNNER_SECRET` and
+`PI_CLOUD_CREDENTIAL_KEY` set:
+
+```sh
 sops exec-env secrets.yaml 'node apps/local/src/control-plane.ts'
 ```
 
@@ -41,7 +46,7 @@ Each refuses to start without the settings listed. A runner only ever connects t
 
 ## NixOS
 
-The flake has a module. Secrets come from sops-nix and reach the service through systemd `LoadCredential`, so they
+The flake has a module. `role` is `all-in-one`, `control-plane` or `runner`. Secrets come from sops-nix and reach the service through systemd `LoadCredential`, so they
 never land in the Nix store or the environment.
 
 ```nix
@@ -50,7 +55,7 @@ sops.secrets.GITHUB_TOKEN.sopsFile = ./secrets.yaml;
 
 services.pi-cloud = {
   enable = true;
-  role = "all-in-one";                       # or "control-plane", "runner"
+  role = "all-in-one";
   settings = { SANDBOX_SECRETS = "GITHUB_TOKEN"; GITHUB_MENTION = "@pi"; };
   sandboxTemplates.api = {
     provider = "local";

@@ -30,7 +30,6 @@ afterEach(async () => {
     try {
       docker("rm", "--force", container)
     } catch {
-      // Already gone.
     }
   }
 })
@@ -103,7 +102,6 @@ describe.skipIf(!available)("Docker sandboxes", () => {
       )
       const results = entries.filter((entry: any) => entry.kind === "pi.tool-result").map((entry) => entryText(entry as never))
 
-      // The container's own system, its working directory, the granted secret (masked), and nothing from the runner.
       expect(results[0]).toContain("ID=debian")
       expect(results[0]).toContain("/workspace/app")
       expect(results[0]).toContain("token=[secret:API_TOKEN]")
@@ -112,11 +110,9 @@ describe.skipIf(!available)("Docker sandboxes", () => {
       expect(results[4]).toMatch(/timed out|timeout/i)
       expect(JSON.stringify(entries)).not.toContain("tok_in_the_container")
 
-      // Pi's system prompt read the AGENTS.md the setup wrote inside the container.
       expect(prompt).toContain("Always answer in haiku.")
       expect(prompt).toContain("/workspace/app/AGENTS.md")
 
-      // The files live in the container, the timed-out command is gone, and the secret is not in its config.
       expect(docker("exec", container, "cat", "/workspace/app/notes/hello.txt")).toBe("greetings from pi")
       expect(docker("exec", container, "sh", "-c", "ps -eo args | grep -c '^sleep 60' || true")).toBe("0")
       expect(docker("inspect", container)).not.toContain("tok_in_the_container")

@@ -1,5 +1,3 @@
-// pi-cloud-config: which settings and secrets are set, and where from. Never prints values.
-//   sops exec-env secrets.yaml 'node src/config.ts'
 import { NodeServices } from "@effect/platform-node"
 import { ConfigSource } from "@pi-cloud/config"
 import { Effect } from "effect"

@@ -1,4 +1,3 @@
-// A Worker that drives the Daytona provider, to check that its SDK runs on workerd. Used by test/daytona.test.ts.
 import { Effect } from "effect"
 import { daytonaSandboxes } from "@pi-cloud/sandbox-daytona"
 

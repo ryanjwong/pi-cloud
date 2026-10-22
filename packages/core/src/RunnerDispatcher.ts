@@ -7,15 +7,9 @@ export class DispatchFailed extends Schema.TaggedError<DispatchFailed>()("Dispat
   message: Schema.String
 }) {}
 
-/**
- * Starts a runner for a session somewhere. This is the only place the control plane meets a substrate: a
- * Durable Object, a container platform, a Modal function, a local process. A woken runner attaches back over the
- * runner RPC; the control plane never needs to reach it again.
- */
 export class RunnerDispatcher extends Context.Service<RunnerDispatcher, {
   wake(request: WakeRequest): Effect.Effect<void, DispatchFailed>
 }>()("@pi-cloud/control-plane/RunnerDispatcher") {
-  /** Dispatch with your own function. */
   static readonly make = (wake: (request: WakeRequest) => Promise<void>): Layer.Layer<RunnerDispatcher> =>
     Layer.succeed(RunnerDispatcher, {
       wake: (request) =>
@@ -25,13 +19,8 @@ export class RunnerDispatcher extends Context.Service<RunnerDispatcher, {
         })
     })
 
-  /** Never starts runners: they must attach on their own, e.g. a fixed pool. */
   static readonly none: Layer.Layer<RunnerDispatcher> = Layer.succeed(RunnerDispatcher, { wake: () => Effect.void })
 
-  /**
-   * POST the wake request as JSON to a runner host, e.g. a Worker fronting Durable Objects or an HTTP endpoint
-   * on a container platform. `secret` is sent as a bearer token.
-   */
   static readonly http = (options: { readonly url: string; readonly secret?: string }): Layer.Layer<
     RunnerDispatcher,
     never,

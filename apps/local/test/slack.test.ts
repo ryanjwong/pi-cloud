@@ -17,7 +17,6 @@ afterEach(async () => {
 
 const signingSecret = "slack-signing-secret"
 
-/** A stand-in for slack.com/api that records posted messages. */
 const fakeSlack = (port: number) =>
   new Promise<{ server: Server; posts: Array<{ channel: string; thread_ts: string; text: string; auth?: string }> }>(
     (resolve) => {
@@ -90,21 +89,17 @@ describe("Slack source", () => {
     expect((await send({ type: "url_verification", challenge: "abc" })).json).toEqual({ challenge: "abc" })
     expect((await send(event("E0", { type: "app_mention", text: "hi", ts: "1.0" }), "wrong")).status).toBe(401)
 
-    // A mention starts a thread session; the answer is posted into that thread.
     await send(event("E1", { type: "app_mention", text: "<@UBOT> hello there", ts: "100.1" }))
     await until(() => slack.posts.length === 1)
     expect(slack.posts[0]).toEqual({ channel: "C1", thread_ts: "100.1", text: "Hi from pi", auth: "Bearer xoxb-test" })
 
-    // Ignored: the bot's own message, and an unaddressed message in a thread the agent is not part of.
     await send(event("E2", { type: "message", text: "echo", ts: "100.2", thread_ts: "100.1", bot_id: "B1" }))
     await send(event("E3", { type: "message", text: "unrelated", ts: "200.2", thread_ts: "200.1" }))
 
-    // A plain reply in the agent's thread continues the same session.
     await send(event("E4", { type: "message", text: "and another thing", ts: "100.3", thread_ts: "100.1" }))
     await until(() => slack.posts.length === 2)
     expect(slack.posts[1]).toMatchObject({ channel: "C1", thread_ts: "100.1", text: "Still here" })
 
-    // Slack retries the same event; nothing is asked or posted twice.
     await send(event("E4", { type: "message", text: "and another thing", ts: "100.3", thread_ts: "100.1" }))
     await new Promise((resolve) => setTimeout(resolve, 500))
     expect(slack.posts).toHaveLength(2)

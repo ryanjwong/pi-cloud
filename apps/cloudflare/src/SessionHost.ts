@@ -12,15 +12,8 @@ import { daytonaSandboxes } from "@pi-cloud/sandbox-daytona"
 import { Option, Redacted } from "effect"
 import { CONTROL_PLANE, type Env, INTERNAL_URL, settings } from "./env.ts"
 
-/** How often a busy host re-arms its alarm. Each alarm is an event, which keeps the object resident. */
 const KEEPALIVE_MS = 20_000
 
-/**
- * A session's runner, as its own Durable Object. It keeps nothing of its own: on every lease it loads a fresh copy
- * of the session from the control plane into its SQLite and reads from there, and it commits through the control
- * plane object, fenced by the lease. If Cloudflare evicts it mid-run, the lease expires and the control plane wakes
- * it again, and Pi resumes from its last checkpoint.
- */
 export class SessionHost extends DurableObject<Env> {
   #host: Promise<RunnerHost> | undefined
 
@@ -41,12 +34,10 @@ export class SessionHost extends DurableObject<Env> {
     return new RunnerHost({
       controlPlaneUrl: INTERNAL_URL,
       secret: Redacted.value(env.runnerSecret),
-      // Straight to the control plane object, never over the public internet.
       fetch: ((input: RequestInfo | URL, init?: RequestInit) => controlPlane.fetch(new Request(input, init) as never)) as unknown as typeof fetch,
       modelCredentials: modelCredentialLookup(env),
       plugins: [
         modelProviders(anthropicProvider, openaiProvider, openaiCodexProvider),
-        // Pi's coding tools, run in a Daytona sandbox: a Worker has no filesystem or shell of its own.
         extensions("coding", CodingTools),
         sandboxes({
           providers: Option.match(env.daytonaApiKey, {
@@ -55,13 +46,11 @@ export class SessionHost extends DurableObject<Env> {
           })
         })
       ],
-      // The only secret a sandbox can ask for: GITHUB_TOKEN, to clone private repositories and push.
       secrets: async (name) => (name === "GITHUB_TOKEN" ? Option.getOrUndefined(Option.map(env.githubToken, Redacted.value)) : undefined),
       replica: this.#replica
     })
   }
 
-  /** The object's own SQLite, emptied for each lease's fresh copy. */
   readonly #replica: ReplicaDatabase = async () => {
     const sql = this.ctx.storage.sql
     const tables = sql.exec("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%'")

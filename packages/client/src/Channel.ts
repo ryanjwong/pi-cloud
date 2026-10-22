@@ -11,22 +11,14 @@ import { Socket } from "effect/socket"
 import { authorization } from "./auth.ts"
 import type { ClientOptions } from "./index.ts"
 
-/** A live, two-way connection to one session. */
 export interface SessionChannel {
-  /** Buffered then live event batches, until the channel closes. */
   readonly events: Stream.Stream<EventBatch>
-  /** Run a command and wait for its result. */
   command(command: SessionCommand): Effect.Effect<CommandResult, Socket.SocketError>
 }
 
 const decode = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelMessage))
 const textDecoder = new TextDecoder()
 
-/**
- * Open the session channel (`GET /v1/sessions/{id}/channel`). The connection lives as long as the scope. The API key
- * travels in the `Authorization` header (Node's and Bun's WebSocket clients send it), never in the URL, where
- * proxies and request logs would keep it.
- */
 export const openChannel = (
   options: ClientOptions & { readonly sessionId: string; readonly after?: string | undefined }
 ): Effect.Effect<SessionChannel, Socket.SocketError, Scope.Scope> =>

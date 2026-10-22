@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest"
 import { sessionPrefix } from "../src/index.ts"
 
 const hex = (length: number) => fc.string({ minLength: length, maxLength: length, unit: fc.constantFrom(..."0123456789abcdef") })
-/** Arbitrary ids, ids as pi-cloud mints them, and near misses of those. */
 const id = fc.oneof(
   fc.string({ minLength: 1, maxLength: 12, unit: fc.constantFrom("a", "b", "s", "e", "u", "x", "h", "_", "-", ".", "%", "é", "1", "😀") }),
   fc.string({ minLength: 1, maxLength: 40 }),
@@ -25,7 +24,6 @@ describe("sessionPrefix", () => {
         expect(pa).not.toBe(pb)
         expect(pb.startsWith(pa)).toBe(false)
         expect(pa.startsWith(pb)).toBe(false)
-        // Plain SQL identifiers, so they never need quoting games.
         expect(pa).toMatch(/^[A-Za-z0-9_]+$/)
       }),
       { numRuns: 2_000 }

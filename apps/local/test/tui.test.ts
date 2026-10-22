@@ -25,7 +25,6 @@ afterEach(async () => {
   root = undefined
 })
 
-/** A terminal emulated in memory: the TUI draws into it, the test reads its screen and types. */
 const fakeTerminal = () => {
   const emulator = new xterm.Terminal({ cols: 120, rows: 40, allowProposedApi: true })
   let input: ((data: string) => void) | undefined
@@ -71,7 +70,6 @@ const until = async (check: () => boolean, what: string, screen: () => string) =
 describe("Pi's TUI on a cloud session", () => {
   it("renders the cloud agent working in a clone of the repository", async () => {
     root = await mkdtemp(join(tmpdir(), "pi-cloud-tui-"))
-    // The developer's repository, standing in for its origin.
     const origin = join(root, "origin")
     await mkdir(origin)
     const git = (...args: Array<string>) =>
@@ -107,7 +105,6 @@ describe("Pi's TUI on a cloud session", () => {
       }
     })
     const url = deployment.url
-    // What `pi-cloud` creates in a checkout: a session whose sandbox clones the origin at the current branch.
     const session = await Effect.runPromise(Effect.gen(function*() {
       const client = yield* PiCloud
       return yield* client.sessions.create({
@@ -136,18 +133,15 @@ describe("Pi's TUI on a cloud session", () => {
       expect(shown).toContain("cat README.md && echo made > made.txt")
       expect(shown).toContain("hello from the repository")
 
-      // The agent ran in the cloud: in a clone of the origin, with Pi's system prompt reading its AGENTS.md.
       const sandbox = join(cloud, `${session.id}_home`)
       expect(await readFile(join(sandbox, "made.txt"), "utf8")).toBe("made\n")
       expect(existsSync(join(origin, "made.txt"))).toBe(false)
       expect(prompt).toContain("Always run the tests before answering.")
     } finally {
-      // Pi's clear key exits the durable TUI.
       type("\x03")
       await done
     }
 
-    // Attaching again, from anywhere, shows the same conversation.
     const again = fakeTerminal()
     const reattached = runTui({ url, sessionId: session.id, label: "acme/api@main", terminal: again.terminal })
     try {
@@ -182,10 +176,8 @@ describe("Pi's TUI on a cloud session", () => {
     const done = runTui({ url, sessionId: session.id, label: "scratch", terminal })
     try {
       await until(() => screen().includes("faux/deep · thinking:off"), "the footer", screen)
-      // Pi's thinking key cycles through the levels the session state lists for the model.
       type("\x1b[Z")
       await until(() => /faux\/deep · thinking:(?!off)/.test(screen()), "a thinking level", screen)
-      // /model opens Pi's model picker over the session's models; the runner clamps thinking for the new model.
       for (const key of "/model") type(key)
       type("\r")
       await until(() => screen().includes("Select model:"), "the model picker", screen)

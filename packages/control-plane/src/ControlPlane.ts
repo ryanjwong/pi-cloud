@@ -23,22 +23,8 @@ import { Runners } from "./Runners.ts"
 import { ServiceHost } from "./services/ServiceHost.ts"
 import { Sessions } from "./Sessions.ts"
 
-/**
- * A routes layer that builds on the control plane: it may use `Sessions` (create sessions, run commands, follow
- * events) and add HTTP routes. This is where hosted sources (a Slack bridge) and event triggers (a GitHub webhook)
- * plug in.
- */
 export type Extension = Layer.Layer<never, never, HttpRouter.HttpRouter | Sessions | BindingStore>
 
-/**
- * Every HTTP route of the control plane, given its services:
- *
- * - `/v1/sessions/...` the public API, with `/openapi.json` and `/docs` describing it,
- * - `/v1/sessions/:id/channel` the WebSocket session channel,
- * - `/v1/pi` the service API (a Chord link to the control plane's host; `GET /v1/server` says where),
- * - `/internal/runner` the runner RPC,
- * - whatever the extensions add.
- */
 export const routes = (extensions: ReadonlyArray<Extension> = []) =>
   Layer.mergeAll(
     HttpApiBuilder.layer(PublicApi, { openapiPath: "/openapi.json" }).pipe(
@@ -53,40 +39,26 @@ export const routes = (extensions: ReadonlyArray<Extension> = []) =>
     ),
     ...extensions
   ).pipe(
-    // The service API at /v1/pi.
     Layer.provideMerge(ServiceHost.layer),
     Layer.provide(Sessions.layer.pipe(Layer.provideMerge(Runners.layer)))
   )
 
 export interface ControlPlaneOptions {
   readonly settings: Partial<ControlPlaneSettings> & { readonly publicUrl: string }
-  /** How runners are started. Required: it is the one substrate-specific piece. */
   readonly dispatcher: Layer.Layer<RunnerDispatcher>
-  /** Accepted public API keys. Omit to accept every request (development only). Ignored with `clientAuth`. */
   readonly apiKeys?: ReadonlyArray<string>
-  /** Replaces API-key authentication for every public surface. */
   readonly clientAuth?: Layer.Layer<ClientAuth>
-  /** Shared secret runners authenticate with. Omit to accept every runner (development only). */
   readonly runnerSecret?: string
-  /** Defaults to sessions in memory. */
   readonly sessions?: Layer.Layer<SessionStore>
-  /** Defaults to Pi's memory storage. */
   readonly state?: Layer.Layer<StateStore>
-  /** Defaults to leases in memory. */
   readonly leases?: Layer.Layer<LeaseManager>
-  /** Defaults to an in-memory hub. */
   readonly events?: Layer.Layer<EventHub>
-  /** Defaults to bindings in memory. */
   readonly bindings?: Layer.Layer<BindingStore>
-  /** Model provider credentials (API keys, subscription logins). Defaults to memory. */
   readonly credentials?: Layer.Layer<CredentialStore>
-  /** Secrets issued to sessions on request (`SessionSecrets.issuers(githubAppTokens(...))`). Defaults to none. */
   readonly sessionSecrets?: Layer.Layer<SessionSecrets>
-  /** Extra routes built on `Sessions`: hosted sources, event triggers, admin endpoints, ... */
   readonly extensions?: ReadonlyArray<Extension>
 }
 
-/** The control plane's routes with every service provided. Serve it with `HttpRouter.serve` or `toWebHandler`. */
 export const layer = (options: ControlPlaneOptions) => {
   const config = ControlPlaneConfig.layer(options.settings)
   const ttlMs = options.settings.leaseTtlMs ?? 15_000
@@ -108,6 +80,5 @@ export const layer = (options: ControlPlaneOptions) => {
   )
 }
 
-/** A fetch-style handler for runtimes that speak web `Request`/`Response` (Bun, Deno, Workers, ...). */
 export const toWebHandler = (options: ControlPlaneOptions) =>
   HttpRouter.toWebHandler(layer(options).pipe(Layer.provide(HttpServer.layerServices)))

@@ -32,7 +32,6 @@ describe("crash recovery", () => {
     const faux = fauxProvider()
     let hang: () => void = () => {}
     faux.setResponses([
-      // The first attempt never finishes: the runner is killed while it waits.
       () => new Promise((resolve) => { hang = () => resolve(fauxAssistantMessage("too late")) }),
       fauxAssistantMessage("Recovered answer")
     ])
@@ -48,14 +47,12 @@ describe("crash recovery", () => {
       const session = yield* client.sessions.create({ payload: { spec: { model } } })
       const submitted = yield* client.sessions.submit({ params: { id: session.id }, payload: { content: "Work" } })
 
-      // Wait for the generation to start, then kill the runner without releasing its lease.
       yield* Effect.promise(async () => {
         while (faux.state.callCount === 0) await new Promise((resolve) => setTimeout(resolve, 20))
         await local.runners.kill()
       })
       hang()
 
-      // The control plane notices the abandoned lease, wakes a new runner, and Pi resumes the run.
       const record = yield* poll(
         client.sessions.submission({ params: { id: session.id, submissionId: submitted.submissionId } }),
         (value) => (value as { status?: string } | null)?.status === "done"
@@ -79,11 +76,9 @@ describe("crash recovery", () => {
       const session = yield* api.sessions.create({ payload: {} })
       const rpc = yield* makeClient({ url: local.url, secret: "test-runner-secret" })
       const first = yield* firstLease(rpc, session.id, "stale-runner")
-      // A second runner cannot take a live lease.
       const held = yield* Effect.exit(firstLease(rpc, session.id, "eager-runner"))
       expect(Exit.isFailure(held)).toBe(true)
 
-      // Once the first lease expires, a new runner takes over and the old token is fenced off.
       yield* Effect.sleep(settings.leaseTtlMs + 200)
       const second = yield* firstLease(rpc, session.id, "new-runner")
       expect(second.epoch).toBeGreaterThan(first.epoch)
@@ -107,7 +102,6 @@ describe("runner reconnects", () => {
       const session = yield* api.sessions.create({ payload: {} })
       const rpc = yield* makeClient({ url: local.url, secret: "test-runner-secret" })
 
-      // First connection: take the lease, then keep reading until the stream ends.
       const firstMessages: Array<string> = []
       let token = ""
       const first = yield* Effect.forkChild(
@@ -122,7 +116,6 @@ describe("runner reconnects", () => {
       )
       while (token === "") yield* Effect.sleep(20)
 
-      // The same runner reconnects with its token and answers commands there.
       const second = yield* Effect.forkChild(
         rpc.Attach({ sessionId: session.id, runnerId: "flaky", token }).pipe(
           Stream.runForEach((message) =>
@@ -151,7 +144,6 @@ describe("runner reconnects", () => {
 
 type Rpc = Effect.Success<ReturnType<typeof makeClient>>
 
-/** Attach just long enough to receive the lease. */
 const firstLease = (rpc: Rpc, sessionId: string, runnerId: string) =>
   Effect.gen(function*() {
     const first = yield* Stream.runHead(rpc.Attach({ sessionId, runnerId }))

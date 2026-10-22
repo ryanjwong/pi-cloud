@@ -13,13 +13,8 @@ import {
 import { type Cause, Context, Deferred, Effect, Layer, Option, Queue, Schedule, Stream } from "effect"
 import { ControlPlaneConfig, LeaseManager, RunnerDispatcher, SessionStore } from "@pi-cloud/core"
 
-/** What goes down a runner's stream: commands, with the id their reply will carry, and Chord frames. */
 type Envelope = Exclude<RunnerMessage, { readonly _tag: "LeaseGranted" }>
 
-/**
- * Tracks the runner attached to each session and routes commands to it. When a command arrives for a session with
- * no live runner, it asks the dispatcher to start one and waits for it to attach.
- */
 export class Runners extends Context.Service<Runners, {
   attach(input: {
     readonly sessionId: string
@@ -28,20 +23,11 @@ export class Runners extends Context.Service<Runners, {
   }): Stream.Stream<RunnerMessage, LeaseHeld | SessionNotFound>
   send(session: Session, command: RunnerCommand): Effect.Effect<CommandResult, RunnerUnavailable>
   reply(sessionId: string, token: string, commandId: string, result: CommandResult): Effect.Effect<void, LeaseLost>
-  /** Queue a command for the session's live runner without waiting for its reply. Does nothing without one. */
   notify(sessionId: string, command: RunnerCommand): Effect.Effect<void>
-  /** Ask a session's runner, if any, to stop. */
   shutdown(sessionId: string, reason: string): Effect.Effect<void>
-  /** Whether a runner start has been requested and has not attached yet. */
   starting(sessionId: string): Effect.Effect<boolean>
-  /**
-   * A Chord link to the session's host on its live runner, waking one if needed. It closes when that runner stops
-   * hosting the session (released, replaced, or its lease abandoned).
-   */
   link(session: Session): Effect.Effect<Link, RunnerUnavailable>
-  /** Chord frames from the runner holding `token`, on its link numbered `link`. */
   frames(sessionId: string, token: string, link: number, frames: ReadonlyArray<unknown>): Effect.Effect<void, LeaseLost>
-  /** The runner holding `token` released the session. */
   released(sessionId: string, token: string): Effect.Effect<void>
 }>()("@pi-cloud/control-plane/Runners") {
   static readonly layer: Layer.Layer<
@@ -56,20 +42,15 @@ export class Runners extends Context.Service<Runners, {
       const dispatcher = yield* RunnerDispatcher
       const sessions = yield* SessionStore
 
-      /** One per lease: commands queue here even while the runner's connection is being re-established. */
       interface Channel {
         readonly token: string
-        /** Replaced on every re-attach, so only the newest connection reads commands. */
         queue: Queue.Queue<Envelope, Cause.Done>
         readonly pending: Map<string, Deferred.Deferred<CommandResult>>
-        /** Completes when this lease's runner stops hosting the session. */
         readonly closed: Deferred.Deferred<void>
-        /** The Chord link to the session's host, numbered within the lease. */
         link: { readonly id: number; readonly link: FrameLink } | undefined
         links: number
       }
       const channels = new Map<string, Channel>()
-      /** Requests waiting for a woken runner to attach. */
       const waiters = new Map<string, Array<Deferred.Deferred<Channel>>>()
 
       const closeChannel = Effect.fnUntraced(function*(sessionId: string, channel: Channel, message: string) {
@@ -83,7 +64,6 @@ export class Runners extends Context.Service<Runners, {
         channel.pending.clear()
       })
 
-      /** The channel of the session's live lease, if its runner is still alive. */
       const liveChannel = Effect.fnUntraced(function*(sessionId: string) {
         const channel = channels.get(sessionId)
         if (channel === undefined) return undefined
@@ -115,7 +95,6 @@ export class Runners extends Context.Service<Runners, {
             }
             channels.set(input.sessionId, channel)
           } else {
-            // The same runner reconnected. End its previous stream and carry over commands it never took.
             const previous = channel.queue
             channel.queue = yield* Queue.unbounded<Envelope, Cause.Done>()
             yield* Queue.offerAll(channel.queue, yield* Queue.clear(previous))
@@ -138,14 +117,13 @@ export class Runners extends Context.Service<Runners, {
           )
         }))
 
-      /** Wake a runner for the session unless one is already being started, then wait for it to attach. */
       const awaitRunner = Effect.fnUntraced(function*(sessionId: string) {
         const deferred = yield* Deferred.make<Channel>()
         const waiting = waiters.get(sessionId)
         if (waiting === undefined) {
           waiters.set(sessionId, [deferred])
           yield* dispatcher.wake({ sessionId, controlPlaneUrl: config.publicUrl }).pipe(
-            Effect.tapError((error) =>
+            Effect.tapError(() =>
               Effect.gen(function*() {
                 const failed = waiters.get(sessionId) ?? []
                 waiters.delete(sessionId)
@@ -199,8 +177,6 @@ export class Runners extends Context.Service<Runners, {
         if (channel !== undefined) yield* Queue.offer(channel.queue, { _tag: "Command", commandId: crypto.randomUUID(), command })
       })
 
-      // Crash recovery: a lease that expired without a release means its runner died, maybe mid-run. Wake the
-      // session so a new runner reopens its state and Pi resumes whatever was unfinished.
       yield* Effect.gen(function*() {
         for (const sessionId of yield* leases.takeAbandoned()) {
           const stale = channels.get(sessionId)
@@ -224,7 +200,6 @@ export class Runners extends Context.Service<Runners, {
         link: Effect.fnUntraced(function*(session) {
           const channel = (yield* liveChannel(session.id)) ?? (yield* awaitRunner(session.id))
           if (channel.link !== undefined && !channel.link.link.closed) return channel.link.link
-          // A new link for this lease: the runner replaces its end when it sees the new number.
           const id = ++channel.links
           const link = new FrameLink((frames) =>
             Effect.runSync(Queue.offer(channel.queue, { _tag: "Frames", link: id, frames: frames as never }))

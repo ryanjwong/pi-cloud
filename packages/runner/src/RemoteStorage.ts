@@ -28,14 +28,8 @@ import type {
 import { StorageRequestError } from "@earendil-works/pi-durable"
 import type { StorageMethod } from "@pi-cloud/protocol"
 
-/**
- * Sends one storage call to the control plane and resolves with its JSON result. It throws `LeaseLostError`,
- * Pi Durable's `StorageRequestError`, or `StorageBackendError` for the control plane's answers; anything else it
- * throws is a transport failure, which is retried.
- */
 export type StorageTransport = (method: StorageMethod, args: ReadonlyArray<unknown>, requestId?: string) => Promise<unknown>
 
-/** Thrown when the control plane refuses a call because this runner no longer holds the session's lease. */
 export class LeaseLostError extends Error {
   readonly sessionId: string
   constructor(sessionId: string) {
@@ -45,7 +39,6 @@ export class LeaseLostError extends Error {
   }
 }
 
-/** The control plane's storage backend failed the call. Not retried: Pi Durable fails the session. */
 export class StorageBackendError extends Error {
   constructor(message: string) {
     super(message)
@@ -53,10 +46,8 @@ export class StorageBackendError extends Error {
   }
 }
 
-/** How long a call is retried through transport failures before it fails, and with it the session. */
 const RETRY_FOR_MS = 30_000
 
-/** JSON has no `undefined`; the control plane turns `null` arguments back into `undefined`. */
 const encodeArgs = (args: ReadonlyArray<unknown>) =>
   args.map((arg) => arg === undefined ? null : JSON.parse(JSON.stringify(arg)))
 
@@ -75,11 +66,6 @@ const writeId = (write: StorageWrite): number | undefined => {
   }
 }
 
-/**
- * Pi Durable `Storage` that lives in the control plane. Every call is one RPC; commits are fenced by this runner's
- * lease there. IDs are minted locally from a base fetched once, since this runner is the session's only writer
- * while it holds the lease and Storage treats minted IDs as candidates checked at commit.
- */
 export class RemoteStorage implements Storage {
   private nextId: number | undefined
   private minting: Promise<number> | undefined
@@ -92,11 +78,6 @@ export class RemoteStorage implements Storage {
     this.transport = transport
   }
 
-  /**
-   * One call, retried through transport failures (a dropped connection, a restarting control plane), as Pi Durable
-   * requires of a Storage: any error a Storage throws fails the session. A commit is retried with the same request
-   * id, so it applies once.
-   */
   private async call<T>(method: StorageMethod, ...args: Array<unknown>): Promise<T> {
     if (this.abandoned) return new Promise<T>(() => {})
     if (this.closed) throw new Error("RemoteStorage is closed")
@@ -118,7 +99,6 @@ export class RemoteStorage implements Storage {
 
   async commit(writes: ReadonlyArray<StorageWrite>, _context: Context): Promise<Seq> {
     const seq = await this.call<Seq>("commit", writes)
-    // Committed IDs claim the namespace, exactly as the backend's own minting would observe.
     if (this.nextId !== undefined) {
       for (const write of writes) {
         const id = writeId(write)
@@ -226,15 +206,10 @@ export class RemoteStorage implements Storage {
     return this.call("scanDocuments", query, limit, cursor)
   }
 
-  /**
-   * Stop talking to the control plane the way a crashed process would: every later call simply never settles.
-   * Used when a runner is torn down without a clean shutdown.
-   */
   abandon(): void {
     this.abandoned = true
   }
 
-  /** The control plane owns the backend; closing only stops this client. */
   async close(_context: Context): Promise<void> {
     this.closed = true
   }

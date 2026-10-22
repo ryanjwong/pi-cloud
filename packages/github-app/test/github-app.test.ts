@@ -4,13 +4,11 @@ import { describe, expect, it } from "vitest"
 import { githubApp, githubAppTokens, sessionRepositories } from "../src/index.ts"
 
 const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 })
-// GitHub hands out PKCS#1 keys; secrets stores often hold them on one line.
 const pkcs1 = privateKey.export({ type: "pkcs1", format: "pem" }).toString()
 const pkcs8 = privateKey.export({ type: "pkcs8", format: "pem" }).toString()
 
 type Call = { method: string; path: string; body: any; claims: any }
 
-/** A stand-in for GitHub's App endpoints that checks every JWT against the App's public key. */
 const fakeGithub = (options: { expiresInMs?: number } = {}) => {
   const calls: Array<Call> = []
   let minted = 0
@@ -61,7 +59,6 @@ describe("GitHub App tokens", () => {
     expect(claims.iss).toBe("123")
     expect(claims.exp - claims.iat).toBeLessThanOrEqual(600)
 
-    // Reused while it has time left; repositories are compared without case or order.
     expect((await app.installationToken(["acme/web", "ACME/api"])).token).toBe("ghs_1")
     expect(github.calls).toHaveLength(2)
   })
@@ -71,7 +68,6 @@ describe("GitHub App tokens", () => {
     const app = githubApp({ appId: "123", privateKey: pkcs8, fetch: github.fetch, permissions: { contents: "read" } })
     expect((await app.installationToken(["acme/api"])).token).toBe("ghs_1")
     expect((await app.installationToken(["acme/api"])).token).toBe("ghs_2")
-    // The installation is looked up once.
     expect(github.calls.filter((call) => call.method === "GET")).toHaveLength(1)
     expect(github.calls[1]!.body.permissions).toEqual({ contents: "read" })
 
@@ -131,13 +127,10 @@ describe("GitHub App invariants", () => {
         }
         expect(asked).toHaveLength(1)
         const [repositories] = asked
-        // A subset of what the session names, never empty, and one account: the session's own.
         expect(repositories!.length).toBeGreaterThan(0)
         for (const repository of repositories!) expect(named).toContain(repository)
         expect(new Set(repositories!.map((r) => r.split("/")[0]))).toEqual(new Set([named[0]!.split("/")[0]]))
-        // The thread's repository, when there is one, is the session's own.
         if (thread !== undefined) expect(named[0]).toBe(thread.toLowerCase())
-        // Only GitHub-hosted repositories count.
         for (const repository of named) expect(repository).toMatch(/^[a-z0-9_.-]+\/[a-z0-9_.-]+$/)
       }),
       { numRuns: 1_000 }
@@ -166,7 +159,6 @@ describe("GitHub App invariants", () => {
           }
           const before = minted
           const token = await app.installationToken(current.repositories)
-          // A reused token always has more than five minutes left; a fresh one is whatever GitHub gave.
           if (minted === before) expect(token.expiresAt - now).toBeGreaterThan(5 * 60_000)
         }
       }),
@@ -177,7 +169,6 @@ describe("GitHub App invariants", () => {
 
 describe("GitHub App keys", () => {
   it("signs with PKCS#1 keys of every size GitHub might issue, verifiable with the public key", async () => {
-    // Sizes cross the DER length encodings the PKCS#8 wrapper writes (one, two and three length bytes).
     for (const modulusLength of [1024, 2048, 3072, 4096]) {
       const pair = generateKeyPairSync("rsa", { modulusLength })
       let signed = ""

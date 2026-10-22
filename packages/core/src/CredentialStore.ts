@@ -2,7 +2,6 @@ import type { StoredCredential, StorageFailure } from "@pi-cloud/protocol"
 import { Context, Effect, Layer, Option } from "effect"
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto"
 
-/** A stored credential with its version: 1 for the first write, then one more for every replacement. */
 export interface VersionedCredential {
   readonly providerId: string
   readonly credential: StoredCredential
@@ -10,17 +9,9 @@ export interface VersionedCredential {
   readonly updatedAt: number
 }
 
-/**
- * Model provider credentials (API keys and subscription logins), shared by every runner. Writes are
- * compare-and-swap on `version`, so two runners refreshing the same OAuth token cannot lose one another's tokens.
- */
 export class CredentialStore extends Context.Service<CredentialStore, {
   get(providerId: string): Effect.Effect<Option.Option<VersionedCredential>, StorageFailure>
   list(): Effect.Effect<ReadonlyArray<VersionedCredential>, StorageFailure>
-  /**
-   * Store `credential` if the current version is `expectedVersion` (0: none stored), or unconditionally without
-   * one. Returns whether it was stored and the version now current.
-   */
   put(
     providerId: string,
     credential: StoredCredential,
@@ -45,10 +36,6 @@ export class CredentialStore extends Context.Service<CredentialStore, {
   })
 }
 
-/**
- * Seals credentials at rest with AES-256-GCM under a key derived from `secret` (e.g. `PI_CLOUD_CREDENTIAL_KEY`,
- * from SOPS). Without a secret, values are stored as plain JSON.
- */
 export const credentialSealer = (secret: string | undefined) => {
   const key = secret === undefined ? undefined : createHash("sha256").update(secret).digest()
   return {

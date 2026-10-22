@@ -19,7 +19,6 @@ afterEach(async () => {
   root = undefined
 })
 
-/** The faux provider behind a subscription login: it has no API key, only OAuth tokens that expire. */
 const subscription = () => {
   const faux = fauxProvider()
   const refreshed: Array<string> = []
@@ -58,7 +57,6 @@ describe("stored credentials", () => {
     const put = (credential: Credential) =>
       fetch(`${url}/v1/credentials/faux`, { method: "PUT", body: JSON.stringify(credential), headers: { "content-type": "application/json" } })
 
-    // A login whose access token has already expired, as one stored a while ago.
     expect((await put({ type: "oauth", access: "a1", refresh: "r1", expires: Date.now() - 1_000 })).status).toBe(200)
     const listed = await (await fetch(`${url}/v1/credentials`)).json()
     expect(listed).toEqual([{ providerId: "faux", type: "oauth", expires: expect.any(Number), updatedAt: expect.any(Number) }])
@@ -76,7 +74,6 @@ describe("stored credentials", () => {
       }
     }).pipe(Effect.provide(PiCloud.layer({ url }))))
 
-    // The runner refreshed the expired token, used the new one, and stored it back for every runner.
     expect(refreshed).toEqual(["r1"])
     expect(used).toContain("a2")
     const after = (await (await fetch(`${url}/v1/credentials`)).json()) as Array<{ expires: number }>

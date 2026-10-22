@@ -1,14 +1,8 @@
 import type { Context } from "@earendil-works/chord"
 import type { ExecutionEnv } from "@earendil-works/pi-durable/env"
 
-/** Values shorter than this are not masked: they would match ordinary text. */
 const MIN_LENGTH = 6
 
-/**
- * Replaces known secret values with `[secret:NAME]`. Secrets are injected into sandboxes on purpose, but they must
- * not travel on into the transcript, the event stream, or the model's context, where a prompt injection could
- * extract them.
- */
 export class SecretMask {
   private readonly secrets = new Map<string, string>()
 
@@ -28,7 +22,6 @@ export class SecretMask {
     return output
   }
 
-  /** Mask every string inside a JSON-like value. */
   deep<T>(value: T): T {
     if (this.secrets.size === 0) return value
     if (typeof value === "string") return this.text(value) as T
@@ -39,10 +32,6 @@ export class SecretMask {
     return value
   }
 
-  /**
-   * Where `text` can be cut so that no secret straddles the cut and none can still be completed by what follows:
-   * everything before the cut can be masked and sent, the rest is held for the next chunk.
-   */
   private safeCut(text: string): number {
     let longest = 0
     for (const value of this.secrets.keys()) longest = Math.max(longest, value.length)
@@ -61,11 +50,6 @@ export class SecretMask {
     return cut
   }
 
-  /**
-   * Mask command output as it streams. Each stream holds back just enough of its tail that a secret split across
-   * chunks is still masked whole, and sends the rest when the command ends, so streamed output (which clients see
-   * and Pi may store as progress) never carries a secret either.
-   */
   env(env: ExecutionEnv): ExecutionEnv {
     const masked = Object.create(env) as ExecutionEnv
     masked.exec = async (command, options, context) => {
@@ -80,7 +64,6 @@ export class SecretMask {
         return await env.exec(command, {
           ...options,
           onOutput: (text, outputContext, info) => {
-            // Output before an omission is omitted, held text included, on either stream.
             if (info.skipped !== undefined) held.clear()
             const combined = (held.get(info.stream)?.text ?? "") + text
             const cut = this.size === 0 ? combined.length : this.safeCut(combined)

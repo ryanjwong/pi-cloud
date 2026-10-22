@@ -1,7 +1,3 @@
-# Who can decrypt secrets.yaml. Replace the placeholder with real age public keys:
-#   your key:     age-keygen -o ~/.config/sops/age/keys.txt   (prints the public key)
-#   a server's:   ssh-keyscan -t ed25519 HOST | ssh-to-age
-# After changing recipients, run `sops updatekeys secrets.yaml`.
 keys:
   - &operator age1replacewithyourpublickeyxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 creation_rules:

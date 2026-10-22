@@ -1,21 +1,14 @@
-/** Which server reads a setting. The all-in-one server reads both. */
 export type Component = "control-plane" | "runner"
 
 export interface Setting {
   readonly name: string
-  /** Secrets are read as `Redacted` and never printed. */
   readonly secret: boolean
   readonly components: ReadonlyArray<Component>
   readonly description: string
   readonly default?: string
 }
 
-/**
- * Every setting and secret the pi-cloud servers read, in one place. The config schemas are built from these
- * names, `pi-cloud config` reports on them, and `secrets.example.yaml` lists the secret ones.
- */
 export const SETTINGS: ReadonlyArray<Setting> = [
-  // Control plane
   { name: "PORT", secret: false, components: ["control-plane", "runner"], description: "Port to listen on", default: "8787 (runner host: 8788)" },
   { name: "HOST", secret: false, components: ["control-plane", "runner"], description: "Interface to listen on", default: "127.0.0.1" },
   { name: "DATA_DIR", secret: false, components: ["control-plane", "runner"], description: "SQLite state, bindings and local sandboxes", default: ".data" },
@@ -32,7 +25,6 @@ export const SETTINGS: ReadonlyArray<Setting> = [
   { name: "GITHUB_SANDBOX_PROVIDER", secret: false, components: ["control-plane"], description: "Sandbox provider for the repository sandbox of GitHub-triggered sessions", default: "local" },
   { name: "SLACK_SIGNING_SECRET", secret: true, components: ["control-plane"], description: "Enables the Slack source (with SLACK_BOT_TOKEN)" },
   { name: "SLACK_BOT_TOKEN", secret: true, components: ["control-plane"], description: "Posts the agent's replies to Slack" },
-  // Runner
   { name: "CONTROL_PLANE_URL", secret: false, components: ["runner"], description: "Control plane to attach to (runner host, required): wake requests can never redirect a runner elsewhere" },
   { name: "ANTHROPIC_API_KEY", secret: true, components: ["runner"], description: "Anthropic models" },
   { name: "OPENAI_API_KEY", secret: true, components: ["runner"], description: "OpenAI models" },
@@ -42,5 +34,4 @@ export const SETTINGS: ReadonlyArray<Setting> = [
   { name: "DAYTONA_API_KEY", secret: true, components: ["runner"], description: "Daytona sandboxes (templates with provider \"daytona\")" }
 ]
 
-/** Model provider credentials, by the variable name pi-ai looks them up under. */
 export const MODEL_CREDENTIALS = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY"] as const

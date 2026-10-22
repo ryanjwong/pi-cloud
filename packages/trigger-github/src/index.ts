@@ -2,7 +2,6 @@ import type { SessionSpec } from "@pi-cloud/protocol"
 import { defineTrigger, parseJson, type Trigger, type TriggerEvent, verifyHmac } from "@pi-cloud/triggers"
 import { Effect } from "effect"
 
-/** The fields of GitHub webhook payloads this trigger reads. */
 export interface GithubPayload {
   readonly action?: string
   readonly repository?: { readonly full_name: string }
@@ -26,17 +25,14 @@ export interface GithubPayload {
   readonly review?: { readonly body?: string | null; readonly state: string; readonly html_url: string }
 }
 
-/** One GitHub delivery: its event name (`X-GitHub-Event`), delivery id, and payload. */
 export interface GithubEvent {
   readonly name: string
   readonly delivery: string | undefined
   readonly payload: GithubPayload
 }
 
-/** Events about one issue or pull request share a key, so they reach the same session. */
 export const threadKey = (repository: string, number: number) => `github:${repository}#${number}`
 
-/** The repository and number a thread key refers to. */
 export const threadOfKey = (key: string): { readonly repository: string; readonly number: number } | undefined => {
   const match = /^github:([^#]+)#(\d+)$/.exec(key)
   return match === null ? undefined : { repository: match[1]!, number: Number(match[2]) }
@@ -44,10 +40,6 @@ export const threadOfKey = (key: string): { readonly repository: string; readonl
 
 const text = (lines: ReadonlyArray<string | null | undefined | false>) => lines.filter(Boolean).join("\n")
 
-/**
- * The default mapping: new issues and pull requests, comments, and reviews become prompts for the thread's
- * session. Bots and (with `mention`) comments that do not mention the agent are ignored.
- */
 export const defaultRoute = (options: { readonly mention?: string | undefined } = {}) =>
 (event: GithubEvent): ReadonlyArray<Omit<TriggerEvent, "spec">> => {
   const { payload } = event
@@ -118,25 +110,13 @@ export const defaultRoute = (options: { readonly mention?: string | undefined } 
 }
 
 export interface GithubTriggerOptions {
-  /** The webhook secret configured on GitHub; deliveries without a valid `X-Hub-Signature-256` are refused. */
   readonly secret: string
-  /** Mounted at `/v1/triggers/{name}`. Defaults to `github`. */
   readonly name?: string
-  /**
-   * Spec for new sessions, e.g. a sandbox of the repository (`{ sandbox: "repo", sandboxes: { repo: { provider,
-   * repository: { url, credential } } } }`). The thread is added to its `metadata.github`.
-   */
   readonly spec?: SessionSpec | ((repository: string) => SessionSpec)
-  /** Only react to comments, issues and pull requests that contain this text, e.g. `@pi`. */
   readonly mention?: string
-  /** Replace the default mapping from deliveries to events. */
   readonly route?: (event: GithubEvent) => ReadonlyArray<Omit<TriggerEvent, "spec">>
 }
 
-/**
- * GitHub webhooks as a trigger. Each issue or pull request gets its own session, which every later event about it
- * reaches. Redelivered webhooks are deduplicated by delivery id.
- */
 export const githubTrigger = (options: GithubTriggerOptions): Trigger =>
   defineTrigger({
     name: options.name ?? "github",
@@ -152,7 +132,6 @@ export const githubTrigger = (options: GithubTriggerOptions): Trigger =>
         const repository = event.payload.repository?.full_name ?? ""
         const spec = typeof options.spec === "function" ? options.spec(repository) : options.spec
         return route(event).map((routed, index) => {
-          // New sessions record their thread, so GitHub tools know where to reply.
           const thread = threadOfKey(routed.key)
           return {
             ...routed,

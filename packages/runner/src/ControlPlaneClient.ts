@@ -6,15 +6,11 @@ import { RpcClient, type RpcClientError, RpcSerialization } from "effect/rpc"
 export type ControlPlaneClient = RpcClient.FromGroup<typeof RunnerRpcs, RpcClientError.RpcClientError>
 
 export interface ControlPlaneConnection {
-  /** Base URL of the control plane, e.g. `https://control.example.com`. */
   readonly url: string
-  /** Shared runner secret, sent as a bearer token. */
   readonly secret?: string | undefined
-  /** How requests reach the control plane: a Durable Object stub's `fetch`, for instance. Default: `fetch`. */
   readonly fetch?: typeof globalThis.fetch | undefined
 }
 
-/** The runner RPC client over plain HTTP: fetch is the only thing the substrate has to provide. */
 export const makeClient = (connection: ControlPlaneConnection) =>
   RpcClient.make(RunnerRpcs).pipe(
     Effect.provide(

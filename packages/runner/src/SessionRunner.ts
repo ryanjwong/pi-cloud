@@ -24,31 +24,14 @@ import { openSessionServices, type SessionServices } from "./Services.ts"
 
 export interface SessionRunnerOptions {
   readonly plugins: ReadonlyArray<RunnerPlugin>
-  /** Resolves secret names that sandbox templates request. Defaults to none. */
   readonly secrets?: SecretResolver
-  /** Base harness settings; plugin settings are merged over them. */
   readonly settings?: HarnessSettings
-  /** Release the lease after the session has had no work for this long. Default 30 s. */
   readonly idleMs?: number
-  /** Identifies this runner in leases and logs. */
   readonly runnerId?: string
-  /**
-   * Where model providers look up their credentials (`ANTHROPIC_API_KEY`, ...). When set, pi-ai reads nothing
-   * from the process environment or disk; when omitted it falls back to its ambient lookup.
-   */
   readonly modelCredentials?: (name: string) => string | undefined
-  /**
-   * A local database for each session's read replica (see `ReplicatedStorage`): reads are served from it instead
-   * of the control plane, when the control plane's state store is SQLite. `memoryReplica` from
-   * `@pi-cloud/runner/node` on Node. Omitted: every read is a call to the control plane.
-   */
   readonly replica?: ReplicaDatabase
 }
 
-/**
- * Why a runner stopped hosting a session. `session-failed`: Pi Durable failed the session (a storage error that
- * survived the retries); the lease is kept to expire, so the control plane reopens the session on a fresh runner.
- */
 export type StopReason = "idle" | "shutdown" | "lease-lost" | "failed" | "session-failed"
 
 const toJson = <T>(value: T): T => JSON.parse(JSON.stringify(value))
@@ -59,7 +42,6 @@ const errorResult = (error: unknown): CommandResult => ({
   message: error instanceof Error ? error.message : String(error)
 })
 
-/** Everything that belongs to one lease. */
 interface Hosted extends RunningSession {
   readonly storage: ReplicatedStorage
   readonly token: string
@@ -68,28 +50,20 @@ interface Hosted extends RunningSession {
   readonly context: Context
   readonly cancel: () => void
   watch: AgentEventStream | undefined
-  /** The session's Chord services, for attached presentations; see `Services.ts`. */
   services: SessionServices | undefined
   readonly models: Models
   seq: number
-  /** Publishes run one after another so batches arrive in order. */
   publishing: Promise<void>
 }
 
-/** How long before an issued secret expires the runner asks for a fresh one. */
 const REFRESH_MARGIN_MS = 2 * 60_000
 
-/**
- * A session's secrets: those the control plane issues to it (a GitHub App token scoped to its repository, ...),
- * cached until shortly before they expire, else the runner's own. Ask again on every use; a cached answer is free.
- */
 const issuedSecrets = (
   issue: (name: string) => Promise<{ readonly value?: string | undefined; readonly expiresAt?: number | undefined }>,
   fallback: SecretResolver,
   leaseLost: () => Error
 ): SecretResolver => {
   type Issued = { readonly value?: string | undefined; readonly expiresAt?: number | undefined }
-  // Answers, including "none": the control plane's issuers do not change while this runner holds the lease.
   const cache = new Map<string, Issued>()
   const inflight = new Map<string, Promise<Issued>>()
   return async (name) => {
@@ -103,7 +77,6 @@ const issuedSecrets = (
     }
     const issued = await pending.catch((error: { _tag?: string; message?: string }) => {
       if (error._tag === "LeaseLost") throw leaseLost()
-      // The control plane has the secret but could not issue it: fail this use rather than fall back to a broader one.
       throw new Error(error.message ?? `Could not get ${name} from the control plane`)
     })
     cache.set(name, issued)
@@ -111,10 +84,6 @@ const issuedSecrets = (
   }
 }
 
-/**
- * Host one session until it goes idle, is shut down, or the lease is lost. The runner holds the session's lease,
- * runs Pi Durable against the control plane's storage, executes commands, and publishes Pi's events.
- */
 export const hostSession = Effect.fnUntraced(function*(
   client: ControlPlaneClient,
   sessionId: string,
@@ -130,7 +99,6 @@ export const hostSession = Effect.fnUntraced(function*(
   let hosted: Hosted | undefined
   let ttlMs = 15_000
   let lastActive = Date.now()
-  /** Chord frames that arrived before the session's host was open. */
   const early: Array<{ readonly link: number; readonly frames: ReadonlyArray<unknown> }> = []
 
   const run = <A, E>(effect: Effect.Effect<A, E>) => Effect.runPromise(effect)
@@ -145,7 +113,6 @@ export const hostSession = Effect.fnUntraced(function*(
     return current.publishing
   }
 
-  /** (Re)start the root conversation's event stream; it begins with a snapshot. */
   const startWatch = async (current: Hosted) => {
     const previous = current.watch
     current.watch = undefined
@@ -170,7 +137,6 @@ export const hostSession = Effect.fnUntraced(function*(
           args: args as any,
           ...(requestId === undefined ? {} : { requestId })
         }))
-        // A missing record may arrive as `null`; Storage reports misses as `undefined`.
         return value ?? undefined
       } catch (error) {
         const failure = error as { _tag?: string; message?: string; request?: boolean }
@@ -207,8 +173,6 @@ export const hostSession = Effect.fnUntraced(function*(
     for (const plugin of options.plugins) {
       parts.push(await runSetup(plugin, { session, config: session.spec.plugins?.[plugin.name], secrets: sessionSecrets }))
     }
-    // Stored credentials (API keys, subscription logins) come from the control plane; environment keys from the
-    // runner's configuration. pi-ai refreshes OAuth tokens through the store, for every runner at once.
     const credentials = options.modelCredentials
     const store = new RemoteCredentialStore({
       get: (providerId) => run(client.CredentialGet({ sessionId, token, providerId })) as never,
@@ -333,7 +297,6 @@ export const hostSession = Effect.fnUntraced(function*(
         }
         case "Configure": {
           const target = await conversation(current, command.conversationId)
-          // A new model keeps the current thinking level, clamped to what it supports.
           let thinkingLevel = command.thinkingLevel
           if (command.model != null && thinkingLevel === undefined) {
             const model = current.models.getModel(command.model.provider, command.model.modelId)
@@ -391,7 +354,6 @@ export const hostSession = Effect.fnUntraced(function*(
     )
   }
 
-  /** Attach, and re-attach with the same token whenever the connection drops while the lease is still ours. */
   const attachLoop = Effect.gen(function*() {
     while (true) {
       const exit = yield* client.Attach({ sessionId, runnerId, token: hosted?.token }).pipe(
@@ -399,14 +361,12 @@ export const hostSession = Effect.fnUntraced(function*(
           Effect.promise(async () => {
             if (message._tag === "Command") return handleCommand(message.commandId, message.command)
             if (message._tag === "Frames") {
-              // Frames that arrive while the session is still opening wait for its host.
               if (hosted?.services === undefined) early.push(message)
               else hosted.services.frames(message.link, message.frames)
               return
             }
             ttlMs = message.ttlMs
             if (hosted?.token === message.token) return
-            // A new lease: whatever we held before may be stale, so start over from storage.
             if (hosted !== undefined) await close(hosted)
             hosted = undefined
             early.length = 0
@@ -446,7 +406,6 @@ export const hostSession = Effect.fnUntraced(function*(
     const current = hosted
     if (current === undefined) return
     const inspection = yield* Effect.promise(() => current.harness.inspect(current.context))
-    // Objects presentations hold keep the session hosted.
     const busy = inspection.submissions.length > 0 || inspection.tasks.some((task) => task.state.kind !== "blocked") ||
       (current.services?.attached ?? 0) > 0
     if (busy) lastActive = Date.now()
@@ -456,7 +415,6 @@ export const hostSession = Effect.fnUntraced(function*(
     Effect.repeat(Schedule.spaced(Math.max(100, Math.min(5_000, Math.floor(idleMs / 2)))))
   )
 
-  /** Interrupted (e.g. the host is killed): stop writing at once, as a crash would, and keep the lease. */
   const abandon = Effect.promise(async () => {
     const current = hosted
     hosted = undefined

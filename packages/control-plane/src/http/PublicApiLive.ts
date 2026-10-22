@@ -5,7 +5,6 @@ import { HttpApiBuilder } from "effect/http-api"
 import { SERVICES_PATH } from "../services/ServiceHost.ts"
 import { Sessions } from "../Sessions.ts"
 
-/** The REST surface: a thin mapping from `PublicApi` endpoints onto the `Sessions` service. */
 export const SessionsApiLive = HttpApiBuilder.group(
   PublicApi,
   "sessions",
@@ -35,7 +34,6 @@ export const SessionsApiLive = HttpApiBuilder.group(
   })
 )
 
-/** What the API shows of a stored credential: never the secret. */
 const infoOf = (entry: VersionedCredential): CredentialInfo => ({
   providerId: entry.providerId,
   type: entry.credential.type,
@@ -56,10 +54,9 @@ export const CredentialsApiLive = HttpApiBuilder.group(PublicApi, "credentials",
     .handle("delete", ({ params }) => credentials.remove(params.providerId).pipe(Effect.orDie))
 }))
 
-export const SystemApiLive = HttpApiBuilder.group(PublicApi, "system", Effect.fn(function*(handlers) {
-  return handlers
+export const SystemApiLive = HttpApiBuilder.group(PublicApi, "system", (handlers) =>
+  Effect.succeed(handlers
     .handle("health", () => Effect.void)
-    .handle("server", () => Effect.succeed({ servicesPath: SERVICES_PATH }))
-}))
+    .handle("server", () => Effect.succeed({ servicesPath: SERVICES_PATH }))))
 
 export const PublicApiHandlers = Layer.mergeAll(SessionsApiLive, CredentialsApiLive, SystemApiLive)

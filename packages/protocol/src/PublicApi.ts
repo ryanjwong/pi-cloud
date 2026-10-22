@@ -5,10 +5,6 @@ import { EventBatch, SessionId, SessionSpec, SessionView, UserContent, WhenBusy 
 import { CredentialInfo, StoredCredential } from "./Credentials.ts"
 import { CommandFailed, ConversationBusy, RunnerUnavailable, SessionNotFound, Unauthorized } from "./Errors.ts"
 
-/**
- * Bearer authentication for the public API. The control plane chooses the implementation (a static key, an
- * identity provider, ...); clients supply their token through the client-side layer.
- */
 export class ApiAuth extends HttpApiMiddleware.Service<ApiAuth>()("@pi-cloud/protocol/ApiAuth", {
   requiredForClient: true,
   security: { bearer: HttpApiSecurity.bearer },
@@ -24,17 +20,13 @@ export const CreateSession = Schema.Struct({
 
 export const SubmitMessage = Schema.Struct({
   content: UserContent,
-  /** Makes the submission exactly-once: a retry with the same id returns the original submission. */
   requestId: Schema.optional(Schema.String),
   whenBusy: Schema.optional(WhenBusy),
-  /** Defaults to the session's root conversation. */
   conversationId: Schema.optional(Schema.Number)
 })
 
 export const EntriesPage = Schema.Struct({
-  /** Pi `EntryRecord`s, oldest first. */
   entries: Schema.Array(Schema.Json),
-  /** Pass back as `cursor` to read the next page. */
   next: Schema.optional(Schema.String)
 })
 
@@ -54,10 +46,6 @@ export class SessionsApi extends HttpApiGroup.make("sessions")
       success: Submitted,
       error: [SessionNotFound, RunnerUnavailable, ConversationBusy, CommandFailed]
     }),
-    /**
-     * Run any session command (prompt, abort, configure, compact, reset, or a plugin's custom command). The
-     * WebSocket channel at `/v1/sessions/{id}/channel` accepts the same commands.
-     */
     HttpApiEndpoint.post("command", "/:id/commands", {
       params: sessionParams,
       payload: SessionCommand,
@@ -70,18 +58,12 @@ export class SessionsApi extends HttpApiGroup.make("sessions")
       success: HttpApiSchema.NoContent,
       error: [SessionNotFound, RunnerUnavailable, CommandFailed]
     }),
-    /**
-     * Live Pi agent events as server-sent events. A stream starts with the newest snapshot batch the control plane
-     * holds, then every batch after it. Reconnect with `after=<epoch>:<seq>` of the last batch seen to resume
-     * without a fresh snapshot when the gap is still buffered.
-     */
     HttpApiEndpoint.get("events", "/:id/events", {
       params: sessionParams,
       query: { after: Schema.optional(Schema.String) },
       success: HttpApiSchema.StreamSse({ data: EventBatch }),
       error: SessionNotFound
     }),
-    // Reads below go straight to the state store: they work whether or not a runner is attached.
     HttpApiEndpoint.get("entries", "/:id/entries", {
       params: sessionParams,
       query: {
@@ -112,19 +94,13 @@ export class SessionsApi extends HttpApiGroup.make("sessions")
   }))
 {}
 
-/** Where and how to reach the service API (`Services.ts`). */
 export const ServerInfo = Schema.Struct({
-  /** WebSocket path of the service API: a Chord link to the control plane's host. */
   servicesPath: Schema.String
 })
 
 export class CredentialsApi extends HttpApiGroup.make("credentials")
   .add(
     HttpApiEndpoint.get("list", "/", { success: Schema.Array(CredentialInfo) }),
-    /**
-     * Store a provider credential: an API key, or a subscription login's OAuth tokens (as `pi-cloud login` uploads
-     * them). Runners use it for that provider's models and refresh OAuth tokens as needed.
-     */
     HttpApiEndpoint.put("put", "/:providerId", {
       params: { providerId: Schema.String },
       payload: StoredCredential,

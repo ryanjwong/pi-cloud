@@ -53,12 +53,10 @@ describe.skipIf(!hasSops)("writeSopsSecrets", () => {
       process.chdir(dir)
       Object.assign(process.env, { SOPS_AGE_KEY_FILE: identity })
       try {
-        // A new file holds only the given keys (none of SOPS's example document).
         writeSopsSecrets(file, { GITHUB_APP_ID: "77", GITHUB_APP_PRIVATE_KEY: key })
         expect(readFileSync(file, "utf8")).not.toContain("MIIabc")
         expect(decrypt()).toBe(`GITHUB_APP_ID: "77"\nGITHUB_APP_PRIVATE_KEY: |\n    -----BEGIN RSA PRIVATE KEY-----\n    MIIabc\n    def==\n    -----END RSA PRIVATE KEY-----\n`)
 
-        // An existing file keeps its other secrets.
         writeSopsSecrets(file, { GITHUB_WEBHOOK_SECRET: "whsec", GITHUB_APP_ID: "78" })
         const after = decrypt()
         expect(after).toContain('GITHUB_APP_ID: "78"')
@@ -81,7 +79,6 @@ describe("setYamlKeys invariants", () => {
   const value = fc.oneof(
     fc.string(),
     fc.string({ unit: "grapheme" }),
-    // Shapes secrets take: PEM blocks, leading spaces, trailing newlines, YAML-looking text.
     fc.array(fc.string({ unit: fc.constantFrom("a", " ", "-", ":", "#", "|", "'", '"', "\t", "\\", "é") }), { minLength: 2, maxLength: 5 }).map((lines) => lines.join("\n")),
     fc.constantFrom("-----BEGIN RSA PRIVATE KEY-----\nMIIabc\n-----END RSA PRIVATE KEY-----\n", "  indented\nnext", "a\n\n", "\n", "", "null", "true", "123", "~", "- item", "key: value", "a\r\nb")
   )
@@ -91,7 +88,6 @@ describe("setYamlKeys invariants", () => {
     fc.assert(
       fc.property(doc, fc.dictionary(key, value, { minKeys: 1, maxKeys: 4 }), (existing, values) => {
         const text = Object.keys(existing).length === 0 ? "" : `# secrets\n${stringify(existing)}`
-        // Documents the YAML library itself writes faithfully (it does not, for some whitespace-only lines).
         fc.pre(text === "" || JSON.stringify(parse(text)) === JSON.stringify(existing))
         const once = setYamlKeys(text, values)
         expect(parse(once) ?? {}).toEqual({ ...existing, ...values })

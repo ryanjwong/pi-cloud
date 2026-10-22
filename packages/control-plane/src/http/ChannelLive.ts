@@ -20,11 +20,6 @@ const resultOf = (error: CommandError): CommandResult => {
   }
 }
 
-/**
- * `GET /v1/sessions/{id}/channel`: the session channel, a WebSocket carrying `ChannelRequest`s in and
- * `ChannelMessage`s out. Authenticates with `Authorization: Bearer <key>` only: a key in the URL would end up in
- * proxy and request logs. Resume from a known position with `?after=<epoch>:<seq>`.
- */
 export const ChannelRoute = Layer.effectDiscard(Effect.gen(function*() {
   const router = yield* HttpRouter.HttpRouter
   const sessions = yield* Sessions
@@ -73,7 +68,6 @@ export const ChannelRoute = Layer.effectDiscard(Effect.gen(function*() {
         })
       )
 
-    // Read until the client goes away, then stop streaming to it.
     yield* reader.pull.pipe(
       Effect.flatMap((chunks) =>
         Effect.forEach(chunks, (chunk) => handle(typeof chunk === "string" ? chunk : textDecoder.decode(chunk)), {

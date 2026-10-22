@@ -28,11 +28,9 @@ const request = async (connection: Connection, method: string, path: string, bod
   return response.status === 204 ? undefined : response.json()
 }
 
-/** Store a credential on the control plane, where every runner uses (and refreshes) it. */
 export const upload = (connection: Connection, providerId: string, credential: Credential) =>
   request(connection, "PUT", `/v1/credentials/${encodeURIComponent(providerId)}`, credential)
 
-/** Providers with a login (subscriptions such as ChatGPT/Codex and Claude Pro/Max, and other OAuth logins). */
 export const loginProviders = () =>
   builtinProviders()
     .filter((provider) => provider.auth.oauth !== undefined)
@@ -43,11 +41,9 @@ export const openBrowser = (url: string) => {
   try {
     spawn(command, [url], { stdio: "ignore", detached: true }).on("error", () => {}).unref()
   } catch {
-    // No browser here: the URL is printed.
   }
 }
 
-/** pi-ai's login interaction in a plain terminal: prompts on stdin, links and codes on stdout. */
 const terminalInteraction = (signal: AbortSignal): AuthInteraction & { close(): void } => {
   const input = createInterface({ input: process.stdin, output: process.stdout })
   return {
@@ -74,10 +70,6 @@ const terminalInteraction = (signal: AbortSignal): AuthInteraction & { close(): 
   }
 }
 
-/**
- * Sign in to a provider here (it needs your browser), with the provider's own login flow as Pi runs it, then store
- * the credential on the control plane. Nothing stays on this machine.
- */
 export const login = async (connection: Connection, providerId: string) => {
   const store = new InMemoryCredentialStore()
   const models = createModels({ credentials: store })
@@ -93,7 +85,6 @@ export const login = async (connection: Connection, providerId: string) => {
   }
 }
 
-/** Import logins from Pi's own credential file (`~/.pi/agent/auth.json`). */
 export const importFromPi = async (connection: Connection, providerIds: ReadonlyArray<string>) => {
   const file = join(process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent"), "auth.json")
   const entries = JSON.parse(await readFile(file, "utf8")) as Record<string, Credential>
@@ -106,7 +97,6 @@ export const importFromPi = async (connection: Connection, providerIds: Readonly
   }
 }
 
-/** Import a ChatGPT login from the Codex CLI (`~/.codex/auth.json`, written by `codex login`). */
 export const importFromCodex = async (connection: Connection) => {
   const file = join(process.env.CODEX_HOME ?? join(homedir(), ".codex"), "auth.json")
   const auth = JSON.parse(await readFile(file, "utf8")) as {
@@ -114,7 +104,6 @@ export const importFromCodex = async (connection: Connection) => {
   }
   const { access_token: access, refresh_token: refresh, account_id: accountId } = auth.tokens ?? {}
   if (!access || !refresh) throw new Error(`${file} has no ChatGPT login; run \`codex login\` first`)
-  // The access token's expiry is in its JWT payload.
   const payload = JSON.parse(Buffer.from(access.split(".")[1] ?? "", "base64url").toString("utf8")) as { exp?: number }
   const credential: Credential = {
     type: "oauth",

@@ -20,16 +20,10 @@ import { ClientAuth } from "../http/Auth.ts"
 import { Runners } from "../Runners.ts"
 import { Sessions } from "../Sessions.ts"
 
-/** The WebSocket path of the service API. */
 export const SERVICES_PATH = "/v1/pi"
 
 const Anything = Type.Unsafe<any>(Type.Unknown())
 
-/**
- * The control plane's side of the service API (`Services.ts` in `@pi-cloud/protocol`): the Chord host `server`. It
- * serves the session directory, accepts presentations over WebSockets at `/v1/pi`, and routes every `session:<id>`
- * reference to the runner hosting that session, waking one when needed.
- */
 export class ServiceHost extends EffectContext.Service<ServiceHost, {
   readonly host: Host<Principal>
 }>()("@pi-cloud/control-plane/ServiceHost") {
@@ -50,7 +44,6 @@ export class ServiceHost extends EffectContext.Service<ServiceHost, {
     })
     yield* Effect.addFinalizer(() => Effect.promise(() => host.close().catch(() => {})))
 
-    // ----- The session directory, kept current: sessions also change through REST, triggers and runners.
     const cloudOf = (session: SessionView): CloudSession => ({
       id: session.id,
       title: session.title ?? null,
@@ -71,7 +64,6 @@ export class ServiceHost extends EffectContext.Service<ServiceHost, {
     yield* Effect.promise(refresh).pipe(Effect.ignore, Effect.repeat(Schedule.spaced(1_000)), Effect.forkScoped)
 
     host.serve(SessionsObject, (_input, principal, self) => {
-      // The directory is for presentations; a session's runner has no business creating or removing sessions.
       if (principal.kind === "runner") throw forbidden("Runners cannot use the session directory")
       const list = self.state("sessions", Anything, { init: () => directory.value.list })
       self.on("sessions", directory, (value, ctx) => list.replace(ctx, value.list))
@@ -93,7 +85,6 @@ export class ServiceHost extends EffectContext.Service<ServiceHost, {
       }
     })
 
-    // ----- Sessions' hosts are their runners, reached over each runner's lease-fenced channel.
     host.route("session:", {
       authorize: (principal) => principal.kind !== "runner",
       resolve: async (name) => {
@@ -105,7 +96,6 @@ export class ServiceHost extends EffectContext.Service<ServiceHost, {
       principal: (name) => ({ kind: "runner", session: sessionOfHost(name) ?? "" })
     })
 
-    // ----- Presentations: one Chord link per WebSocket, as clients.
     yield* router.add("GET", SERVICES_PATH, Effect.gen(function*() {
       const request = yield* HttpServerRequest.HttpServerRequest
       const bearer = request.headers["authorization"]?.replace(/^Bearer\s+/i, "")
@@ -115,7 +105,6 @@ export class ServiceHost extends EffectContext.Service<ServiceHost, {
       )
       if (!authorized) return HttpServerResponse.text("Unauthorized", { status: 401 })
 
-      // Cloudflare: accept one end of a socket pair here and answer 101 with the other.
       const WebSocketPair = (globalThis as { WebSocketPair?: new () => Record<0 | 1, WebSocketLike & { accept(): void }> })
         .WebSocketPair
       if (WebSocketPair !== undefined) {

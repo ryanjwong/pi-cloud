@@ -33,7 +33,6 @@ import {
 import { Clock, Context, Effect, Layer, Option, Semaphore, type Stream } from "effect"
 import { Runners } from "./Runners.ts"
 
-/** Round-trip through JSON: drops `undefined` fields exactly as a serializing backend would. */
 export const toJson = (value: unknown): unknown => value === undefined ? undefined : JSON.parse(JSON.stringify(value))
 
 const encodeCursor = (cursor: Cursor) => Buffer.from(JSON.stringify(cursor)).toString("base64url")
@@ -41,40 +40,26 @@ const decodeCursor = (cursor: string): Cursor => JSON.parse(Buffer.from(cursor, 
 
 export type CommandError = SessionNotFound | RunnerUnavailable | ConversationBusy | CommandFailed
 
-/** How to create and bind a session for a key that has none yet. */
 export interface BindingInit {
   readonly title?: string | undefined
   readonly spec?: SessionSpec | undefined
-  /** The source that replies on this binding, and where. */
   readonly source?: string | undefined
   readonly target?: JsonValue | undefined
 }
 
-/**
- * Everything you can do with sessions, as one service. The REST API, the WebSocket channel, and any source
- * hosted in the control plane (a Slack bridge, a webhook trigger, ...) are thin adapters over it, so they all
- * have the same capabilities and semantics.
- */
 export class Sessions extends Context.Service<Sessions, {
   create(input: { readonly title?: string | undefined; readonly spec?: SessionSpec | undefined }): Effect.Effect<SessionView>
   list(): Effect.Effect<ReadonlyArray<SessionView>>
   get(id: string): Effect.Effect<SessionView, SessionNotFound>
   remove(id: string): Effect.Effect<void, SessionNotFound>
-  /** Run a command on the session's runner, starting one if needed. Resolves with the command's value. */
   command(id: string, command: SessionCommand): Effect.Effect<unknown, CommandError>
-  /** Buffered then live event batches. */
   events(id: string, after: StreamPosition | undefined): Effect.Effect<Stream.Stream<EventBatch>, SessionNotFound>
-  /** Transcript entries, oldest first, read from the state store. */
   entries(id: string, query: {
     readonly conversationId?: number | undefined
     readonly limit?: number | undefined
     readonly cursor?: string | undefined
   }): Effect.Effect<{ readonly entries: ReadonlyArray<unknown>; readonly next?: string | undefined }, SessionNotFound>
   conversations(id: string): Effect.Effect<ReadonlyArray<unknown>, SessionNotFound>
-  /**
-   * The session bound to an external key (a pull request, a chat thread, ...), creating and binding one on first
-   * use. Calls for the same key are serialized, so concurrent events cannot create two sessions.
-   */
   forKey(key: string, init: BindingInit): Effect.Effect<{ readonly binding: Binding; readonly created: boolean }>
   submission(id: string, submissionId: number): Effect.Effect<unknown, SessionNotFound>
 }>()("@pi-cloud/control-plane/Sessions") {
@@ -116,7 +101,6 @@ export class Sessions extends Context.Service<Sessions, {
         return { id: session.id, title: session.title, spec: session.spec, createdAt: session.createdAt, runner }
       })
 
-      /** Read from the session's storage; storage failures are defects here, not API errors. */
       const read = <A>(id: string, f: (storage: Storage) => Promise<A>) =>
         Effect.gen(function*() {
           yield* find(id)
@@ -191,7 +175,6 @@ export class Sessions extends Context.Service<Sessions, {
         entries: (id, query) =>
           read(id, async (storage) => {
             const conversationId = (query.conversationId ?? ROOT_CONVERSATION_ID) as ConversationId
-            // A session no runner has opened yet has no conversations: its transcript is simply empty.
             if ((await storage.conversation(conversationId, BACKGROUND_CONTEXT)) === undefined) return { entries: [] }
             const page = await storage.scanEntries(
               { conversationId, order: "ascending" },

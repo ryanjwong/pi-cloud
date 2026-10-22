@@ -13,7 +13,6 @@ import { type RemoteShell, shellEnv } from "../src/ShellEnv.ts"
 const context = {} as Context
 const withSignal = (signal: AbortSignal) => ({ abortSignal: signal }) as unknown as Context
 
-/** A `RemoteShell` that is a local `sh`: the shell-backed environment, minus the network. */
 const localShell = (options: { stdin: boolean }): RemoteShell => ({
   id: "test:local-shell",
   stdin: options.stdin,
@@ -38,7 +37,6 @@ afterEach(() => rm(root, { recursive: true, force: true }))
 
 const binary = new Uint8Array(70_000).map((_, index) => (index * 7) % 256)
 
-/** Every file operation, run the same way on an environment. Results are normalized for comparison. */
 const exercise = async (env: ExecutionEnv, dir: string) => {
   const code = <A>(result: { ok: true; value: A } | { ok: false; error: { code: string } }) =>
     result.ok ? { ok: result.value } : { error: result.error.code }
@@ -91,8 +89,6 @@ describe("shellEnv", () => {
     it(`matches Pi's Node environment for file operations (${stdin ? "stdin" : "base64"} writes)`, async () => {
       const expected = await exercise(new NodeExecutionEnv({ cwd: join(root, "node") }), join(root, "node"))
       const actual = await exercise(shellEnv(localShell({ stdin }), { cwd: join(root, "shell") }), join(root, "shell"))
-      // Error codes, contents, kinds and sizes agree; paths differ only by the directory they ran in. Removing a
-      // directory without `recursive` is the one refinement: Node reports it as unknown.
       const normalized = JSON.parse(JSON.stringify(actual).replaceAll(join(root, "shell"), join(root, "node")))
       expect(normalized.removeDir).toEqual({ error: "is_directory" })
       expect({ ...normalized, removeDir: { error: "unknown" } }).toEqual(JSON.parse(JSON.stringify(expected)))
@@ -152,7 +148,6 @@ describe("shellEnv", () => {
   })
 })
 
-// Pi Durable's own suite for custom environments, over a local shell.
 registerEnvConformance({ describe, expect, it }, "shellEnv over a local shell", async (use) => {
   const dir = await mkdtemp(join(tmpdir(), "pi-cloud-conformance-"))
   const env = shellEnv(localShell({ stdin: true }), { cwd: dir })
@@ -165,7 +160,6 @@ registerEnvConformance({ describe, expect, it }, "shellEnv over a local shell", 
 })
 
 describe("shellEnv against Pi's NodeExecutionEnv", () => {
-  // Names that trip up shell quoting, options parsing and globbing.
   const name = fc.constantFrom("a", "b c", "-x", "$HOME", "it's", 'q"t', "ü✓", "*", "back\\slash", "--", ".hidden", "~")
   const path = fc.array(name, { minLength: 1, maxLength: 3 }).map((parts) => parts.join("/"))
   const content = fc.oneof(fc.string({ unit: "grapheme", maxLength: 40 }), fc.uint8Array({ maxLength: 300 }), fc.constantFrom("", "\n", "a\r\nb", "\u0000x"))
@@ -213,16 +207,10 @@ describe("shellEnv against Pi's NodeExecutionEnv", () => {
     return result.ok ? { ok: result.value ?? null } : { error: (result.error as { code: string }).code }
   }
 
-  /**
-   * Where the two knowingly differ, each case named: Pi's Node environment reports some errors only as `unknown`,
-   * and shellEnv names them.
-   */
   const allowed = (step: FileOp, shell: unknown, node: unknown) => {
     if (JSON.stringify(node) !== '{"error":"unknown"}') return false
     const named = (shell as { error?: string }).error
-    // Removing a directory without `recursive`.
     if (step.op === "remove") return named === "is_directory"
-    // Writing below a file: Node's parent creation fails without a code.
     if (step.op === "write" || step.op === "append") return named === "not_directory"
     return false
   }

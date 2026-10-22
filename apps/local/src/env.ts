@@ -2,10 +2,6 @@ import { NodeServices } from "@effect/platform-node"
 import { ConfigSource } from "@pi-cloud/config"
 import { type Config, Effect } from "effect"
 
-/**
- * Read a config schema the way every Node entry point does: environment variables first, then the secrets
- * directory. A missing or malformed value stops startup with an error naming it.
- */
 export const load = <A>(config: Config.Config<A>): Promise<A> =>
   Effect.runPromise(
     Effect.gen(function*() {

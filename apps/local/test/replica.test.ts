@@ -17,10 +17,8 @@ import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
 import { type LocalDeployment, startLocal } from "../src/index.ts"
 
-// Pi Durable's storage suite through a replica: reads from the local copy, commits to SQLite first, as on a runner.
 registerStorageConformance({ describe, expect, it }, "ReplicatedStorage over SQLite", async (use) => {
   const dir = await mkdtemp(join(tmpdir(), "pi-cloud-replica-"))
-  // A session's prefixed tables in a shared file, as the control plane keeps them.
   const db = await openNodeSqliteDatabase(join(dir, "pi-cloud.sqlite"))
   const prefix = "s_test_"
   const backend = await SqliteStorage.open(db, { prefix })
@@ -37,9 +35,9 @@ registerStorageConformance({ describe, expect, it }, "ReplicatedStorage over SQL
   const drops: Array<string> = []
   const storage = await ReplicatedStorage.open(remote, await dumpSqlite(db, prefix), memoryReplica, (reason) => drops.push(reason))
   try {
-    expect(storage.replicated).toBe(true)
+    if (!storage.replicated) throw new Error("The replica did not load")
     await use(storage)
-    expect(drops).toEqual([])
+    if (drops.length > 0) throw new Error(`The replica was dropped: ${drops.join("; ")}`)
   } finally {
     await storage.close(BACKGROUND_CONTEXT)
     await backend.close(BACKGROUND_CONTEXT)
@@ -98,7 +96,6 @@ describe("read replicas", () => {
         expect(await main.current.waitForPrompt({ operationId: first.accepted ? first.operationId : "" }))
           .toEqual({ status: "done", text: "First answer." })
 
-        // A new runner loads a fresh copy, including everything the first one committed.
         await local.runners.kill()
         const texts = () => {
           try {

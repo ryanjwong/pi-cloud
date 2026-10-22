@@ -1,23 +1,14 @@
-/** What pi-cloud needs from GitHub, and nothing more. */
 export const APP_PERMISSIONS = { contents: "write", issues: "write", pull_requests: "write", metadata: "read" } as const
 
-/** The events the GitHub trigger handles (`@pi-cloud/trigger-github`). */
 export const APP_EVENTS = ["issues", "issue_comment", "pull_request", "pull_request_review", "pull_request_review_comment"] as const
 
 export interface AppManifestOptions {
-  /** The App's name on GitHub (unique across GitHub). Default `pi-cloud`. */
   readonly name?: string
-  /** The control plane's public URL. Its `/v1/triggers/github` receives the App's webhooks; omit for tokens only. */
   readonly publicUrl?: string
-  /** Where GitHub sends the browser after the App is created, with a code to exchange for its credentials. */
   readonly redirectUrl: string
   readonly description?: string
 }
 
-/**
- * A GitHub App manifest (https://docs.github.com/apps/sharing-github-apps/registering-a-github-app-from-a-manifest)
- * for pi-cloud: private, the permissions its tools and sandboxes use, and the trigger's events and webhook.
- */
 export const appManifest = (options: AppManifestOptions) => {
   const publicUrl = options.publicUrl?.replace(/\/$/, "")
   return {
@@ -33,17 +24,14 @@ export const appManifest = (options: AppManifestOptions) => {
   }
 }
 
-/** What GitHub returns for a created App: everything the control plane needs, once. */
 export interface CreatedApp {
   readonly id: number
   readonly slug: string
   readonly htmlUrl: string
   readonly privateKey: string
-  /** Absent for an App created without a webhook. */
   readonly webhookSecret?: string
 }
 
-/** Exchange the code GitHub redirected with for the new App's credentials. The code is single-use and short-lived. */
 export const convertManifestCode = async (
   code: string,
   options: { readonly apiUrl?: string; readonly fetch?: typeof globalThis.fetch } = {}

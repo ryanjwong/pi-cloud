@@ -12,7 +12,6 @@ describe("RemoteCredentialStore", () => {
       get: async () => stored,
       list: async () => [],
       put: async (_id, version, credential) => {
-        // Another runner refreshes between our read and our write.
         if (!raced) {
           raced = true
           stored = { credential: oauth("theirs"), version: 2 }
@@ -26,7 +25,6 @@ describe("RemoteCredentialStore", () => {
     const result = await store.modify("faux", async (current) => {
       const access = (current as { access: string }).access
       seen.push(access)
-      // Like pi-ai: refresh only a stale token; the other runner's fresh one is used as it is.
       return access === "old" ? oauth("mine") : current
     })
     expect(seen).toEqual(["old", "theirs"])

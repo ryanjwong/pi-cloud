@@ -17,7 +17,6 @@ describe("sqliteCredentials", () => {
       await use("k1", Effect.gen(function*() {
         const store = yield* CredentialStore
         expect(yield* store.put("openai-codex", secret, 0)).toEqual({ stored: true, version: 1 })
-        // A writer that read version 0 loses to the one that wrote first.
         expect(yield* store.put("openai-codex", { ...secret, access: "stale" }, 0)).toEqual({ stored: false, version: 1 })
         expect(yield* store.put("openai-codex", { ...secret, access: "fresh" }, 1)).toEqual({ stored: true, version: 2 })
       }))
@@ -25,7 +24,7 @@ describe("sqliteCredentials", () => {
       expect(raw.includes(Buffer.from("refresh-token-value"))).toBe(false)
       const reopened = await use("k1", Effect.flatMap(CredentialStore, (store) => store.get("openai-codex")))
       expect(Option.getOrThrow(reopened)).toMatchObject({ version: 2, credential: { access: "fresh" } })
-      await expect(use("other", Effect.flatMap(CredentialStore, (store) => store.get("openai-codex")))).rejects.toThrow()
+      await expect(use("other", Effect.flatMap(CredentialStore, (store) => store.get("openai-codex")))).rejects.toThrow(/unable to authenticate/)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

@@ -1,4 +1,4 @@
-import type { Context, JsonValue } from "@earendil-works/chord"
+import type { Context } from "@earendil-works/chord"
 import { Type } from "@earendil-works/pi-ai"
 import { defineDoc, defineExtension, defineTool, hook, section, ToolTask } from "@earendil-works/pi-durable"
 import type { ExecutionEnv } from "@earendil-works/pi-durable/env"
@@ -13,11 +13,6 @@ type StoredSandbox = {
   readonly handle: SandboxHandle
 }
 
-/**
- * Git configuration that authenticates HTTPS remotes with the `credential` secret through a credential helper.
- * The helper reads the variable when git asks, so the token is never written to a command line, a URL, or
- * `.git/config`. Works for GitHub tokens and any host that accepts a token as the password.
- */
 export const gitCredentialEnv = (credential: string): Record<string, string> => ({
   GIT_TERMINAL_PROMPT: "0",
   GIT_CONFIG_COUNT: "1",
@@ -27,7 +22,6 @@ export const gitCredentialEnv = (credential: string): Record<string, string> => 
 
 const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`
 
-/** The session's sandboxes, by name, and which one tools run in. Session-scoped, so subagents share it. */
 export const SandboxesDoc = defineDoc<{ active?: string; sandboxes: Record<string, StoredSandbox> }>({
   kind: "pi-cloud.sandboxes",
   version: 1,
@@ -37,18 +31,11 @@ export const SandboxesDoc = defineDoc<{ active?: string; sandboxes: Record<strin
 
 export interface SandboxPluginOptions {
   readonly providers: ReadonlyArray<SandboxProvider>
-  /** Templates available to every session, merged under the session spec's own `sandboxes`. */
   readonly templates?: Readonly<Record<string, SandboxTemplate>>
 }
 
 const text = (value: string) => [{ type: "text" as const, text: value }]
 
-/**
- * Lets the agent request sandboxes on demand. The session spec names templates (provider, setup script, env,
- * secret names); the agent creates one with `sandbox_create`, and from then on Pi's coding tools (`bash`, `read`,
- * `write`, `edit`, ...) run inside it. Handles live in the session's durable state, so a runner restarted
- * elsewhere reconnects to the same sandbox.
- */
 export const sandboxes = (options: SandboxPluginOptions): RunnerPlugin =>
   definePlugin({
     name: "sandboxes",
@@ -64,7 +51,6 @@ export const sandboxes = (options: SandboxPluginOptions): RunnerPlugin =>
         return found
       }
 
-      /** Template env plus resolved secrets. Secrets are resolved on the runner and never stored. */
       const environment = async (template: SandboxTemplate) => {
         const env: Record<string, string> = { ...template.env }
         for (const name of new Set(template.secrets ?? [])) {
@@ -73,7 +59,6 @@ export const sandboxes = (options: SandboxPluginOptions): RunnerPlugin =>
           env[name] = value
           mask.add(name, value)
         }
-        // A repository credential the runner does not have is skipped: public repositories clone without it.
         const credential = template.repository?.credential
         const token = credential === undefined ? undefined : await plugin.secrets(credential)
         if (credential !== undefined && token !== undefined) {
@@ -84,10 +69,6 @@ export const sandboxes = (options: SandboxPluginOptions): RunnerPlugin =>
         return env
       }
 
-      /**
-       * Commands get the repository credential as it is now, not as it was when the sandbox connected: an issued token
-       * (a GitHub App installation token, an hour long) is refreshed by the runner, and each command sees the fresh one.
-       */
       const refreshing = (env: ExecutionEnv, credential: string | undefined): ExecutionEnv => {
         if (credential === undefined) return env
         const fresh = Object.create(env) as ExecutionEnv
@@ -116,10 +97,6 @@ export const sandboxes = (options: SandboxPluginOptions): RunnerPlugin =>
         return connection
       }
 
-      /**
-       * Clone the template's repository and run its setup commands, streaming their output, unless a marker file says
-       * that already happened (for the same sandbox, created again or reconnected after a restart).
-       */
       const setup = async (
         template: SandboxTemplate,
         stored: StoredSandbox,
@@ -144,11 +121,6 @@ export const sandboxes = (options: SandboxPluginOptions): RunnerPlugin =>
         await shell.exec(`touch ${marker}`, { cwd: stored.handle.cwd }, context)
       }
 
-      /**
-       * The session's own sandbox (`spec.sandbox`), created the first time a tool needs an environment, so tools work
-       * from the first turn as they do with a local Pi. Creation is keyed by session, so a restarted runner finds the
-       * same sandbox; a marker file records that setup finished.
-       */
       let preferred: Promise<{ stored: StoredSandbox; env: ExecutionEnv }> | undefined
       const preferredSandbox = (name: string, context: Context): Promise<{ stored: StoredSandbox; env: ExecutionEnv }> => {
         preferred ??= (async () => {
@@ -183,7 +155,6 @@ export const sandboxes = (options: SandboxPluginOptions): RunnerPlugin =>
             await api.commit(async (tx) => void ((await tx.doc(SandboxesDoc)).active = name), context)
             return { output: text(`Sandbox "${name}" is active (working directory ${existing.handle.cwd}).`) }
           }
-          // The session's own sandbox may already be set up; creating it just activates it.
           if (args.template === plugin.session.spec.sandbox && name === args.template) {
             const { stored } = await preferredSandbox(name, context)
             await api.commit(async (tx) => {
@@ -202,7 +173,6 @@ export const sandboxes = (options: SandboxPluginOptions): RunnerPlugin =>
             }
           }
           const env = await environment(template)
-          // Memoized so a retry after a crash reconnects to the same sandbox rather than creating another.
           let handle = await api.memo<SandboxHandle>("handle", context)
           if (handle === undefined) {
             const created = await Effect.runPromise(
@@ -264,7 +234,6 @@ export const sandboxes = (options: SandboxPluginOptions): RunnerPlugin =>
           name: "pi-cloud-sandboxes",
           tools: [create, destroy],
           sections: [guide],
-          // Whatever a tool returns (command output, file contents, ...) is masked before it is stored.
           hooks: [hook(ToolTask, {
             afterTool: (_call, result) =>
               mask.size === 0 ? undefined : mask.deep(result)

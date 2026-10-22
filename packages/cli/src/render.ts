@@ -5,13 +5,6 @@ type Event = { readonly type: string; readonly [key: string]: unknown }
 const dim = (text: string) => `\x1b[2m${text}\x1b[0m`
 const cyan = (text: string) => `\x1b[36m${text}\x1b[0m`
 
-/**
- * Renders Pi agent events as terminal text. A projection like this is all a client needs: every surface (TUI,
- * web, Slack) is a different renderer over the same event stream.
- *
- * Fast generations may arrive whole (in `message_start` or a final `message` change) rather than as deltas, so
- * the renderer tracks what it already printed of the current assistant message and prints only the rest.
- */
 export const makeRenderer = (write: (text: string) => void) => {
   let printed: string | undefined
 

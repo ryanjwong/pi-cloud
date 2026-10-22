@@ -1,8 +1,3 @@
-/**
- * Pi's interactive components and settings that its durable TUI is built from. The published package
- * only exports its top-level API, so these load the same modules from the installed package's files by path.
- * They are pinned to `@earendil-works/pi-coding-agent` 1.1.0; another version may move them.
- */
 const dist = new URL(".", import.meta.resolve("@earendil-works/pi-coding-agent"))
 const load = (path: string): Promise<any> => import(new URL(path, dist).href)
 

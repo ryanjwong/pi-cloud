@@ -43,7 +43,6 @@ describe("session channel", () => {
       expect(first).toMatchObject({ _tag: "Ok", value: { conversationId: 1 } })
       yield* runEnds(1)
 
-      // Switch the model for the next turn, over the same channel.
       expect(yield* channel.command({ _tag: "Configure", model: { provider: "faux", modelId: "faux-2" } })).toEqual({
         _tag: "Ok"
       })
@@ -52,11 +51,9 @@ describe("session channel", () => {
       const answers = seen.filter((event) => event.type === "message_end" && event.entry?.kind === "pi.assistant")
       expect(answers.map((event) => event.entry.model[0].model)).toEqual(["faux-1", "faux-2"])
 
-      // Unknown plugin commands come back as errors, not dropped connections.
       const unknown = yield* channel.command({ _tag: "Custom", name: "nope", payload: null })
       expect(unknown).toMatchObject({ _tag: "Err", tag: "UnknownCommand" })
 
-      // The same commands work over REST.
       const compacted = yield* api.sessions.command({ params: { id: session.id }, payload: { _tag: "Compact" } })
       expect(compacted.value).toHaveProperty("taskId")
       yield* api.sessions.command({ params: { id: session.id }, payload: { _tag: "Reset", handoff: "fresh start" } })
@@ -84,7 +81,6 @@ describe("session channel", () => {
         socket.onerror = () => resolve("refused")
       })
     expect(await outcome("", { authorization: "Bearer wrong" })).toBe("refused")
-    // Keys travel in the Authorization header only, never in URLs, where proxies and logs keep them.
     expect(await outcome("?token=key-1")).toBe("refused")
     expect(await outcome("", { authorization: "Bearer key-1" })).toBe("open")
   })

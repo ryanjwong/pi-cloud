@@ -15,7 +15,6 @@ import { join, resolve } from "node:path"
 
 const decodeTemplates = Schema.decodeUnknownSync(Schema.Record(Schema.String, SandboxTemplate))
 
-/** Sandbox templates every session may use: `scratch`, plus those in `SANDBOX_TEMPLATES_FILE`. */
 export const loadTemplates = (file: string | undefined): Record<string, SandboxTemplate> => {
   const templates: Record<string, SandboxTemplate> = { scratch: { provider: "local" } }
   if (file === undefined) return templates
@@ -26,15 +25,8 @@ export const loadTemplates = (file: string | undefined): Record<string, SandboxT
   }
 }
 
-/**
- * The plugin set of a Node runner: every pi-ai model provider (API keys or `pi-cloud login` subscriptions), Pi's coding agent (its tools, system prompt and
- * subagents), sandboxes with the configured templates (`local` directories, `docker` containers, and `daytona` when
- * `DAYTONA_API_KEY` is set), and GitHub tools for sessions with a GitHub token (a GitHub App's, or `GITHUB_TOKEN`). Swap or extend freely.
- */
 export const defaultPlugins = (env: RunnerEnv): ReadonlyArray<RunnerPlugin> => {
   const plugins: Array<RunnerPlugin> = [
-    // Every built-in provider: each is usable once it has a credential, an API key in the runner's environment or a
-    // login stored with `pi-cloud login` (ChatGPT/Codex, Claude Pro/Max, GitHub Copilot, ...).
     modelProviders(...builtinProviders()),
     extensions("coding", CodingTools),
     piAgent(),
@@ -50,8 +42,6 @@ export const defaultPlugins = (env: RunnerEnv): ReadonlyArray<RunnerPlugin> => {
       templates: loadTemplates(Option.getOrUndefined(env.templatesFile))
     })
   ]
-  // With a GitHub App on the control plane, sessions about a repository get its installation token; otherwise the
-  // runner's GITHUB_TOKEN, if set. Sessions with neither get no GitHub tools.
   plugins.push(githubTools(Option.match(env.githubToken, { onNone: () => ({}), onSome: (token) => ({ token: Redacted.value(token) }) })))
   return plugins
 }

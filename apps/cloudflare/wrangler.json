@@ -1,0 +1,32 @@
+{
+  "name": "pi-cloud",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-09-15",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "CONTROL_PLANE",
+        "class_name": "ControlPlane"
+      },
+      {
+        "name": "SESSION_HOST",
+        "class_name": "SessionHost"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "ControlPlane",
+        "SessionHost"
+      ]
+    }
+  ],
+  "observability": {
+    "enabled": true
+  }
+}

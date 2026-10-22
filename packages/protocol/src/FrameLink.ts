@@ -1,11 +1,5 @@
 import type { Frame, Link } from "@earendil-works/chord"
 
-/**
- * A Chord link over any ordered transport that carries batches of JSON frames: between the control plane and a
- * runner, over the runner's lease-fenced channel. Frames sent in one turn of the event loop travel as one batch.
- * The transport must deliver batches in order; the side that owns it calls `deliver` and `end`. Frames travel as
- * plain JSON, as over a WebSocket.
- */
 export class FrameLink implements Link {
   readonly #transmit: (frames: ReadonlyArray<Frame>) => void
   #handler: ((frame: Frame) => void) | undefined
@@ -50,7 +44,6 @@ export class FrameLink implements Link {
     this.end(reason)
   }
 
-  /** Frames from the peer, in order. */
   deliver(frames: ReadonlyArray<unknown>): void {
     for (const frame of frames as ReadonlyArray<Frame>) {
       if (this.#closed) return
@@ -60,7 +53,6 @@ export class FrameLink implements Link {
     }
   }
 
-  /** The transport ended. */
   end(reason: string): void {
     if (this.#closed) return
     this.#closed = true
@@ -74,7 +66,6 @@ export class FrameLink implements Link {
     const frames = this.#outgoing
     this.#outgoing = []
     try {
-      // Exactly what a WebSocket link would carry: JSON, so fields set to `undefined` are left out.
       this.#transmit(JSON.parse(JSON.stringify(frames)))
     } catch {
       this.end("transport failed")

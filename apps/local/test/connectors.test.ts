@@ -148,7 +148,6 @@ describe("Slack source", () => {
       extensions: [sources([slackSource({ signingSecret: "s", botToken: "t", apiUrl: `http://127.0.0.1:${base + 1}/api`, spec: { model } })])]
     })
     const send = slackSender(`${deployment.url}/v1/sources/slack`, "s")
-    // An ordinary channel message without a mention is ignored; a direct message is answered.
     await send(slackEvent("E1", { type: "message", channel: "C9", channel_type: "channel", text: "hey all", ts: "5.0" }))
     await send(slackEvent("E2", { type: "message", channel: "D1", channel_type: "im", text: "hi pi", ts: "10.0" }))
     await until(() => slack.posts.length === 1)
@@ -179,11 +178,9 @@ describe("Slack source", () => {
 
     deployment = await start()
     send = slackSender(`${deployment.url}/v1/sources/slack`, "s")
-    // No mention: this only reaches the agent because the thread's binding survived the restart.
     await send(slackEvent("E2", { type: "message", channel: "C1", text: "follow-up", ts: "100.2", thread_ts: "100.1" }))
     await until(() => slack.posts.length === 2)
     await new Promise((resolve) => setTimeout(resolve, 500))
-    // The first answer is in the session's snapshot again after the restart, but it is not posted twice.
     expect(slack.posts.map((post) => post.text)).toEqual(["First answer", "Second answer"])
     expect(slack.posts.every((post) => post.thread_ts === "100.1")).toBe(true)
   }, 30_000)

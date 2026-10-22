@@ -3,7 +3,6 @@ import { PublicApi, RUNNER_RPC_PATH, RunnerRpcs } from "@pi-cloud/protocol"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import { type LocalDeployment, startLocal } from "../src/index.ts"
 
-/** The only endpoints anyone may call without a key. Adding one here is a decision, not an accident. */
 const PUBLIC = new Set(["GET /health", "GET /v1/server"])
 
 let deployment: LocalDeployment
@@ -25,13 +24,11 @@ const endpoints = () => {
   })
   return found
 }
-// Path parameters filled with plausible values, so routing matches and only authentication can refuse.
 const fill = (path: string) => path.replace(/:(\w+)/g, (_, name: string) => (/id$/i.test(name) && name !== "id" ? "1" : "ses_0123456789abcdef0123456789abcdef"))
 
 describe("authentication coverage", () => {
   it("refuses every public API endpoint, as the API declares them, without a valid key", async () => {
     const all = endpoints()
-    // Guard against a vacuous pass if reflection ever finds nothing.
     expect(all.length).toBeGreaterThan(15)
     for (const { method, path } of all) {
       if (PUBLIC.has(`${method} ${path}`)) continue
@@ -44,7 +41,6 @@ describe("authentication coverage", () => {
         expect(response.status, `${method} ${path} with ${authorization ?? "no key"}`).toBe(401)
       }
     }
-    // And the declared public ones really are the only ones.
     for (const entry of PUBLIC) expect(all.map(({ method, path }) => `${method} ${path}`)).toContain(entry)
   })
 
@@ -60,7 +56,6 @@ describe("authentication coverage", () => {
   it("refuses every runner RPC, as the group declares them, without the runner secret", async () => {
     const tags = [...RunnerRpcs.requests.keys()]
     expect(tags.length).toBeGreaterThan(10)
-    // One payload carrying every field any request needs, valid for each, so only authentication can refuse.
     const payload = {
       sessionId: "ses_0123456789abcdef0123456789abcdef",
       token: "t",

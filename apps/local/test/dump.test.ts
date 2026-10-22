@@ -37,19 +37,16 @@ describe("session dump", () => {
               await source.run(`INSERT INTO ${quote(prefix + name)} VALUES (${row.map(() => "?").join(", ")})`, ...(row as never[]))
             }
           }
-          // Another session's tables, and others' look-alikes, share the file and must stay out of the dump.
           for (const other of ["ses_0123456789abcdef0123456789abcdee", "ses_0123456789abcdef0123456789abcdef_x", "x"]) {
             await source.exec(`CREATE TABLE ${quote(`${sessionPrefix(other)}entries`)} (c0 TEXT)`)
             await source.run(`INSERT INTO ${quote(`${sessionPrefix(other)}entries`)} VALUES (?)`, "not this session")
           }
 
-          // Over the wire, as the runner RPC carries it.
           const dump = JSON.parse(JSON.stringify(await dumpSqlite(source, prefix)))
           await loadDump(replica, dump)
 
           const names = async (db: typeof source) =>
             (await db.all<{ name: string }>("SELECT name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY name")).map((row) => row.name)
-          // Exactly what this session created: no more, no less.
           const created = tables.flatMap(({ name }) => [prefix + name, `${prefix}${name}_i`]).sort()
           expect(await names(replica)).toEqual(created)
           for (const { name, types } of tables) {

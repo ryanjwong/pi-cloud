@@ -38,19 +38,11 @@ import {
 } from "@pi-cloud/protocol"
 import { Type } from "typebox"
 
-/**
- * A session's Chord host (`session:<id>`, see `Services.ts` in `@pi-cloud/protocol`), on the runner that hosts it.
- * The control plane connects to it over the runner's channel and relays presentations' references here.
- */
 export interface SessionServices {
-  /** Frames from the control plane on the link numbered `link`; a new number replaces the link. */
   frames(link: number, frames: ReadonlyArray<unknown>): void
-  /** Objects presentations hold right now; the runner stays while there are any. */
   readonly attached: number
   notice(level: Notice["level"], message: string): void
-  /** Report a prompt that ends without an answer, as Pi does. */
   watchAnswer(submission: Submission): void
-  /** Report a compaction's outcome once known, as Pi does. */
   watchCompaction(taskId: TaskId): void
   dispose(): Promise<void>
 }
@@ -84,26 +76,18 @@ const parseSubmissionId = (value: string): SubmissionId | undefined => {
 
 const Anything = Type.Unsafe<any>(Type.Unknown())
 
-/**
- * Serve the session's objects: `pi-cloud.session` and one `pi-cloud.conversation` per conversation, plus whatever
- * `facets` serve. Their state mirrors Pi Durable's replicated states, so a presentation gets a snapshot and then
- * deltas of exactly what Pi commits.
- */
 export const openSessionServices = async (options: {
   readonly sessionId: string
   readonly harness: Harness
   readonly root: PiConversation
   readonly models: ModelRegistry
   readonly facets: ReadonlyArray<Facet<Principal>>
-  /** Send frames to the control plane, in order. Rejects once the lease is gone. */
   readonly transmit: (link: number, frames: ReadonlyArray<Frame>) => Promise<void>
   readonly context: Context
 }): Promise<SessionServices> => {
   const { sessionId, harness, root, models, context } = options
-  /** Pi Durable takes a `Context`; Chord calls carry a signal. */
   const durable = (ctx: Ctx<Principal>) => withAbortSignal(ctx.signal, context)
 
-  // Notices: what went wrong without an error to return.
   const notices = replicatedState<{ list: Array<Notice> }>({ list: [] })
   let nextNotice = 1
   const notice = (level: Notice["level"], message: string) =>
@@ -139,7 +123,6 @@ export const openSessionServices = async (options: {
       else notice("error", `Compaction ${outcome.status}: ${(outcome as { error?: { message?: string } }).error?.message ?? ""}`)
     }, (error) => notice("error", String(error)))
 
-  // The model catalog, shared by every conversation.
   let catalogRevision = 0
   const listModels = async (): Promise<ModelCatalog["availableModels"]> =>
     (await models.getAvailable().catch(() => [])).map((model) => ({
@@ -155,7 +138,6 @@ export const openSessionServices = async (options: {
     refresh: { status: "idle" }
   })
 
-  // Every conversation, the root first, with its label and title; subagents appear as Pi creates them.
   const conversations = replicatedState<{ list: Array<ConversationSummary> }>({ list: [] })
   const listed = new Set<number>()
   const label = (id: number) => (id === root.id ? "main" : `subagent ${id}`)
@@ -197,7 +179,6 @@ export const openSessionServices = async (options: {
   })
   const tasks = await harness.taskGraph(context)
 
-  // Objects presentations hold: while there are any, the runner keeps the session.
   let attached = 0
   const presence = {
     version: 1,
@@ -212,7 +193,6 @@ export const openSessionServices = async (options: {
     onError: (error) => notice("warning", error instanceof Error ? error.message : String(error))
   })
 
-  /** A cell that follows a replicated state: its first value, then every new one, sent as deltas. */
   const mirror = <T>(
     self: Parameters<Parameters<typeof host.serve>[1]>[2],
     name: string,
@@ -376,8 +356,6 @@ export const openSessionServices = async (options: {
   if (saved === undefined) notice("warning", "No model configured; select one with /model.")
   else if (models.getModel(saved.provider, saved.modelId) === undefined) notice("warning", `Saved model is unavailable: ${saved.provider}/${saved.modelId}`)
 
-  // The link to the control plane. Its frames travel in order; a new link number means the control plane
-  // reconnected, and the previous link is gone.
   let upstream: { readonly id: number; readonly link: FrameLink } | undefined
   let sending = Promise.resolve()
   const connect = (id: number) => {

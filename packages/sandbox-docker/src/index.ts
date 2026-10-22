@@ -4,15 +4,10 @@ import { spawn } from "node:child_process"
 import { posix } from "node:path"
 
 export interface DockerSandboxOptions {
-  /** Provider name templates refer to. Default `docker`. */
   readonly name?: string
-  /** Image for templates that name none. It needs a POSIX shell and coreutils; git for repositories. */
   readonly image?: string
-  /** The Docker CLI. Default `docker`; it talks to whatever daemon its environment points at (`DOCKER_HOST`). */
   readonly docker?: string
-  /** Container name prefix. */
   readonly prefix?: string
-  /** Defaults for every container; a template's `options` override them. */
   readonly network?: string
   readonly memory?: string
   readonly cpus?: string
@@ -29,12 +24,6 @@ type Run = {
   readonly stderr: string
 }
 
-/**
- * Sandboxes as Docker containers, one per sandbox, kept running between commands and across runner restarts.
- * Commands see only the container's own environment plus the template's variables and secrets, which are passed
- * per command (never baked into the container, so `docker inspect` does not show them). Containers run without
- * new privileges and with `--init`; `network`, `memory` and `cpus` limit them further.
- */
 export const dockerSandboxes = (options: DockerSandboxOptions = {}): SandboxProvider => {
   const name = options.name ?? "docker"
   const docker = options.docker ?? "docker"
@@ -58,7 +47,6 @@ export const dockerSandboxes = (options: DockerSandboxOptions = {}): SandboxProv
     return result.stdout.trim()
   }
 
-  /** `running`, `stopped`, or `missing`. */
   const state = async (container: string) => {
     const result = await cli(["inspect", "--format", "{{.State.Running}}", container])
     if (result.code !== 0) return "missing" as const
@@ -76,8 +64,6 @@ export const dockerSandboxes = (options: DockerSandboxOptions = {}): SandboxProv
     stdin: true,
     run: (script, run) =>
       new Promise((resolve, reject) => {
-        // Values travel in the CLI's environment and only their names on its command line, so secrets do not show
-        // up in the runner's process list.
         const env = run.env ?? {}
         const args = ["exec", ...(run.stdin === undefined ? [] : ["-i"]), ...Object.keys(env).flatMap((key) => ["-e", key])]
         const child = spawn(docker, [...args, container, "sh", "-c", script], {
@@ -130,7 +116,6 @@ export const dockerSandboxes = (options: DockerSandboxOptions = {}): SandboxProv
               "sleep",
               "infinity"
             ])
-            // Creation is keyed by name, so a concurrent create of the same sandbox is the same container.
             if (created.code !== 0 && !created.stderr.includes("is already in use")) {
               throw new Error(`docker run failed: ${created.stderr.trim()}`)
             }

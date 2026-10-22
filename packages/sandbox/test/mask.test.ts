@@ -4,11 +4,9 @@ import fc from "fast-check"
 import { describe, expect, it } from "vitest"
 import { SecretMask } from "../src/Mask.ts"
 
-// Secrets are long enough to mask, and not part of the markers that replace them.
 const secret = fc.string({ minLength: 6, maxLength: 16, unit: fc.constantFrom(..."abcdefghijklmnopqrstuvwxyz0123456789-_+/=") })
   .filter((value) => !"[secret:S0][secret:S1][secret:S2]".includes(value))
 const secrets = fc.uniqueArray(secret, { minLength: 1, maxLength: 3 })
-/** Output that mixes the secrets into noise, split into chunks at arbitrary points, on two streams. */
 const output = (values: ReadonlyArray<string>) =>
   fc.array(fc.oneof(fc.integer({ min: 0, max: values.length - 1 }).map((index) => values[index]!), fc.string({ maxLength: 12 })), { maxLength: 12 })
     .map((pieces) => pieces.join(""))
@@ -40,7 +38,6 @@ describe("SecretMask", () => {
       fc.asyncProperty(secrets.chain((values) => fc.tuple(fc.constant(values), output(values))), async ([values, { text, cuts, streams }]) => {
         const mask = new SecretMask()
         values.forEach((value, index) => mask.add(`S${index}`, value))
-        // A command whose stdout is `text`, arriving in chunks, interleaved with stderr noise.
         const chunks = [0, ...cuts, text.length].flatMap((start, index, all) => (index === all.length - 1 ? [] : [text.slice(start, all[index + 1])]))
         const env = {
           exec: async (_command: string, options: Parameters<ExecutionEnv["exec"]>[1]) => {
@@ -54,7 +51,6 @@ describe("SecretMask", () => {
         const streamed = { stdout: "", stderr: "" }
         await mask.env(env).exec("cmd", { onOutput: (chunk, _context, info) => void (streamed[info.stream] += chunk) }, BACKGROUND_CONTEXT)
         expect(leaks(streamed.stdout, values)).toEqual([])
-        // Nothing is lost: what streamed is the masked output.
         expect(streamed.stdout).toBe(mask.text(text))
       }),
       { numRuns: 2_000 }

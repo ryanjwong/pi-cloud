@@ -1,6 +1,4 @@
 #!/usr/bin/env node
-// pi-cloud: Pi's TUI on a session that runs entirely in the cloud.
-//   PI_CLOUD_URL=https://pi.example.com pi-cloud            (in a git checkout)
 import { NodeRuntime } from "@effect/platform-node"
 import { type CommandResult, followEvents, openChannel, PiCloud } from "@pi-cloud/client"
 import { runTui } from "@pi-cloud/tui"
@@ -74,13 +72,11 @@ const createSession = Effect.gen(function*() {
   })
 })
 
-/** The checkout's origin and branch, which the cloud session clones. */
 const gitOrigin = () => {
   const git = (...args: Array<string>) => execFileSync("git", args, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim()
   try {
     const remote = git("remote", "get-url", "origin")
     const branch = git("rev-parse", "--abbrev-ref", "HEAD")
-    // SSH remotes are cloned over HTTPS in the cloud, with the server's credential.
     const url = remote.replace(/^git@([^:]+):/, "https://$1/").replace(/^ssh:\/\/git@([^/]+)\//, "https://$1/")
     const name = url.replace(/^https?:\/\/[^/]+\//, "").replace(/\.git$/, "")
     let unpushed = ""
@@ -98,7 +94,6 @@ const gitOrigin = () => {
   }
 }
 
-/** A session whose agent works in a cloud sandbox: a clone of this checkout's origin, or an empty directory. */
 const cloudSession = Effect.gen(function*() {
   const client = yield* PiCloud
   const origin = gitOrigin()
@@ -133,10 +128,6 @@ const parseModel = (value: string) => {
   return { provider: provider!, modelId: modelId.join("/") }
 }
 
-/**
- * Talk to a session over its channel: render its events, send prompts, and wait for each prompt's run to end.
- * Lines starting with `/` are agent commands.
- */
 const converse = (sessionId: string, lines: AsyncIterable<string>, options: { readonly history: boolean }) =>
   Effect.gen(function*() {
     const channel = yield* openChannel({ ...connection, sessionId })
@@ -193,7 +184,6 @@ const converse = (sessionId: string, lines: AsyncIterable<string>, options: { re
     }
   }).pipe(Effect.scoped)
 
-/** Lines typed at a prompt (or piped in), until end of input. */
 async function* typed(): AsyncGenerator<string> {
   const input = createInterface({ input: process.stdin, output: process.stdout, terminal: process.stdin.isTTY })
   input.setPrompt("› ")
@@ -292,7 +282,6 @@ const program = Effect.gen(function*() {
 })
 
 if (command === "github-app") {
-  // Talks to GitHub only; the control plane picks the secrets up on its next start.
   await githubAppCommand(flags, write).catch((error) => {
     process.exitCode = 1
     write(`${error instanceof Error ? error.message : String(error)}\n`)

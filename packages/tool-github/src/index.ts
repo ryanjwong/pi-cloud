@@ -2,27 +2,19 @@ import { Type } from "@earendil-works/pi-ai"
 import { defineExtension, defineTool, section } from "@earendil-works/pi-durable"
 import { definePlugin, type RunnerPlugin } from "@pi-cloud/runner"
 
-/** The GitHub thread a session is about, as the GitHub trigger records it in the session's metadata. */
 export interface GithubThread {
   readonly repository: string
   readonly number: number
 }
 
 export interface GithubToolsOptions {
-  /**
-   * A token that may comment and open pull requests on the repositories the agent works on, used when the session
-   * has no `credential` of its own (a GitHub App token the control plane issues it, see `@pi-cloud/github-app`).
-   */
   readonly token?: string
-  /** The secret name to ask the session for. Default `GITHUB_TOKEN`. */
   readonly credential?: string
-  /** REST API base URL; override for GitHub Enterprise or tests. */
   readonly apiUrl?: string
 }
 
 const text = (value: string) => [{ type: "text" as const, text: value }]
 
-/** The thread recorded by the GitHub trigger in `spec.metadata.github`, if the session has one. */
 export const threadOf = (metadata: Readonly<Record<string, unknown>> | undefined): GithubThread | undefined => {
   const github = metadata?.github as { repository?: unknown; number?: unknown } | undefined
   return typeof github?.repository === "string" && typeof github.number === "number"
@@ -30,15 +22,6 @@ export const threadOf = (metadata: Readonly<Record<string, unknown>> | undefined
     : undefined
 }
 
-/**
- * GitHub tools, run by the runner itself (not inside a sandbox, so the token stays out of the agent's reach). The
- * token is the session's `GITHUB_TOKEN` (with a GitHub App: an installation token for the session's repository,
- * refreshed as it expires), else `options.token`. Sessions with neither get no GitHub tools.
- *
- * - `github_comment` comments on an issue or pull request; in a session started by the GitHub trigger it
- *   defaults to that thread, which is how the agent answers the people who mentioned it.
- * - `github_open_pull_request` opens a pull request from a pushed branch.
- */
 export const githubTools = (options: GithubToolsOptions): RunnerPlugin =>
   definePlugin({
     name: "github",
@@ -47,7 +30,6 @@ export const githubTools = (options: GithubToolsOptions): RunnerPlugin =>
       const thread = threadOf(session.spec.metadata)
       const credential = options.credential ?? "GITHUB_TOKEN"
       const token = async () => (await secrets(credential)) ?? options.token
-      // A token that could not be issued just now (GitHub unreachable) still means the session has one.
       if ((await token().catch(() => "unavailable")) === undefined) return {}
 
       const request = async (method: string, path: string, body: unknown) => {
