@@ -177,12 +177,24 @@ export class Runners extends Context.Service<Runners, {
         if (channel !== undefined) yield* Queue.offer(channel.queue, { _tag: "Command", commandId: crypto.randomUUID(), command })
       })
 
+      const recovering = new Set<string>()
       yield* Effect.gen(function*() {
         for (const sessionId of yield* leases.takeAbandoned()) {
           const stale = channels.get(sessionId)
           if (stale !== undefined) yield* closeChannel(sessionId, stale, "The runner's lease expired")
+          recovering.add(sessionId)
+        }
+        for (const sessionId of recovering) {
+          if (Option.isSome(yield* leases.current(sessionId))) {
+            recovering.delete(sessionId)
+            continue
+          }
           const exists = yield* sessions.get(sessionId as Session["id"]).pipe(Effect.orElseSucceed(() => Option.none()))
-          if (Option.isNone(exists) || waiters.has(sessionId)) continue
+          if (Option.isNone(exists)) {
+            recovering.delete(sessionId)
+            continue
+          }
+          if (waiters.has(sessionId)) continue
           yield* Effect.logInfo("Waking session after its runner's lease expired", { sessionId })
           yield* awaitRunner(sessionId).pipe(
             Effect.catch((error) => Effect.logWarning("Recovery wake failed", { sessionId, error: error.message })),

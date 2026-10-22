@@ -1,7 +1,12 @@
 import { fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai/providers/faux"
 import { entryText, PiCloud } from "@pi-cloud/client"
-import { makeClient, modelProviders } from "@pi-cloud/runner"
-import { Effect, Exit, Fiber, Option, Stream } from "effect"
+import { NodeHttpServer } from "@effect/platform-node"
+import { ControlPlane } from "@pi-cloud/control-plane"
+import { RunnerDispatcher } from "@pi-cloud/core"
+import { makeClient, modelProviders, RunnerHost } from "@pi-cloud/runner"
+import { Effect, Exit, Fiber, Layer, Option, Stream } from "effect"
+import { HttpRouter } from "effect/http"
+import { createServer } from "node:http"
 import { afterEach, describe, expect, it } from "vitest"
 import { type LocalDeployment, startLocal } from "../src/index.ts"
 
@@ -150,3 +155,51 @@ const firstLease = (rpc: Rpc, sessionId: string, runnerId: string) =>
     if (Option.isNone(first) || first.value._tag !== "LeaseGranted") return yield* Effect.die("no lease")
     return first.value
   })
+
+describe("lost wakes", () => {
+  it("recovers a session whose recovery wake was lost, by waking it again", async () => {
+    const faux = fauxProvider()
+    let hang: () => void = () => {}
+    faux.setResponses([
+      () => new Promise((resolve) => { hang = () => resolve(fauxAssistantMessage("too late")) }),
+      fauxAssistantMessage("Recovered after a lost wake")
+    ])
+    const base = port()
+    const url = `http://127.0.0.1:${base}`
+    const secret = "lost-wake-secret"
+    const runners = new RunnerHost({ plugins: [modelProviders(faux.provider)], secret, controlPlaneUrl: url, idleMs: 5_000 })
+    let wakes = 0
+    const server = Effect.runFork(Layer.launch(HttpRouter.serve(ControlPlane.layer({
+      settings: { ...settings, publicUrl: url, attachTimeoutMs: 1_500 },
+      runnerSecret: secret,
+      dispatcher: RunnerDispatcher.make(async (request) => {
+        wakes++
+        if (wakes === 2) return
+        await runners.wake(request)
+      })
+    }), { disableLogger: true }).pipe(Layer.provide(NodeHttpServer.layer(createServer, { port: base, host: "127.0.0.1" })))))
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 300))
+      await Effect.runPromise(Effect.gen(function*() {
+        const client = yield* PiCloud
+        const session = yield* client.sessions.create({ payload: { spec: { model } } })
+        const submitted = yield* client.sessions.submit({ params: { id: session.id }, payload: { content: "Work" } })
+        yield* Effect.promise(async () => {
+          while (faux.state.callCount === 0) await new Promise((resolve) => setTimeout(resolve, 20))
+          await runners.kill()
+        })
+        hang()
+        const record = yield* poll(
+          client.sessions.submission({ params: { id: session.id, submissionId: submitted.submissionId } }),
+          (value) => (value as { status?: string } | null)?.status === "done",
+          20_000
+        )
+        expect(record).toBeTruthy()
+        expect(wakes).toBeGreaterThanOrEqual(3)
+      }).pipe(Effect.provide(PiCloud.layer({ url }))))
+    } finally {
+      await runners.close()
+      await Effect.runPromise(Fiber.interrupt(server))
+    }
+  }, 40_000)
+})

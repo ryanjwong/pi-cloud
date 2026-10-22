@@ -16,6 +16,7 @@ export class RunnerHost {
   private readonly scope = Effect.runSync(Scope.make())
   private readonly clients = new Map<string, Promise<ControlPlaneClient>>()
   private readonly sessions = new Map<string, Fiber.Fiber<StopReason>>()
+  private readonly deferred = new Map<string, WakeRequest>()
 
   private readonly options: RunnerHostOptions
 
@@ -25,14 +26,26 @@ export class RunnerHost {
 
   async wake(request: WakeRequest): Promise<void> {
     const url = this.options.controlPlaneUrl ?? request.controlPlaneUrl
-    if (this.sessions.has(request.sessionId)) return
+    if (this.sessions.has(request.sessionId)) {
+      this.deferred.set(request.sessionId, request)
+      return
+    }
     const client = await this.client(url)
-    if (this.sessions.has(request.sessionId)) return
+    if (this.sessions.has(request.sessionId)) {
+      this.deferred.set(request.sessionId, request)
+      return
+    }
+    this.deferred.delete(request.sessionId)
     const fiber = Effect.runFork(hostSession(client, request.sessionId, this.options))
     this.sessions.set(request.sessionId, fiber)
     fiber.addObserver((exit) => {
       if (this.sessions.get(request.sessionId) === fiber) this.sessions.delete(request.sessionId)
       this.options.onStop?.(request.sessionId, Exit.isSuccess(exit) ? exit.value : "failed")
+      const again = this.deferred.get(request.sessionId)
+      if (again !== undefined && !this.sessions.has(request.sessionId)) {
+        this.deferred.delete(request.sessionId)
+        void this.wake(again).catch(() => {})
+      }
     })
   }
 
@@ -64,6 +77,7 @@ export class RunnerHost {
   }
 
   async kill(): Promise<void> {
+    this.deferred.clear()
     const fibers = [...this.sessions.values()]
     this.sessions.clear()
     await Effect.runPromise(Fiber.interruptAll(fibers))
