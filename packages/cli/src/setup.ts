@@ -14,6 +14,7 @@ const root = resolve(import.meta.dirname, "../../..")
 const app = join(root, "apps/cloudflare")
 const wranglerBin = join(app, "node_modules/wrangler/bin/wrangler.js")
 const wranglerEnv = { ...process.env, WRANGLER_SEND_METRICS: "false" }
+const checkout = !root.startsWith("/nix/store/") && existsSync(join(root, ".git"))
 
 const REQUIRED = ["PI_CLOUD_API_KEYS", "PI_CLOUD_RUNNER_SECRET", "PI_CLOUD_CREDENTIAL_KEY"] as const
 const ASKED = [
@@ -152,6 +153,15 @@ export const init = async (): Promise<Record<string, string>> => {
   return { ...current, ...added }
 }
 
+const readIfExists = (file: string) => (existsSync(file) ? readFileSync(file, "utf8") : undefined)
+
+export const staleDependencies = (dir: string) => {
+  const wanted = readIfExists(join(dir, "pnpm-lock.yaml"))
+  return wanted !== undefined && wanted !== readIfExists(join(dir, "node_modules/.pnpm/lock.yaml"))
+}
+
+const STALE = `dependencies are out of date: run pnpm install in ${root}`
+
 export const workerConfig = (name: string) => {
   const base = JSON.parse(readFileSync(join(app, "wrangler.json"), "utf8"))
   return { ...base, name, main: join(app, base.main) }
@@ -159,6 +169,7 @@ export const workerConfig = (name: string) => {
 
 export const deploy = async (kind: string | undefined, name = "pi-cloud") => {
   if (kind !== "cloudflare") throw new Error("Usage: pi-cloud deploy cloudflare [--name <worker>]")
+  if (checkout && staleDependencies(root)) throw new Error(STALE)
   const secrets = await init()
   await privately(async (project) => {
     const config = join(project, "wrangler.json")
@@ -211,6 +222,10 @@ export const doctor = async (flagUrl?: string, flagKey?: string) => {
       return undefined
     }
   }
+  if (checkout) {
+    const stale = staleDependencies(root)
+    check(!stale, stale ? STALE : "dependencies are up to date")
+  }
   const tools = has("sops") && has("age-keygen")
   if (tools || existsSync(secrets) || Object.keys(readSettings().targets ?? {}).length > 0) check(tools, "sops and age are installed")
   else write("· sops and age are needed for init and deploy: brew install sops age\n")
@@ -236,7 +251,7 @@ export const doctor = async (flagUrl?: string, flagKey?: string) => {
 }
 
 export const update = async () => {
-  const method = root.startsWith("/nix/store/") ? "nix" : existsSync(join(root, ".git")) ? "git" : undefined
+  const method = checkout ? "git" : root.startsWith("/nix/store/") ? "nix" : undefined
   if (method === undefined) throw new Error(`pi-cloud was not installed with Nix or from a git checkout; reinstall it: ${INSTALL}`)
   step("Updating pi-cloud")
   if (method === "nix") need("nix", ["profile", "upgrade", "--refresh", "pi-cloud"])

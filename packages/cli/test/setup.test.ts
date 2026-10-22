@@ -1,5 +1,8 @@
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { describe, expect, it } from "vitest"
-import { clean, type GithubAppIo, offerGithubApp } from "../src/setup.ts"
+import { clean, type GithubAppIo, offerGithubApp, staleDependencies } from "../src/setup.ts"
 
 describe("clean", () => {
   it("strips bracketed-paste markers and control characters", () => {
@@ -44,5 +47,19 @@ describe("deploy and GitHub", () => {
     const stored = io(true)
     expect(await offerGithubApp(url, "pi-cloud", { GITHUB_APP_ID: "1" }, stored.value)).toEqual({})
     expect([stored.calls.asked, stored.calls.created, stored.calls.written]).toEqual([[], [], ""])
+  })
+})
+
+describe("staleDependencies", () => {
+  it("is stale until node_modules holds the lockfile's install", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pi-cloud-deps-"))
+    expect(staleDependencies(dir)).toBe(false)
+    writeFileSync(join(dir, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\nimporters: {}\n")
+    expect(staleDependencies(dir)).toBe(true)
+    mkdirSync(join(dir, "node_modules/.pnpm"), { recursive: true })
+    writeFileSync(join(dir, "node_modules/.pnpm/lock.yaml"), "lockfileVersion: '9.0'\nimporters: {}\n")
+    expect(staleDependencies(dir)).toBe(false)
+    writeFileSync(join(dir, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\nimporters:\n  apps/cloudflare: {}\n")
+    expect(staleDependencies(dir)).toBe(true)
   })
 })
