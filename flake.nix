@@ -79,15 +79,32 @@
       } // nixpkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux (nixpkgs.lib.mapAttrs' (name: value: nixpkgs.lib.nameValuePair "nixos-${name}" value)
         (import ./nix/tests.nix { inherit pkgs; module = self.nixosModules.default; })));
 
-      devShells = forAllSystems (pkgs: {
-        default = pkgs.mkShell {
-          packages = [ pkgs.nodejs_22 pkgs.pnpm_10 pkgs.nixpkgs-fmt pkgs.sops pkgs.age pkgs.ssh-to-age pkgs.litestream ];
-          shellHook = ''
-            echo "pi-cloud dev shell: node $(node --version), pnpm $(pnpm --version), $(sops --version | head -1)"
-            echo "run with secrets: sops exec-env secrets.yaml 'pnpm start'"
+      devShells = forAllSystems (pkgs:
+        let
+          checkout = name: script: pkgs.writeShellScriptBin name ''
+            exec ${pkgs.nodejs_22}/bin/node "''${PI_CLOUD_ROOT:?enter the dev shell from a pi-cloud checkout}/${script}" "$@"
           '';
-        };
-      });
+        in
+        {
+          default = pkgs.mkShell {
+            packages = [ pkgs.nodejs_22 pkgs.pnpm_10 pkgs.nixpkgs-fmt pkgs.sops pkgs.age pkgs.ssh-to-age pkgs.litestream ]
+              ++ pkgs.lib.mapAttrsToList checkout {
+              pi-cloud = "packages/cli/src/main.ts";
+              pi-cloud-server = "apps/local/src/main.ts";
+              pi-cloud-control = "apps/local/src/control-plane.ts";
+              pi-cloud-runner = "apps/local/src/runner.ts";
+              pi-cloud-config = "apps/local/src/config.ts";
+            };
+            shellHook = ''
+              r="''${PI_CLOUD_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+              unset PI_CLOUD_ROOT
+              [ -f "$r/packages/cli/src/main.ts" ] && export PI_CLOUD_ROOT="$r"
+              unset r
+              echo "pi-cloud dev shell: node $(node --version), pnpm $(pnpm --version), $(sops --version | head -1)"
+              echo "pi-cloud and pi-cloud-server run ''${PI_CLOUD_ROOT:-nothing: not in a pi-cloud checkout}"
+            '';
+          };
+        });
 
       formatter = forAllSystems (pkgs: pkgs.nixpkgs-fmt);
 

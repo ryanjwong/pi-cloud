@@ -16,9 +16,10 @@ Cloudflare.
 nix profile install github:ryanjwong/pi-cloud/stable#pi-cloud
 ```
 
-That gives you `pi-cloud` and `pi-cloud-server`. Without Nix, with Node 22.19+, pnpm, `sops` and `age`:
-`git clone -b stable https://github.com/ryanjwong/pi-cloud.git && cd pi-cloud && pnpm install`, then
-`alias pi-cloud="node $PWD/packages/cli/src/main.ts"`.
+That gives you `pi-cloud` and `pi-cloud-server`. In a checkout, after `pnpm install`, `nix develop` puts both on
+the PATH running the checkout's source (`nix develop -c pi-cloud doctor`). Without Nix, with Node 22.19+, pnpm,
+`sops` and `age`: `git clone -b stable https://github.com/ryanjwong/pi-cloud.git && cd pi-cloud && pnpm install`,
+then `alias pi-cloud="node $PWD/packages/cli/src/main.ts"`.
 
 `pi-cloud update` updates either install from GitHub and redeploys your servers. `pi-cloud doctor` checks the
 setup: tools, secrets, the server and the API key.
