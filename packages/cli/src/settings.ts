@@ -22,7 +22,8 @@ export const paths = () => {
     settings: join(dir, "config.json"),
     ageKey: process.env.SOPS_AGE_KEY_FILE ?? join(dir, "age.key"),
     sopsConfig: join(dir, ".sops.yaml"),
-    secrets: join(dir, "secrets.yaml")
+    secrets: join(dir, "secrets.yaml"),
+    adminToken: join(dir, "admin-token")
   }
 }
 
@@ -108,9 +109,14 @@ export const resolveConnection = (flagUrl?: string, flagKey?: string, secrets = 
   const target = saved.default === undefined ? undefined : saved.targets?.[saved.default]
   const explicit = flagUrl ?? process.env.PI_CLOUD_URL
   const savedKey = () => secrets().PI_CLOUD_API_KEYS?.split(",")[0]?.trim()
+  const url = explicit ?? target?.url ?? LOCAL_URL
+  const localKey = () =>
+    ["127.0.0.1", "localhost", "[::1]"].includes(new URL(url).hostname) && existsSync(paths().adminToken)
+      ? readFileSync(paths().adminToken, "utf8").trim()
+      : undefined
   return {
-    url: explicit ?? target?.url ?? LOCAL_URL,
-    apiKey: flagKey ?? process.env.PI_CLOUD_API_KEY ?? (explicit === undefined && target !== undefined ? savedKey() : undefined)
+    url,
+    apiKey: flagKey ?? process.env.PI_CLOUD_API_KEY ?? (explicit === undefined && target !== undefined ? savedKey() : localKey())
   }
 }
 

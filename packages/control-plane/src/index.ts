@@ -1,6 +1,7 @@
 export * as ControlPlane from "./ControlPlane.ts"
 export type { ControlPlaneOptions, Extension } from "./ControlPlane.ts"
-export { ApiAuthLive, ClientAuth, RunnerAuth } from "./http/Auth.ts"
+export * from "./http/Auth.ts"
+export * from "./http/PullDispatcher.ts"
 export * from "./Runners.ts"
 export * from "./Sessions.ts"
 export * from "./services/ServiceHost.ts"

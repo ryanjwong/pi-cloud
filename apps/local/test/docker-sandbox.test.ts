@@ -120,7 +120,7 @@ describe.skipIf(!available)("Docker sandboxes", () => {
       expect(docker("exec", container, "sh", "-c", "ps -eo args | grep -c '^sleep 60' || true")).toBe("0")
       expect(docker("inspect", container)).not.toContain("tok_in_the_container")
       expect(docker("inspect", "--format", "{{.Config.Image}}", container)).toBe(DEFAULT_IMAGE)
-    }).pipe(Effect.provide(PiCloud.layer({ url: deployment.url }))))
+    }).pipe(Effect.provide(PiCloud.layer(deployment!))))
   }, 60_000)
 })
 

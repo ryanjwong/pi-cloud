@@ -32,26 +32,50 @@ describe("credentialSealer", () => {
   it("opens what it seals, and never stores the credential in the clear", () => {
     fc.assert(
       fc.property(fc.string({ minLength: 1 }), credential, (key, value) => {
-        const sealer = credentialSealer(key)
-        const sealed = sealer.seal(value)
-        expect(sealer.open(sealed)).toEqual(value)
-        expect(sealer.seal(value)).not.toBe(sealed)
+        const sealer = credentialSealer([key])
+        const sealed = sealer.seal("anthropic", value)
+        expect(sealer.open("anthropic", sealed)).toEqual(value)
+        expect(sealer.seal("anthropic", value)).not.toBe(sealed)
         for (const field of Object.values(value)) if (typeof field === "string" && field.length >= 4) expect(sealed).not.toContain(field)
       })
     )
   })
 
-  it("refuses anything tampered with, or sealed under another key", () => {
+  it("refuses anything tampered with, moved to another provider, or sealed under another key", () => {
     fc.assert(
       fc.property(fc.string({ minLength: 1 }), fc.string({ minLength: 1 }), credential, fc.nat(), fc.integer({ min: 1, max: 255 }), (key, other, value, at, flip) => {
         fc.pre(key !== other)
-        const sealed = credentialSealer(key).seal(value)
-        const bytes = Buffer.from(sealed.slice("aes256gcm:".length), "base64")
+        const sealer = credentialSealer([key])
+        const sealed = sealer.seal("anthropic", value)
+        const prefix = sealed.slice(0, "gcm:00000000:".length)
+        const bytes = Buffer.from(sealed.slice(prefix.length), "base64")
         bytes[at % bytes.length] = bytes[at % bytes.length]! ^ flip
-        expect(() => credentialSealer(key).open(`aes256gcm:${bytes.toString("base64")}`)).toThrow(/unable to authenticate/)
-        expect(() => credentialSealer(other).open(sealed)).toThrow(/unable to authenticate/)
-        expect(() => credentialSealer(undefined).open(sealed)).toThrow(/encrypted/)
+        expect(() => sealer.open("anthropic", `${prefix}${bytes.toString("base64")}`)).toThrow(/unable to authenticate/)
+        expect(() => sealer.open("openai", sealed)).toThrow(/unable to authenticate/)
+        expect(() => credentialSealer([other]).open("anthropic", sealed)).toThrow(/No configured credential key/)
+        expect(() => sealer.open("anthropic", `plain:${JSON.stringify(value)}`)).toThrow(/refused/)
       })
     )
+  })
+
+  it("refuses an entry whose tag was cut short", () => {
+    const sealer = credentialSealer(["key"])
+    const sealed = sealer.seal("anthropic", { type: "api_key", key: "k" })
+    const prefix = sealed.slice(0, "gcm:00000000:".length)
+    const cut = Buffer.from(sealed.slice(prefix.length), "base64").subarray(0, 16).toString("base64")
+    expect(() => sealer.open("anthropic", `${prefix}${cut}`)).toThrow(/truncated/)
+  })
+
+  it("rotates keys: the first encrypts, every listed key decrypts, and migration reseals old entries once", () => {
+    const value = { type: "api_key" as const, key: "sk-secret-value" }
+    const old = credentialSealer(["old"]).seal("anthropic", value)
+    const rotated = credentialSealer(["new", "old"])
+    expect(rotated.open("anthropic", old)).toEqual(value)
+    const resealed = rotated.migrate("anthropic", old)!
+    expect(rotated.open("anthropic", resealed)).toEqual(value)
+    expect(rotated.migrate("anthropic", resealed)).toBeUndefined()
+    expect(() => credentialSealer(["new"]).open("anthropic", old)).toThrow(/No configured credential key/)
+    expect(rotated.open("anthropic", rotated.migrate("anthropic", `plain:${JSON.stringify(value)}`)!)).toEqual(value)
+    expect(() => credentialSealer([])).toThrow(/PI_CLOUD_CREDENTIAL_KEY/)
   })
 })

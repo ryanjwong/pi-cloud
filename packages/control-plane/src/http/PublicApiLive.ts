@@ -1,6 +1,6 @@
 import { ControlPlaneConfig, CredentialStore, parsePosition, type VersionedCredential } from "@pi-cloud/core"
-import { CommandFailed, type CredentialInfo, PublicApi, type SessionId, type Submitted, VERSION } from "@pi-cloud/protocol"
-import { Effect, Layer, Option } from "effect"
+import { type CredentialInfo, PublicApi, type SessionId, type Submitted, VERSION } from "@pi-cloud/protocol"
+import { Effect, Layer } from "effect"
 import { HttpApiBuilder } from "effect/http-api"
 import { SERVICES_PATH } from "../services/ServiceHost.ts"
 import { Sessions } from "../Sessions.ts"
@@ -19,11 +19,7 @@ export const SessionsApiLive = HttpApiBuilder.group(
         sessions.command(params.id, { _tag: "Prompt", ...payload }).pipe(Effect.map((value) => value as Submitted)))
       .handle("command", ({ params, payload }) =>
         sessions.command(params.id, payload).pipe(Effect.map((value) => ({ value: value as never }))))
-      .handle("abort", ({ params, payload }) =>
-        sessions.command(params.id, { _tag: "Abort", ...payload }).pipe(
-          Effect.asVoid,
-          Effect.catchTag("ConversationBusy", (error) => Effect.fail(new CommandFailed({ message: error._tag })))
-        ))
+      .handle("abort", ({ params, payload }) => sessions.command(params.id, { _tag: "Abort", ...payload }).pipe(Effect.asVoid))
       .handle("events", ({ params, query }) => sessions.events(params.id, parsePosition(query.after)))
       .handle("entries", ({ params, query }) =>
         sessions.entries(params.id, query).pipe(Effect.map((page) => page as { entries: Array<never>; next?: string })))
@@ -44,14 +40,12 @@ const infoOf = (entry: VersionedCredential): CredentialInfo => ({
 export const CredentialsApiLive = HttpApiBuilder.group(PublicApi, "credentials", Effect.fn(function*(handlers) {
   const credentials = yield* CredentialStore
   return handlers
-    .handle("list", () => credentials.list().pipe(Effect.orDie, Effect.map((all) => all.map(infoOf))))
+    .handle("list", () => credentials.list().pipe(Effect.map((all) => all.map(infoOf))))
     .handle("put", ({ params, payload }) =>
-      Effect.gen(function*() {
-        yield* credentials.put(params.providerId, payload)
-        const stored = yield* credentials.get(params.providerId)
-        return infoOf(Option.getOrThrow(stored))
-      }).pipe(Effect.orDie))
-    .handle("delete", ({ params }) => credentials.remove(params.providerId).pipe(Effect.orDie))
+      credentials.put(params.providerId, payload).pipe(
+        Effect.map(({ version }) => infoOf({ providerId: params.providerId, credential: payload, version, updatedAt: Date.now() }))
+      ))
+    .handle("delete", ({ params }) => credentials.remove(params.providerId))
 }))
 
 const info = { version: VERSION, servicesPath: SERVICES_PATH }

@@ -51,7 +51,7 @@ describe("the service API", () => {
       },
       settings: { templates: { home: { provider: "local" } } }
     })
-    const connection = await connectServices({ url: deployment.url })
+    const connection = await connectServices(deployment)
     try {
       const directory = await connection.sessions()
       const created = await directory.create({
@@ -106,7 +106,7 @@ describe("the service API", () => {
       runner: { idleMs: 5_000, plugins: [modelProviders(faux.provider)] }
     })
     const local = deployment
-    const connection = await connectServices({ url: local.url })
+    const connection = await connectServices(local)
     try {
       const directory = await connection.sessions()
       const created = await directory.create({ spec: { model: { provider: "faux", modelId: "faux-1" } } })

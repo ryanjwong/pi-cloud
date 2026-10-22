@@ -1,5 +1,6 @@
 import { makeClient } from "@pi-cloud/runner"
 import { PiCloud } from "@pi-cloud/client"
+import { RunnerDispatcher } from "@pi-cloud/core"
 import fc from "fast-check"
 import { Effect, Exit, Option, Stream } from "effect"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
@@ -7,6 +8,7 @@ import { type LocalDeployment, startLocal } from "../src/index.ts"
 
 const TTL = 300
 const secret = "fencing-secret"
+const grants = new Map<string, string>()
 let deployment: LocalDeployment
 
 beforeAll(async () => {
@@ -14,6 +16,7 @@ beforeAll(async () => {
     port: 41_000 + Math.floor(Math.random() * 10_000),
     settings: { leaseTtlMs: TTL, recoveryIntervalMs: 600_000, attachTimeoutMs: 5_000 },
     runnerSecret: secret,
+    dispatcher: RunnerDispatcher.make(async (wake) => void grants.set(wake.sessionId, wake.grant)),
     runner: { plugins: [] }
   })
 })
@@ -31,8 +34,10 @@ describe("commit invariants", () => {
           const api = yield* PiCloud
           const rpc = yield* makeClient({ url: deployment.url, secret })
           const { id: sessionId } = yield* api.sessions.create({ payload: {} })
+          yield* api.sessions.command({ params: { id: sessionId }, payload: { _tag: "Abort" } }).pipe(Effect.ignore, Effect.forkScoped)
+          while (!grants.has(sessionId)) yield* Effect.sleep(5)
           const attach = (runnerId: string) =>
-            Stream.runHead(rpc.Attach({ sessionId, runnerId })).pipe(
+            Stream.runHead(rpc.Attach({ sessionId, runnerId, grant: grants.get(sessionId)! })).pipe(
               Effect.map((first) => Option.getOrThrow(first)),
               Effect.map((message) => (message._tag === "LeaseGranted" ? message.token : "")),
             )
@@ -67,7 +72,7 @@ describe("commit invariants", () => {
           expect(lastOfA).toBeLessThan(firstOfB)
           const next = yield* rpc.Storage({ sessionId, token: tokens.B, method: "commit", args: [[]] })
           expect(next.value).toBe(applied.length + 1)
-        }).pipe(Effect.provide(PiCloud.layer({ url: deployment.url })))))
+        }).pipe(Effect.provide(PiCloud.layer(deployment!)))))
       }),
       { numRuns: 25 }
     )

@@ -36,10 +36,14 @@ Then, in another terminal:
 cd ~/code/some-repo && pi-cloud
 ```
 
-Without an API key, sign in with a subscription instead: `pi-cloud login anthropic` (Claude Pro/Max) or
+The server's own admin key goes to `.data/admin-token` (mode 0600), and the CLI on the same machine picks it up;
+elsewhere, pass `--api-key` or `PI_CLOUD_API_KEY`. Keys can be scoped to `read`, `write` or `admin` in the server
+config ([Security](docs/security.md#authentication)).
+
+Without a model API key, sign in with a subscription instead: `pi-cloud login anthropic` (Claude Pro/Max) or
 `pi-cloud login openai-codex` (ChatGPT).
 
-The local server listens on loopback only, with no API key. The agent's sandbox is a Docker container running as
+The local server listens on loopback only and uses its generated admin key. The agent's sandbox is a Docker container running as
 user 1000; without Docker, `PI_CLOUD_UNSAFE_LOCAL_SANDBOX=1` makes it a plain host directory, not isolated. Sandbox
 templates, models and trigger rules live in a [server config](docs/security.md#server-config). The built-in
 template starts empty; to have `pi-cloud` clone your checkout, start the server with a default template that lists

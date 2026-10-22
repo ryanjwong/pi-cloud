@@ -21,12 +21,14 @@ sops exec-env secrets.yaml 'pnpm start'
 The control plane and a runner share the process but still talk over HTTP, as they would on separate machines.
 The API is on port 8787 (`PORT`, `HOST`), with docs at `/docs` and the OpenAPI document at `/openapi.json`.
 
-On `127.0.0.1` it needs no secrets. On any other `HOST` it refuses to start without `PI_CLOUD_API_KEYS` and
-`PI_CLOUD_CREDENTIAL_KEY`.
+On `127.0.0.1` it needs no secrets: it writes an admin key to `DATA_DIR/admin-token` and a credential key to
+`DATA_DIR/credential-key` (both mode 0600), and the CLI on the same machine uses the admin key. On any other
+`HOST` it refuses to start without `PI_CLOUD_API_KEYS` (or `auth.keys`) and `PI_CLOUD_CREDENTIAL_KEY`.
 
 ## Control plane and runners on separate machines
 
-The control plane wakes runners over HTTP, and runners connect back. Both sides share `PI_CLOUD_RUNNER_SECRET`.
+Runner hosts keep one outbound WebSocket to the control plane and receive wake requests over it, so they need no
+inbound port and can sit behind NAT. Both sides share `PI_CLOUD_RUNNER_SECRET`.
 
 On the runner machine, with `CONTROL_PLANE_URL`, `PI_CLOUD_RUNNER_SECRET` and the model keys set:
 
@@ -34,15 +36,22 @@ On the runner machine, with `CONTROL_PLANE_URL`, `PI_CLOUD_RUNNER_SECRET` and th
 sops exec-env secrets.yaml 'node apps/local/src/runner.ts'
 ```
 
-On the control plane machine, with `RUNNER_URL`, `PI_CLOUD_API_KEYS`, `PI_CLOUD_RUNNER_SECRET` and
-`PI_CLOUD_CREDENTIAL_KEY` set:
+On the control plane machine, with `PI_CLOUD_API_KEYS`, `PI_CLOUD_RUNNER_SECRET` and `PI_CLOUD_CREDENTIAL_KEY`
+set:
 
 ```sh
 sops exec-env secrets.yaml 'node apps/local/src/control-plane.ts'
 ```
 
 Each refuses to start without the settings listed. A runner only ever connects to its configured
-`CONTROL_PLANE_URL`, so a forged wake request cannot point it somewhere else.
+`CONTROL_PLANE_URL`, so a wake request cannot point it somewhere else.
+
+## Private deployment
+
+Keep the control plane off the public internet by binding it to a mesh address: set `HOST` to the machine's
+NetBird or Headscale/Tailscale IP, and `PUBLIC_URL` and the runners' `CONTROL_PLANE_URL` to that address. Runners
+only dial out, so they need nothing but a route to it. pi-cloud ships no mesh code; any of these works as is. On
+Cloudflare, `cloudflared` with a Workers VPC binding can keep the Worker's backends private, which is optional.
 
 ## NixOS
 

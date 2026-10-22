@@ -1,89 +1,48 @@
-import { NodeHttpServer } from "@effect/platform-node"
 import { fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai/providers/faux"
 import { entryText, PiCloud } from "@pi-cloud/client"
-import { ControlPlane } from "@pi-cloud/control-plane"
-import { RunnerDispatcher } from "@pi-cloud/core"
+import { pullDispatcher } from "@pi-cloud/control-plane"
+import { serve } from "@pi-cloud/control-plane/node"
 import { modelProviders, RunnerHost } from "@pi-cloud/runner"
 import { Effect, Fiber, Layer } from "effect"
-import { FetchHttpClient, HttpRouter } from "effect/http"
-import { createServer, type Server } from "node:http"
-import { Readable } from "node:stream"
 import { describe, expect, it } from "vitest"
 
-const serveFetch = (port: number, handler: (request: Request) => Promise<Response>) =>
-  new Promise<Server>((resolve) => {
-    const server = createServer(async (req, res) => {
-      const response = await handler(new Request(`http://127.0.0.1:${port}${req.url}`, {
-        method: req.method,
-        headers: req.headers as Record<string, string>,
-        body: req.method === "POST" ? (Readable.toWeb(req) as ReadableStream) : undefined,
-        duplex: "half"
-      } as RequestInit))
-      res.writeHead(response.status)
-      res.end(await response.text())
-    })
-    server.listen(port, "127.0.0.1", () => resolve(server))
-  })
-
 describe("split deployment", () => {
-  it("wakes a runner host in another server over HTTP, authenticated by the shared secret", async () => {
+  it("wakes a runner host that has no inbound port over its own authenticated WebSocket", async () => {
     const secret = "runner-secret"
-    const base = 41_000 + Math.floor(Math.random() * 10_000)
-    const controlUrl = `http://127.0.0.1:${base}`
+    const port = 41_000 + Math.floor(Math.random() * 10_000)
+    const controlUrl = `http://127.0.0.1:${port}`
     const faux = fauxProvider()
     faux.setResponses([fauxAssistantMessage("answered by a remote runner")])
 
-    const open = new RunnerHost({ plugins: [] })
-    const wake = (headers: Record<string, string> = {}) =>
-      new Request("http://runner/wake", { method: "POST", headers, body: JSON.stringify({ sessionId: "x", controlPlaneUrl: "http://evil.example" }) })
-    expect((await open.handler(wake({ authorization: "Bearer anything" }))).status).toBe(503)
-    expect((await new RunnerHost({ plugins: [], secret }).handler(wake({ authorization: `Bearer ${secret}` }))).status).toBe(503)
-
+    expect(() => new RunnerHost({ plugins: [] }).connect()).toThrow(/secret and a control plane URL/)
     const runners = new RunnerHost({ plugins: [modelProviders(faux.provider)], secret, controlPlaneUrl: controlUrl, idleMs: 2_000 })
-    const runnerServer = await serveFetch(base + 1, runners.handler)
-
-    const refused = await fetch(`http://127.0.0.1:${base + 1}/wake`, {
-      method: "POST",
-      body: JSON.stringify({ sessionId: "x", controlPlaneUrl: controlUrl })
-    })
-    expect(refused.status).toBe(401)
-    const wrong = await fetch(`http://127.0.0.1:${base + 1}/wake`, {
-      method: "POST",
-      headers: { authorization: "Bearer not-the-secret" },
-      body: JSON.stringify({ sessionId: "x", controlPlaneUrl: controlUrl })
-    })
-    expect(wrong.status).toBe(401)
-
-    const control = Effect.runFork(Layer.launch(HttpRouter.serve(ControlPlane.layer({
-      settings: { publicUrl: controlUrl },
+    const control = Effect.runFork(Layer.launch(serve({
+      port,
+      settings: { publicUrl: controlUrl, attachTimeoutMs: 5_000 },
       apiKeys: ["client-key"],
       runnerSecret: secret,
-      dispatcher: RunnerDispatcher.http({ url: `http://127.0.0.1:${base + 1}/wake`, secret }).pipe(
-        Layer.provide(FetchHttpClient.layer)
-      )
-    }), { disableLogger: true }).pipe(
-      Layer.provide(NodeHttpServer.layer(createServer, { port: base, host: "127.0.0.1" }))
-    )))
+      dispatcher: pullDispatcher
+    })))
 
     try {
       await new Promise((resolve) => setTimeout(resolve, 300))
       for (const authorization of [undefined, "Bearer wrong", "Bearer client-key"]) {
+        const headers: Record<string, string> = authorization === undefined ? {} : { authorization }
+        expect((await fetch(`${controlUrl}/internal/runner/wake`, { headers })).status, authorization).toBe(401)
         const response = await fetch(`${controlUrl}/internal/runner`, {
           method: "POST",
-          headers: { "content-type": "application/ndjson", ...(authorization === undefined ? {} : { authorization }) },
+          headers: { "content-type": "application/ndjson", ...headers },
           body: `${JSON.stringify({ _tag: "Request", id: "1", tag: "CredentialList", payload: { sessionId: "x", token: "y" }, headers: [] })}\n`
         })
-        const body = await response.text()
-        expect(body, authorization).toContain("Invalid runner credentials")
+        expect(await response.text(), authorization).toContain("Invalid runner credentials")
       }
+      runners.connect()
       await Effect.runPromise(Effect.gen(function*() {
         const client = yield* PiCloud
         const session = yield* client.sessions.create({ payload: { spec: { model: { provider: "faux", modelId: "faux-1" } } } })
         const submitted = yield* client.sessions.submit({ params: { id: session.id }, payload: { content: "hi" } })
         while (true) {
-          const record = yield* client.sessions.submission({
-            params: { id: session.id, submissionId: submitted.submissionId }
-          })
+          const record = yield* client.sessions.submission({ params: { id: session.id, submissionId: submitted.submissionId } })
           if ((record as { status?: string } | null)?.status === "done") break
           yield* Effect.sleep(100)
         }
@@ -93,7 +52,6 @@ describe("split deployment", () => {
       }).pipe(Effect.provide(PiCloud.layer({ url: controlUrl, apiKey: "client-key" }))))
     } finally {
       await runners.close()
-      runnerServer.close()
       await Effect.runPromise(Fiber.interrupt(control))
     }
   }, 30_000)

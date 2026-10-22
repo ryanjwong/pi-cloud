@@ -4,12 +4,12 @@ import { SessionCommand, Submitted } from "./Commands.ts"
 import { EventBatch, SessionId, SessionSpec, SessionView, UserContent, WhenBusy } from "./Domain.ts"
 import { CredentialInfo, StoredCredential } from "./Credentials.ts"
 import manifest from "../package.json" with { type: "json" }
-import { CommandFailed, ConversationBusy, RunnerUnavailable, SessionNotFound, SpecRejected, Unauthorized } from "./Errors.ts"
+import { CommandFailed, ConversationBusy, Forbidden, RunnerUnavailable, SessionNotFound, SpecRejected, StorageFailure, Unauthorized } from "./Errors.ts"
 
 export class ApiAuth extends HttpApiMiddleware.Service<ApiAuth>()("@pi-cloud/protocol/ApiAuth", {
   requiredForClient: true,
   security: { bearer: HttpApiSecurity.bearer },
-  error: Unauthorized
+  error: [Unauthorized, Forbidden]
 }) {}
 
 const sessionParams = { id: SessionId }
@@ -57,7 +57,7 @@ export class SessionsApi extends HttpApiGroup.make("sessions")
       params: sessionParams,
       payload: Schema.Struct({ conversationId: Schema.optional(Schema.Number) }),
       success: HttpApiSchema.NoContent,
-      error: [SessionNotFound, RunnerUnavailable, CommandFailed]
+      error: [SessionNotFound, RunnerUnavailable, ConversationBusy, CommandFailed]
     }),
     HttpApiEndpoint.get("events", "/:id/events", {
       params: sessionParams,
@@ -116,15 +116,17 @@ export class ServerApi extends HttpApiGroup.make("server", { topLevel: true })
 
 export class CredentialsApi extends HttpApiGroup.make("credentials")
   .add(
-    HttpApiEndpoint.get("list", "/", { success: Schema.Array(CredentialInfo) }),
+    HttpApiEndpoint.get("list", "/", { success: Schema.Array(CredentialInfo), error: StorageFailure }),
     HttpApiEndpoint.put("put", "/:providerId", {
       params: { providerId: Schema.String },
       payload: StoredCredential,
-      success: CredentialInfo
+      success: CredentialInfo,
+      error: StorageFailure
     }),
     HttpApiEndpoint.delete("delete", "/:providerId", {
       params: { providerId: Schema.String },
-      success: HttpApiSchema.NoContent
+      success: HttpApiSchema.NoContent,
+      error: StorageFailure
     })
   )
   .middleware(ApiAuth)

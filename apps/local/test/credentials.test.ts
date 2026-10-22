@@ -53,12 +53,12 @@ describe("stored credentials", () => {
       port: 41_000 + Math.floor(Math.random() * 10_000),
       runner: { idleMs: 5_000, plugins: [modelProviders(provider)] }
     })
-    const url = deployment.url
+    const { url, apiKey } = deployment
     const put = (credential: Credential) =>
-      fetch(`${url}/v1/credentials/faux`, { method: "PUT", body: JSON.stringify(credential), headers: { "content-type": "application/json" } })
+      fetch(`${url}/v1/credentials/faux`, { method: "PUT", body: JSON.stringify(credential), headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` } })
 
     expect((await put({ type: "oauth", access: "a1", refresh: "r1", expires: Date.now() - 1_000 })).status).toBe(200)
-    const listed = await (await fetch(`${url}/v1/credentials`)).json()
+    const listed = await (await fetch(`${url}/v1/credentials`, { headers: { authorization: `Bearer ${apiKey}` } })).json()
     expect(listed).toEqual([{ providerId: "faux", type: "oauth", expires: expect.any(Number), updatedAt: expect.any(Number) }])
     expect(JSON.stringify(listed)).not.toContain("r1")
 
@@ -72,18 +72,18 @@ describe("stored credentials", () => {
         if (status === "done" || status === "unanswered") break
         yield* Effect.sleep(100)
       }
-    }).pipe(Effect.provide(PiCloud.layer({ url }))))
+    }).pipe(Effect.provide(PiCloud.layer({ url, apiKey }))))
 
     expect(refreshed).toEqual(["r1"])
     expect(used).toContain("a2")
-    const after = (await (await fetch(`${url}/v1/credentials`)).json()) as Array<{ expires: number }>
+    const after = (await (await fetch(`${url}/v1/credentials`, { headers: { authorization: `Bearer ${apiKey}` } })).json()) as Array<{ expires: number }>
     expect(after[0]!.expires).toBeGreaterThan(Date.now())
   }, 30_000)
 
   it("imports logins made with Pi or the Codex CLI", async () => {
     root = await mkdtemp(join(tmpdir(), "pi-cloud-logins-"))
     deployment = await startLocal({ port: 41_000 + Math.floor(Math.random() * 10_000), runner: { plugins: [] } })
-    const url = deployment.url
+    const { url, apiKey } = deployment
     await mkdir(join(root, "pi"))
     await writeFile(join(root, "pi", "auth.json"), JSON.stringify({
       anthropic: { type: "oauth", access: "sk-ant-oat", refresh: "rt", expires: 1 },
@@ -99,13 +99,13 @@ describe("stored credentials", () => {
     process.env.PI_CODING_AGENT_DIR = join(root, "pi")
     process.env.CODEX_HOME = join(root, "codex")
     try {
-      await importFromPi({ url }, ["anthropic"])
-      await importFromCodex({ url })
+      await importFromPi({ url, apiKey }, ["anthropic"])
+      await importFromCodex({ url, apiKey })
     } finally {
       delete process.env.PI_CODING_AGENT_DIR
       delete process.env.CODEX_HOME
     }
-    const listed = (await (await fetch(`${url}/v1/credentials`)).json()) as Array<{ providerId: string; type: string; expires?: number }>
+    const listed = (await (await fetch(`${url}/v1/credentials`, { headers: { authorization: `Bearer ${apiKey}` } })).json()) as Array<{ providerId: string; type: string; expires?: number }>
     expect(listed.map((entry) => [entry.providerId, entry.type])).toEqual([["anthropic", "oauth"], ["openai-codex", "oauth"]])
     expect(listed.find((entry) => entry.providerId === "openai-codex")!.expires).toBe(exp * 1000)
   }, 30_000)

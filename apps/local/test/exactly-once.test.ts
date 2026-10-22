@@ -73,7 +73,7 @@ describe("exactly-once under crashes", () => {
             const answers = entries.filter((entry) => entry.kind === "pi.assistant").map((entry) => entry.text)
             expect(users).toEqual(prompts)
             expect([...answers].sort()).toEqual(prompts.map((prompt) => `re: ${prompt}`).sort())
-          }).pipe(Effect.provide(PiCloud.layer({ url: deployment.url }))))
+          }).pipe(Effect.provide(PiCloud.layer(deployment!))))
         }
       ),
       { numRuns: 6 }

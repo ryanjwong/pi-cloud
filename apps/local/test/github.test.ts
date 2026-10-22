@@ -84,6 +84,6 @@ describe("GitHub trigger", () => {
       const { entries } = yield* transcript()
       expect(userTexts(entries)).toHaveLength(2)
       expect(afterSecond.length).toBeGreaterThan(0)
-    }).pipe(Effect.provide(PiCloud.layer({ url: deployment.url }))))
+    }).pipe(Effect.provide(PiCloud.layer(deployment!))))
   }, 30_000)
 })

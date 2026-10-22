@@ -63,6 +63,6 @@ describe("pi-cloud end to end", () => {
       expect(running.runner.state).toBe("running")
     })
 
-    await Effect.runPromise(program.pipe(Effect.provide(PiCloud.layer({ url: deployment.url }))))
+    await Effect.runPromise(program.pipe(Effect.provide(PiCloud.layer(deployment!))))
   }, 20_000)
 })

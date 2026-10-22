@@ -1,15 +1,26 @@
 import { hostFamily, hostNamed, method, remote } from "@earendil-works/chord"
 import type { ConversationView, TaskGraph } from "@earendil-works/pi-durable"
+import { Schema } from "effect"
 import { type Static, Type } from "typebox"
 
+export const Scope = Schema.Literals(["read", "write", "admin"])
+export type Scope = typeof Scope.Type
+
+export type Client = { readonly kind: "client"; readonly id: string; readonly name: string; readonly scopes: ReadonlyArray<Scope> }
+
 export type Principal =
-  | { readonly kind: "client" }
+  | Client
   | { readonly kind: "host" }
   | { readonly kind: "server" }
   | { readonly kind: "runner"; readonly session: string }
 
 export const principalKey = (principal: Principal): string =>
-  principal.kind === "runner" ? `runner:${principal.session}` : principal.kind
+  principal.kind === "runner" ? `runner:${principal.session}` : principal.kind === "client" ? `client:${principal.id}` : principal.kind
+
+const RANK: Record<Scope, number> = { read: 0, write: 1, admin: 2 }
+
+export const allows = (principal: Principal, scope: Scope): boolean =>
+  principal.kind === "client" && principal.scopes.some((granted) => RANK[granted] >= RANK[scope])
 
 export const SERVER_HOST = "server"
 export const sessionHost = (sessionId: string) => `session:${sessionId}`

@@ -2,8 +2,6 @@ import { modelCredentialLookup, RunnerEnv, sandboxSecretLookup } from "@pi-cloud
 import { RunnerHost } from "@pi-cloud/runner"
 import { memoryReplica } from "@pi-cloud/runner/node"
 import { Option, Redacted } from "effect"
-import { createServer } from "node:http"
-import { Readable } from "node:stream"
 import { load } from "./env.ts"
 import { defaultPlugins } from "./plugins.ts"
 
@@ -20,14 +18,11 @@ const host = new RunnerHost({
   secrets: sandboxSecretLookup(env),
   replica: memoryReplica
 })
-
-createServer(async (req, res) => {
-  const response = await host.handler(new Request(`http://localhost${req.url}`, {
-    method: req.method,
-    headers: req.headers as Record<string, string>,
-    body: req.method === "POST" ? (Readable.toWeb(req) as ReadableStream) : undefined,
-    duplex: "half"
-  } as RequestInit))
-  res.writeHead(response.status, Object.fromEntries(response.headers))
-  res.end(await response.text())
-}).listen(env.port, env.host, () => console.log(`pi-cloud runner host listening on ${env.host}:${env.port}`))
+host.connect()
+console.log(`pi-cloud runner host pulling wake requests from ${env.controlPlaneUrl.value}`)
+const shutdown = async () => {
+  await host.close()
+  process.exit(0)
+}
+process.on("SIGINT", shutdown)
+process.on("SIGTERM", shutdown)

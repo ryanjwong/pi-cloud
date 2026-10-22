@@ -88,7 +88,7 @@ in
       services.pi-cloud = {
         enable = true;
         role = "control-plane";
-        settings = { HOST = "0.0.0.0"; PORT = "8787"; RUNNER_URL = "http://runner:8788/wake"; PUBLIC_URL = "http://control:8787"; };
+        settings = { HOST = "0.0.0.0"; PORT = "8787"; PUBLIC_URL = "http://control:8787"; };
         secrets = secretPaths [ "PI_CLOUD_API_KEYS" "PI_CLOUD_CREDENTIAL_KEY" "PI_CLOUD_RUNNER_SECRET" ];
       };
     };
@@ -97,7 +97,7 @@ in
       services.pi-cloud = {
         enable = true;
         role = "runner";
-        settings = { HOST = "0.0.0.0"; PORT = "8788"; CONTROL_PLANE_URL = "http://control:8787"; };
+        settings = { CONTROL_PLANE_URL = "http://control:8787"; };
         secrets = secretPaths [ "PI_CLOUD_RUNNER_SECRET" ];
       };
     };
@@ -105,9 +105,6 @@ in
       start_all()
       control.wait_until_succeeds("curl -sf http://127.0.0.1:8787/health")
       runner.wait_for_unit("pi-cloud.service")
-      runner.wait_for_open_port(8788)
-
-      runner.succeed("test $(curl -s -o /dev/null -w '%{http_code}' -X POST -d '{}' http://127.0.0.1:8788/wake) = 401")
 
       session = control.succeed("${curl} -d '{}' http://127.0.0.1:8787/v1/sessions | jq -r .id").strip()
       control.succeed(f"${curl} -d '{{\"content\":\"hello from a vm\"}}' http://127.0.0.1:8787/v1/sessions/{session}/messages")

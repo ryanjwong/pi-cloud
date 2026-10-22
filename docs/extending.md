@@ -80,14 +80,18 @@ agent starts in, and the agent can make more with `sandbox_create`.
 ## Control plane services
 
 Every store and service in `ControlPlane.layer` is an Effect layer you can replace. `dispatcher` decides how
-runners are started; `sqliteStores` provides the sessions, state, bindings and credentials stores; `leases`,
-`events`, `clientAuth` and `sessionSecrets` are optional replacements; `extensions` add routes.
+runners are started: `pullDispatcher` hands wake requests to runner hosts connected with `RunnerHost.connect()`,
+and `RunnerDispatcher.make` calls your own function. `sqliteStores` provides the sessions, state, bindings and
+credentials stores; `leases`, `events`, `clientAuth` and `sessionSecrets` are optional replacements; `extensions`
+add routes.
 
 ```ts
 ControlPlane.layer({
   settings: { publicUrl },
-  dispatcher: RunnerDispatcher.http({ url: runnerUrl, secret }),
-  ...sqliteStores({ file: "pi-cloud.sqlite" }),
+  runnerSecret,
+  auth: { keys, allowedOrigins },
+  dispatcher: pullDispatcher,
+  ...sqliteStores({ file: "pi-cloud.sqlite", credentialKeys }),
   leases, events, clientAuth, sessionSecrets,
   extensions: [triggers([...]), sources([...])]
 })

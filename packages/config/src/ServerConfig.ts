@@ -1,11 +1,22 @@
-import { SandboxTemplate } from "@pi-cloud/protocol"
+import { SandboxTemplate, Scope } from "@pi-cloud/protocol"
 import { Config, ConfigProvider, Effect, Option, Schema } from "effect"
 
 const Names = Schema.Array(Schema.String)
 
 export const SandboxTemplates = Schema.Record(Schema.String, SandboxTemplate)
 
+export const ApiKey = Schema.Struct({
+  name: Schema.String,
+  sha256: Schema.String.check(Schema.isPattern(/^[0-9a-f]{64}$/)),
+  scopes: Schema.Array(Scope)
+})
+
 export const ServerConfig = Schema.Struct({
+  auth: Schema.optional(Schema.Struct({
+    keys: Schema.optional(Schema.Array(ApiKey)),
+    allowedOrigins: Schema.optional(Names),
+    allowedHosts: Schema.optional(Names)
+  })),
   models: Schema.optional(Schema.Struct({ default: Schema.optional(Schema.String) })),
   providers: Schema.optional(Names),
   sandbox: Schema.optional(Schema.Struct({

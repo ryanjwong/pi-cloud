@@ -1,4 +1,4 @@
-import { secretsEqual, WakeRequest } from "@pi-cloud/protocol"
+import { RUNNER_WAKE_PATH, WakeRequest, webSocketProtocols } from "@pi-cloud/protocol"
 import { Effect, Exit, Fiber, Schema, Scope } from "effect"
 import { type ControlPlaneClient, makeClient } from "./ControlPlaneClient.ts"
 import { hostSession, type SessionRunnerOptions, type StopReason } from "./SessionRunner.ts"
@@ -10,13 +10,17 @@ export interface RunnerHostOptions extends SessionRunnerOptions {
   readonly onStop?: (sessionId: string, reason: StopReason) => void
 }
 
-const decodeWake = Schema.decodeUnknownPromise(WakeRequest)
+const decodeWake = Schema.decodeUnknownPromise(Schema.fromJsonString(WakeRequest))
 
 export class RunnerHost {
   private readonly scope = Effect.runSync(Scope.make())
   private readonly clients = new Map<string, Promise<ControlPlaneClient>>()
   private readonly sessions = new Map<string, Fiber.Fiber<StopReason>>()
   private readonly deferred = new Map<string, WakeRequest>()
+  private readonly grants = new Map<string, string>()
+  private socket: WebSocket | undefined
+  private retry: ReturnType<typeof setTimeout> | undefined
+  private closed = false
 
   private readonly options: RunnerHostOptions
 
@@ -26,6 +30,7 @@ export class RunnerHost {
 
   async wake(request: WakeRequest): Promise<void> {
     const url = this.options.controlPlaneUrl ?? request.controlPlaneUrl
+    this.grants.set(request.sessionId, request.grant)
     if (this.sessions.has(request.sessionId)) {
       this.deferred.set(request.sessionId, request)
       return
@@ -36,7 +41,7 @@ export class RunnerHost {
       return
     }
     this.deferred.delete(request.sessionId)
-    const fiber = Effect.runFork(hostSession(client, request.sessionId, this.options))
+    const fiber = Effect.runFork(hostSession(client, request.sessionId, () => this.grants.get(request.sessionId) ?? "", this.options))
     this.sessions.set(request.sessionId, fiber)
     fiber.addObserver((exit) => {
       if (this.sessions.get(request.sessionId) === fiber) this.sessions.delete(request.sessionId)
@@ -49,22 +54,22 @@ export class RunnerHost {
     })
   }
 
-  readonly handler = async (request: Request): Promise<Response> => {
-    if (request.method !== "POST") return new Response("Method not allowed", { status: 405 })
-    if (this.options.secret === undefined || this.options.controlPlaneUrl === undefined) {
-      return new Response("This runner host needs a secret and a pinned control plane URL to accept wake requests", { status: 503 })
+  connect(): void {
+    if (this.closed) return
+    const { controlPlaneUrl, secret } = this.options
+    if (controlPlaneUrl === undefined || secret === undefined) throw new Error("Pulling wake requests needs a secret and a control plane URL")
+    const url = new URL(RUNNER_WAKE_PATH, controlPlaneUrl)
+    url.protocol = url.protocol === "https:" ? "wss:" : "ws:"
+    const socket = new WebSocket(url, webSocketProtocols(secret))
+    this.socket = socket
+    socket.addEventListener("message", (event) => void decodeWake(String(event.data)).then((wake) => this.wake(wake)).catch(() => {}))
+    const reconnect = () => {
+      if (this.socket !== socket || this.closed) return
+      this.socket = undefined
+      this.retry = setTimeout(() => this.connect(), 1_000)
     }
-    if (!secretsEqual(request.headers.get("authorization") ?? "", `Bearer ${this.options.secret}`)) {
-      return new Response("Unauthorized", { status: 401 })
-    }
-    let wake: WakeRequest
-    try {
-      wake = await decodeWake(await request.json())
-    } catch {
-      return new Response("Invalid wake request", { status: 400 })
-    }
-    await this.wake(wake)
-    return new Response(null, { status: 202 })
+    socket.addEventListener("error", reconnect)
+    socket.addEventListener("close", reconnect)
   }
 
   hosted(): ReadonlyArray<string> {
@@ -84,6 +89,9 @@ export class RunnerHost {
   }
 
   async close(): Promise<void> {
+    this.closed = true
+    clearTimeout(this.retry)
+    this.socket?.close()
     await this.kill()
     await Effect.runPromise(Scope.close(this.scope, Exit.void))
   }

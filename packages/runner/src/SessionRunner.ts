@@ -87,6 +87,7 @@ const issuedSecrets = (
 export const hostSession = Effect.fnUntraced(function*(
   client: ControlPlaneClient,
   sessionId: string,
+  grant: () => string,
   options: SessionRunnerOptions
 ) {
   const runnerId = options.runnerId ?? `runner_${crypto.randomUUID()}`
@@ -356,7 +357,7 @@ export const hostSession = Effect.fnUntraced(function*(
 
   const attachLoop = Effect.gen(function*() {
     while (true) {
-      const exit = yield* client.Attach({ sessionId, runnerId, token: hosted?.token }).pipe(
+      const exit = yield* client.Attach({ sessionId, runnerId, grant: grant(), token: hosted?.token }).pipe(
         Stream.runForEach((message) =>
           Effect.promise(async () => {
             if (message._tag === "Command") return handleCommand(message.commandId, message.command)
@@ -378,7 +379,7 @@ export const hostSession = Effect.fnUntraced(function*(
       )
       if (Exit.isFailure(exit)) {
         const error = Cause.squash(exit.cause) as { _tag?: string }
-        if (error._tag === "LeaseHeld" || error._tag === "SessionNotFound") {
+        if (error._tag === "LeaseHeld" || error._tag === "SessionNotFound" || error._tag === "Unauthorized") {
           return yield* stop(hosted === undefined ? "failed" : "lease-lost")
         }
         if (hosted === undefined) {

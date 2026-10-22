@@ -15,7 +15,7 @@ describe("sqliteBindings", () => {
   it("stores, filters, updates and removes bindings, and keeps them across reopening", async () => {
     dir = await mkdtemp(join(tmpdir(), "pi-cloud-bindings-"))
     const file = join(dir, "sessions.sqlite")
-    const stores = sqliteStores({ file })
+    const stores = sqliteStores({ file, credentialKeys: ["k"] })
     const layer = Layer.merge(stores.bindings, stores.sessions)
     const use = <A>(f: (store: BindingStore["Service"]) => Effect.Effect<A, unknown>) =>
       Effect.runPromise(BindingStore.use(f).pipe(Effect.provide(layer)) as Effect.Effect<A>)

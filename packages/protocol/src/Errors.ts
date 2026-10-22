@@ -40,6 +40,12 @@ export class Unauthorized extends Schema.TaggedError<Unauthorized>()(
   { httpApiStatus: 401 }
 ) {}
 
+export class Forbidden extends Schema.TaggedError<Forbidden>()(
+  "Forbidden",
+  { message: Schema.String },
+  { httpApiStatus: 403 }
+) {}
+
 export class LeaseHeld extends Schema.TaggedError<LeaseHeld>()("LeaseHeld", {
   sessionId: Schema.String,
   holder: Schema.String
@@ -49,7 +55,8 @@ export class LeaseLost extends Schema.TaggedError<LeaseLost>()("LeaseLost", {
   sessionId: Schema.String
 }) {}
 
-export class StorageFailure extends Schema.TaggedError<StorageFailure>()("StorageFailure", {
-  message: Schema.String,
-  request: Schema.optional(Schema.Boolean)
-}) {}
+export class StorageFailure extends Schema.TaggedError<StorageFailure>()(
+  "StorageFailure",
+  { message: Schema.String, request: Schema.optional(Schema.Boolean) },
+  { httpApiStatus: 500 }
+) {}
