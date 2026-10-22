@@ -102,7 +102,8 @@ describe("Pi's TUI on a cloud session", () => {
           piAgent(),
           sandboxes({ providers: [localSandboxes({ root: cloud })] })
         ]
-      }
+      },
+      settings: { templates: { home: { provider: "local", repository: { url: `file://${origin}`, ref: "main" } } } }
     })
     const url = deployment.url
     const session = await Effect.runPromise(Effect.gen(function*() {
@@ -111,8 +112,7 @@ describe("Pi's TUI on a cloud session", () => {
         payload: {
           spec: {
             model: { provider: "faux", modelId: "faux-1" },
-            sandbox: "home",
-            sandboxes: { home: { provider: "local", repository: { url: `file://${origin}`, ref: "main" } } }
+            sandbox: "home"
           }
         }
       })
@@ -162,13 +162,14 @@ describe("Pi's TUI on a cloud session", () => {
       runner: {
         idleMs: 5_000,
         plugins: [modelProviders(faux.provider), extensions("coding", CodingTools), sandboxes({ providers: [localSandboxes({ root })] })]
-      }
+      },
+      settings: { templates: { home: { provider: "local" } } }
     })
     const url = deployment.url
     const session = await Effect.runPromise(Effect.gen(function*() {
       const client = yield* PiCloud
       return yield* client.sessions.create({
-        payload: { spec: { model: { provider: "faux", modelId: "deep" }, sandbox: "home", sandboxes: { home: { provider: "local" } } } }
+        payload: { spec: { model: { provider: "faux", modelId: "deep" }, sandbox: "home" } }
       })
     }).pipe(Effect.provide(PiCloud.layer({ url }))))
 
@@ -210,13 +211,14 @@ describe("Pi's TUI on a cloud session", () => {
           piAgent(),
           sandboxes({ providers: [localSandboxes({ root })] })
         ]
-      }
+      },
+      settings: { templates: { home: { provider: "local" } } }
     })
     const url = deployment.url
     const session = await Effect.runPromise(Effect.gen(function*() {
       const client = yield* PiCloud
       return yield* client.sessions.create({
-        payload: { spec: { model: { provider: "faux", modelId: "faux-1" }, sandbox: "home", sandboxes: { home: { provider: "local" } } } }
+        payload: { spec: { model: { provider: "faux", modelId: "faux-1" }, sandbox: "home" } }
       })
     }).pipe(Effect.provide(PiCloud.layer({ url }))))
 

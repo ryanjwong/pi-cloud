@@ -1,10 +1,10 @@
-import type { Extension } from "@pi-cloud/control-plane"
+import type { Extension, Trust } from "@pi-cloud/control-plane"
 import { Sessions } from "@pi-cloud/control-plane"
 import type { SessionSpec, UserContent, WhenBusy } from "@pi-cloud/protocol"
 import { Effect, Layer, Schema } from "effect"
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http"
 
-export interface TriggerEvent {
+export interface TriggerEvent extends Trust {
   readonly key: string
   readonly content: UserContent
   readonly requestId?: string | undefined
@@ -42,7 +42,7 @@ export const triggers = (
     const path = options.path ?? "/v1/triggers"
 
     const deliver = Effect.fnUntraced(function*(event: TriggerEvent) {
-      const { binding } = yield* sessions.forKey(event.key, { title: event.title, spec: event.spec })
+      const { binding } = yield* sessions.forKey(event.key, event)
       yield* sessions.command(binding.sessionId, {
         _tag: "Prompt",
         content: event.content,
@@ -71,7 +71,9 @@ export const triggers = (
       if (parsed._tag === "Failure") {
         return HttpServerResponse.text(parsed.failure.message, { status: parsed.failure.status })
       }
-      const sessionIds = yield* Effect.forEach(parsed.success, deliver)
-      return yield* HttpServerResponse.json({ accepted: parsed.success.length, sessions: sessionIds }, { status: 202 })
+      return yield* Effect.forEach(parsed.success, deliver).pipe(
+        Effect.flatMap((sessionIds) => HttpServerResponse.json({ accepted: parsed.success.length, sessions: sessionIds }, { status: 202 })),
+        Effect.catchTag("SpecRejected", (error) => Effect.succeed(HttpServerResponse.text(error.message, { status: 400 })))
+      )
     }).pipe(Effect.orDie))
   }))

@@ -38,8 +38,17 @@ cd ~/code/some-repo && pi-cloud
 Without an API key, sign in with a subscription instead: `pi-cloud login anthropic` (Claude Pro/Max) or
 `pi-cloud login openai-codex` (ChatGPT).
 
-The local server listens on loopback only, with no API key. The agent's sandbox there is a plain directory under
-`apps/local/.data`, not isolated. To expose the server or run untrusted code, see [Deploying](docs/deploy.md).
+The local server listens on loopback only, with no API key. The agent's sandbox is a Docker container running as
+user 1000; without Docker, `PI_CLOUD_UNSAFE_LOCAL_SANDBOX=1` makes it a plain host directory, not isolated. Sandbox
+templates, models and trigger rules live in a [server config](docs/security.md#server-config). The built-in
+template starts empty; to have `pi-cloud` clone your checkout, start the server with a default template that lists
+the repository (without Docker, use `"provider": "local"` and `PI_CLOUD_UNSAFE_LOCAL_SANDBOX=1`):
+
+```sh
+PI_CLOUD_CONFIG='{"sandbox":{"default":"repo","templates":{"repo":{"provider":"docker","user":"1000:1000","repositories":["owner/name"],"allowRef":true}}}}' pi-cloud-server
+```
+
+To expose the server, see [Deploying](docs/deploy.md).
 
 ## Deploy to Cloudflare
 
@@ -50,8 +59,8 @@ pi-cloud deploy cloudflare
 ```
 
 It keeps its state in `~/.config/pi-cloud`, never in a checkout. It creates an age key and `.sops.yaml` there,
-generates pi-cloud's own secrets, then asks for your model, [Daytona](https://app.daytona.io) and GitHub keys; press
-Enter to skip any of them. Everything is kept encrypted in `secrets.yaml`. Then it signs you in to Cloudflare,
+generates pi-cloud's own secrets, then asks for your model, [Daytona](https://app.daytona.io) and GitHub keys (the
+GitHub token only reaches `PI_CLOUD_CONFIG` templates that name it); press Enter to skip any of them. Everything is kept encrypted in `secrets.yaml`. Then it signs you in to Cloudflare,
 deploys, and saves the server as the CLI's target in `config.json`. After that:
 
 ```sh
@@ -76,13 +85,13 @@ pi-cloud login <provider>    # store a subscription login on the server
 ```
 
 The cloud session works from origin, so push first; the CLI warns when your branch is ahead. The CLI uses the server
-saved by the deploy; `PI_CLOUD_URL`, `PI_CLOUD_API_KEY` and `PI_CLOUD_SANDBOX_PROVIDER` (`local`, `docker` or
-`daytona`) override it.
+saved by the deploy; `PI_CLOUD_URL` and `PI_CLOUD_API_KEY` override it.
 
 ## Docs
 
 - [Deploying](docs/deploy.md): local, split across machines, NixOS, Cloudflare, backups
-- [Secrets and security](docs/secrets.md): SOPS, what each secret guards, subscription logins
+- [Secrets](docs/secrets.md): SOPS, what each secret guards, subscription logins
+- [Security](docs/security.md): server config, sandboxes, specs, triggers, what is not protected
 - [GitHub and Slack](docs/integrations.md): triggers, the GitHub App, writing your own
 - [Architecture](docs/architecture.md): how a session runs, leases, replicas, the packages
 - [Extending](docs/extending.md): runner plugins, sandbox providers, storage, the APIs

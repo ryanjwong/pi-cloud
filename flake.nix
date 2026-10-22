@@ -27,7 +27,7 @@
             pname = "pi-cloud";
             inherit pnpm;
             fetcherVersion = 3;
-            hash = "sha256-PZ3+U9piIYEe+ntoJyxUyexKN76AJ6r+jbNL+861+gA=";
+            hash = "sha256-Uv47CFSEb5me+bcdeCoqVfEtSYN6GI1vlcRAfW+70cU=";
           };
           dontFixup = true;
         });
@@ -96,6 +96,7 @@
           cfg = config.services.pi-cloud;
           programs = { all-in-one = "pi-cloud-server"; control-plane = "pi-cloud-control"; runner = "pi-cloud-runner"; };
           backup = cfg.backup.enable && cfg.role != "runner";
+          docker = cfg.role != "control-plane" && config.virtualisation.docker.enable;
           database = "/var/lib/pi-cloud/pi-cloud.sqlite";
           litestreamConfig = pkgs.writeText "pi-cloud-litestream.yml" (builtins.toJSON {
             dbs = [{
@@ -127,9 +128,9 @@
               type = lib.types.attrsOf (lib.types.attrsOf lib.types.anything);
               default = { };
               example = lib.literalExpression ''{
-                api = { provider = "local"; repository = { url = "https://github.com/acme/api.git"; credential = "GITHUB_TOKEN"; }; setup = [ "pnpm install" ]; };
+                api = { provider = "docker"; user = "1000:1000"; repository = { url = "https://github.com/acme/api.git"; }; credential = "GITHUB_TOKEN"; setup = [ "pnpm install" ]; };
               }'';
-              description = "Sandbox templates by name, available to every session (`pi-cloud chat --sandbox api`).";
+              description = "Operator sandbox templates by name, the only ones sessions can use (`pi-cloud chat --sandbox api`). Read by the control plane, so not for `role = \"runner\"`. Docker templates need `virtualisation.docker.enable` on the runner host.";
             };
             sandboxPackages = lib.mkOption {
               type = lib.types.listOf lib.types.package;
@@ -168,6 +169,10 @@
           };
 
           config = lib.mkIf cfg.enable {
+            assertions = [{
+              assertion = cfg.role != "runner" || cfg.sandboxTemplates == { };
+              message = "services.pi-cloud.sandboxTemplates is read by the control plane; set it on the control-plane or all-in-one host.";
+            }];
             systemd.services.pi-cloud = {
               description = "pi-cloud ${cfg.role}";
               wantedBy = [ "multi-user.target" ];
@@ -178,7 +183,7 @@
                   SANDBOX_TEMPLATES_FILE = pkgs.writeText "pi-cloud-sandbox-templates.json" (builtins.toJSON cfg.sandboxTemplates);
                 }
                 // cfg.settings;
-              path = cfg.sandboxPackages;
+              path = cfg.sandboxPackages ++ lib.optional docker config.virtualisation.docker.package;
               serviceConfig = {
                 ExecStart =
                   if backup then "${pkgs.litestream}/bin/litestream replicate -config ${litestreamConfig} -exec ${cfg.package}/bin/${programs.${cfg.role}}"
@@ -187,6 +192,7 @@
                   "${pkgs.litestream}/bin/litestream restore -config ${litestreamConfig} -if-db-not-exists -if-replica-exists ${database}";
                 EnvironmentFile = lib.optional (backup && cfg.backup.environmentFile != null) cfg.backup.environmentFile;
                 DynamicUser = true;
+                SupplementaryGroups = lib.optional docker "docker";
                 StateDirectory = "pi-cloud";
                 LoadCredential = lib.mapAttrsToList (name: path: "${name}:${path}") cfg.secrets;
                 Restart = "on-failure";

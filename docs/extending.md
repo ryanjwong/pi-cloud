@@ -51,24 +51,31 @@ Add the provider to `apps/local/src/plugins.ts`, then use it by name in a templa
 
 ## Sandbox templates
 
-A template names a provider, and optionally a repository to clone, setup commands, environment variables, and
-secrets by name. Put shared ones in a JSON file (`SANDBOX_TEMPLATES_FILE`, or `services.pi-cloud.sandboxTemplates`
-on NixOS):
+Only the operator defines templates, in the [server config](security.md#server-config) (`sandbox.templates`), or in
+a JSON file (`SANDBOX_TEMPLATES_FILE`, or `services.pi-cloud.sandboxTemplates` on NixOS). A template names a
+provider, and optionally an image, a user, a repository to clone, setup commands, environment variables, secrets by
+name, the git credential, and which repositories and refs sessions may ask for:
 
 ```json
 {
   "api": {
     "provider": "docker",
     "image": "node:22-bookworm",
-    "repository": { "url": "https://github.com/acme/api.git", "credential": "GITHUB_TOKEN" },
+    "user": "1000:1000",
+    "repository": { "url": "https://github.com/acme/api.git" },
+    "credential": "GITHUB_TOKEN",
+    "repositories": ["acme/api", "acme/web"],
+    "allowRef": true,
     "setup": ["npm ci"],
     "options": { "memory": "4g", "cpus": "2" }
   }
 }
 ```
 
-Sessions can also bring their own templates in their spec. `spec.sandbox` names the one the agent starts in
-(`pi-cloud new --sandbox api`), and the agent can make more with `sandbox_create`.
+A session spec can only narrow a template: `spec.sandboxes.<name>` takes `template`, `repository` (from the
+template's `repositories`), `ref` (if `allowRef`), a relative `cwd` and extra `setup`. The control plane resolves
+the templates when it creates the session and the runner uses only that copy. `spec.sandbox` names the sandbox the
+agent starts in, and the agent can make more with `sandbox_create`.
 
 ## Control plane services
 

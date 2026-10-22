@@ -17,14 +17,16 @@ export const parseJson = (request: TriggerRequest) =>
 
 export const webhookTrigger = (options: {
   readonly name: string
-  readonly secret?: string
+  readonly secret: string
   readonly toEvents: (payload: unknown, request: TriggerRequest) => ReadonlyArray<TriggerEvent>
-}): Trigger =>
-  defineTrigger({
+}): Trigger => {
+  if (options.secret === "") throw new Error(`The ${options.name} webhook needs a secret`)
+  return defineTrigger({
     name: options.name,
     handle: (request) =>
       Effect.gen(function*() {
-        if (options.secret !== undefined) yield* verifyHmac(request, "x-pi-cloud-signature", options.secret)
+        yield* verifyHmac(request, "x-pi-cloud-signature", options.secret)
         return options.toEvents(yield* parseJson(request), request)
       })
   })
+}

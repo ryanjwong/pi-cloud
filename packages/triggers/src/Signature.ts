@@ -9,6 +9,9 @@ export const hmacSha256Hex = async (secret: string, message: string): Promise<st
   return hex(await crypto.subtle.sign("HMAC", key, encoder.encode(message)))
 }
 
+export const sha256Hex = async (message: string): Promise<string> =>
+  hex(await crypto.subtle.digest("SHA-256", encoder.encode(message)))
+
 export const safeEqual = (a: string, b: string): boolean => {
   if (a.length !== b.length) return false
   let difference = 0

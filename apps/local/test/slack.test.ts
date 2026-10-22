@@ -3,6 +3,7 @@ import { modelProviders } from "@pi-cloud/runner"
 import { slackSource } from "@pi-cloud/source-slack"
 import { sources } from "@pi-cloud/sources"
 import { hmacSha256Hex } from "@pi-cloud/triggers"
+import { Effect } from "effect"
 import { createServer, type Server } from "node:http"
 import { afterEach, describe, expect, it } from "vitest"
 import { type LocalDeployment, startLocal } from "../src/index.ts"
@@ -57,6 +58,7 @@ describe("Slack source", () => {
           slackSource({
             signingSecret,
             botToken: "xoxb-test",
+            allowedUsers: ["U42"],
             apiUrl: `http://127.0.0.1:${base + 1}/api`,
             spec: { model: { provider: "faux", modelId: "faux-1" } }
           })
@@ -89,6 +91,7 @@ describe("Slack source", () => {
     expect((await send({ type: "url_verification", challenge: "abc" })).json).toEqual({ challenge: "abc" })
     expect((await send(event("E0", { type: "app_mention", text: "hi", ts: "1.0" }), "wrong")).status).toBe(401)
 
+    await send(event("E00", { type: "app_mention", user: "U7", channel: "C2", text: "<@UBOT> let me in", ts: "2.0" }))
     await send(event("E1", { type: "app_mention", text: "<@UBOT> hello there", ts: "100.1" }))
     await until(() => slack.posts.length === 1)
     expect(slack.posts[0]).toEqual({ channel: "C1", thread_ts: "100.1", text: "Hi from pi", auth: "Bearer xoxb-test" })
@@ -105,4 +108,18 @@ describe("Slack source", () => {
     expect(slack.posts).toHaveLength(2)
     expect(faux.state.callCount).toBe(2)
   }, 30_000)
+
+  it("answers only listed users, or anyone in a listed channel", async () => {
+    const source = slackSource({ signingSecret, botToken: "xoxb-test", allowedUsers: ["U1"], allowedChannels: ["C9"] })
+    const messages = async (user: string, channel: string) => {
+      const body = JSON.stringify({ type: "event_callback", event_id: `${user}${channel}`, event: { type: "app_mention", user, channel, text: "hi", ts: "1.0" } })
+      const timestamp = String(Math.floor(Date.now() / 1000))
+      const signature = `v0=${await hmacSha256Hex(signingSecret, `v0:${timestamp}:${body}`)}`
+      const headers = { "x-slack-request-timestamp": timestamp, "x-slack-signature": signature }
+      return (await Effect.runPromise(source.receive({ headers, body, url: new URL("http://localhost") }))).messages.length
+    }
+    expect(await messages("U1", "C1")).toBe(1)
+    expect(await messages("U2", "C9")).toBe(1)
+    expect(await messages("U2", "C1")).toBe(0)
+  })
 })

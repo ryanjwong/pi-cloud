@@ -18,6 +18,16 @@ export class ConversationBusy extends Schema.TaggedError<ConversationBusy>()(
   { httpApiStatus: 409 }
 ) {}
 
+export class SpecRejected extends Schema.TaggedError<SpecRejected>()(
+  "SpecRejected",
+  { field: Schema.String, reason: Schema.String },
+  { httpApiStatus: 400 }
+) {
+  override get message() {
+    return `${this.field}: ${this.reason}`
+  }
+}
+
 export class CommandFailed extends Schema.TaggedError<CommandFailed>()(
   "CommandFailed",
   { message: Schema.String, reason: Schema.optional(Schema.String) },

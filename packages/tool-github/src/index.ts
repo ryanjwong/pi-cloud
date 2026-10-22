@@ -2,35 +2,26 @@ import { Type } from "@earendil-works/pi-ai"
 import { defineExtension, defineTool, section } from "@earendil-works/pi-durable"
 import { definePlugin, type RunnerPlugin } from "@pi-cloud/runner"
 
-export interface GithubThread {
-  readonly repository: string
-  readonly number: number
-}
-
 export interface GithubToolsOptions {
-  readonly token?: string
   readonly credential?: string
   readonly apiUrl?: string
 }
 
 const text = (value: string) => [{ type: "text" as const, text: value }]
 
-export const threadOf = (metadata: Readonly<Record<string, unknown>> | undefined): GithubThread | undefined => {
-  const github = metadata?.github as { repository?: unknown; number?: unknown } | undefined
-  return typeof github?.repository === "string" && typeof github.number === "number"
-    ? { repository: github.repository, number: github.number }
-    : undefined
-}
-
-export const githubTools = (options: GithubToolsOptions): RunnerPlugin =>
+export const githubTools = (options: GithubToolsOptions = {}): RunnerPlugin =>
   definePlugin({
     name: "github",
     setup: async ({ session, secrets }) => {
       const apiUrl = options.apiUrl ?? "https://api.github.com"
-      const thread = threadOf(session.spec.metadata)
+      const bound = session.resolved?.repository
+      if (bound === undefined || session.resolved?.untrusted === true) return {}
+      const number = session.resolved?.thread
       const credential = options.credential ?? "GITHUB_TOKEN"
-      const token = async () => (await secrets(credential)) ?? options.token
+      const token = () => secrets(credential)
       if ((await token().catch(() => "unavailable")) === undefined) return {}
+      const foreign = (repository: string) =>
+        ({ isError: true, output: text(`403: ${repository} is not this session's repository (${bound})`) }) as const
 
       const request = async (method: string, path: string, body: unknown) => {
         const current = await token()
@@ -51,25 +42,24 @@ export const githubTools = (options: GithubToolsOptions): RunnerPlugin =>
         return result
       }
 
-      const repositoryParameter = Type.Optional(Type.String({ description: "owner/name; defaults to this session's repository" }))
+      const repositoryParameter = Type.Optional(Type.String({ description: `owner/name; only ${bound}` }))
 
       const comment = defineTool({
         name: "github_comment",
         description: "Comment on a GitHub issue or pull request. Markdown is supported." +
-          (thread === undefined ? "" : ` Defaults to ${thread.repository}#${thread.number}, the thread this session is about.`),
+          (number === undefined ? "" : ` Defaults to ${bound}#${number}, the thread this session is about.`),
         parameters: Type.Object({
           body: Type.String({ description: "The comment, in Markdown" }),
           repository: repositoryParameter,
           number: Type.Optional(Type.Number({ description: "Issue or pull request number; defaults to this session's" }))
         }),
         async execute(args) {
-          const repository = args.repository ?? thread?.repository
-          const number = args.number ?? thread?.number
-          if (repository === undefined || number === undefined) {
-            return { isError: true, output: text("Which issue or pull request? Pass repository and number.") }
-          }
-          const posted = await request("POST", `/repos/${repository}/issues/${number}/comments`, { body: args.body })
-          return { output: text(`Commented on ${repository}#${number}: ${posted.html_url ?? ""}`) }
+          const repository = args.repository ?? bound
+          if (repository.toLowerCase() !== bound) return foreign(repository)
+          const issue = args.number ?? number
+          if (issue === undefined) return { isError: true, output: text("Which issue or pull request? Pass number.") }
+          const posted = await request("POST", `/repos/${repository}/issues/${issue}/comments`, { body: args.body })
+          return { output: text(`Commented on ${repository}#${issue}: ${posted.html_url ?? ""}`) }
         }
       })
 
@@ -84,8 +74,8 @@ export const githubTools = (options: GithubToolsOptions): RunnerPlugin =>
           repository: repositoryParameter
         }),
         async execute(args) {
-          const repository = args.repository ?? thread?.repository
-          if (repository === undefined) return { isError: true, output: text("Which repository? Pass repository.") }
+          const repository = args.repository ?? bound
+          if (repository.toLowerCase() !== bound) return foreign(repository)
           const opened = await request("POST", `/repos/${repository}/pulls`, {
             head: args.head,
             base: args.base,
@@ -97,9 +87,9 @@ export const githubTools = (options: GithubToolsOptions): RunnerPlugin =>
       })
 
       const context = section("github", () =>
-        thread === undefined
+        number === undefined
           ? undefined
-          : `This session is about ${thread.repository}#${thread.number}. People there only see what you post with ` +
+          : `This session is about ${bound}#${number}. People there only see what you post with ` +
             `github_comment; reply there when you have an answer, a question, or finished work.`)
 
       return { extensions: [defineExtension({ name: "pi-cloud-github", tools: [comment, pullRequest], sections: [context] })] }

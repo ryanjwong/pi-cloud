@@ -25,7 +25,7 @@ export class ControlPlane extends DurableObject<Env> {
     const env = await settings(this.env)
     const database = new DurableObjectSqliteDatabase(this.ctx.storage as never)
     const { handler } = ControlPlaneApp.toWebHandler({
-      settings: { publicUrl: INTERNAL_URL },
+      settings: { ...env.settings, publicUrl: INTERNAL_URL },
       apiKeys: env.apiKeys.map((key) => Redacted.value(key)),
       runnerSecret: Redacted.value(env.runnerSecret),
       ...sqliteStoresOn(async () => database, { credentialKey: Redacted.value(env.credentialKey) }),

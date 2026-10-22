@@ -146,8 +146,10 @@ export const sources = (
       if (received._tag === "Failure") {
         return HttpServerResponse.text(received.failure.message, { status: received.failure.status })
       }
-      yield* Effect.forEach(received.success.messages, (message) => accept(source, message))
       const response = received.success.response
-      return yield* HttpServerResponse.json(response?.json ?? { ok: true }, { status: response?.status ?? 200 })
+      return yield* Effect.forEach(received.success.messages, (message) => accept(source, message)).pipe(
+        Effect.flatMap(() => HttpServerResponse.json(response?.json ?? { ok: true }, { status: response?.status ?? 200 })),
+        Effect.catchTag("SpecRejected", (error) => Effect.succeed(HttpServerResponse.text(error.message, { status: 400 })))
+      )
     }).pipe(Effect.orDie))
   }))

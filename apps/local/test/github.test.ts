@@ -20,7 +20,7 @@ const comment = (body: string) => ({
   repository: { full_name: "acme/api" },
   sender: { login: "octocat", type: "User" },
   issue: { number: 7, title: "Fix the flaky test", html_url: "https://github.com/acme/api/pull/7", pull_request: {} },
-  comment: { body, html_url: "https://github.com/acme/api/pull/7#issuecomment-1" }
+  comment: { body, html_url: "https://github.com/acme/api/pull/7#issuecomment-1", author_association: "MEMBER" }
 })
 
 describe("GitHub trigger", () => {

@@ -18,7 +18,7 @@ const ASKED = [
   { name: "ANTHROPIC_API_KEY", why: "Anthropic models (or skip, and sign in with Claude Pro/Max later: pi-cloud login anthropic)" },
   { name: "OPENAI_API_KEY", why: "OpenAI models (or skip, and sign in with ChatGPT later: pi-cloud login openai-codex)" },
   { name: "DAYTONA_API_KEY", why: "sandboxes for the coding tools, from app.daytona.io (without it the agent can only chat)" },
-  { name: "GITHUB_TOKEN", why: "cloning private repositories and pushing branches (skip for public repositories)" }
+  { name: "GITHUB_TOKEN", why: "cloning and pushing, for PI_CLOUD_CONFIG templates with credential GITHUB_TOKEN (skip without one)" }
 ] as const
 const FORWARDED = [...REQUIRED, ...ASKED.map((entry) => entry.name)]
 
@@ -149,10 +149,9 @@ export const deploy = async (kind: string | undefined, name = "pi-cloud") => {
       if (!ready) await new Promise((wait) => setTimeout(wait, 2_000))
     }
     write(ready ? "  up\n" : "  not answering yet; give it a minute\n")
-    const daytona = forwarded.DAYTONA_API_KEY !== undefined
-    const saved = saveTarget(name, { kind: "cloudflare", url, sandboxProvider: daytona ? "daytona" : undefined })
+    const saved = saveTarget(name, { kind: "cloudflare", url })
     write(`\n✓ pi-cloud is deployed, saved as the target ${name} in ${saved}.\n`)
-    if (!daytona) {
+    if (forwarded.DAYTONA_API_KEY === undefined) {
       const { ageKey, secrets: file } = paths()
       write(`  Without DAYTONA_API_KEY the agent can only chat: add one with \`SOPS_AGE_KEY_FILE=${ageKey} sops ${file}\`, then deploy again.\n`)
     }

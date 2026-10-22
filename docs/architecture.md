@@ -24,7 +24,8 @@ runner can pick a session up from where the last one stopped.
 
 ## A session's life
 
-1. A client creates a session with a spec: model, instructions, sandbox templates, plugin config.
+1. A client creates a session with a spec: model, instructions, and sandboxes that narrow the operator's templates.
+   The control plane checks it and stores the resolved templates and repository binding on the session.
 2. The first prompt needs a runner. If no runner holds the session's lease, the dispatcher starts one (in process,
    over HTTP, or as a Durable Object), and it connects back.
 3. The runner takes the **lease**, a token that fences its writes. It opens Pi Durable with storage that commits

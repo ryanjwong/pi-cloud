@@ -206,6 +206,9 @@ importers:
 
   packages/config:
     dependencies:
+      '@pi-cloud/protocol':
+        specifier: workspace:*
+        version: link:../protocol
       effect:
         specifier: 4.0.2
         version: 4.0.2

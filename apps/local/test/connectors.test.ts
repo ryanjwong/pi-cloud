@@ -145,7 +145,7 @@ describe("Slack source", () => {
     deployment = await startLocal({
       port: base,
       runner: { plugins: [modelProviders(faux.provider)], idleMs: 5_000 },
-      extensions: [sources([slackSource({ signingSecret: "s", botToken: "t", apiUrl: `http://127.0.0.1:${base + 1}/api`, spec: { model } })])]
+      extensions: [sources([slackSource({ signingSecret: "s", botToken: "t", allowedUsers: ["U42"], apiUrl: `http://127.0.0.1:${base + 1}/api`, spec: { model } })])]
     })
     const send = slackSender(`${deployment.url}/v1/sources/slack`, "s")
     await send(slackEvent("E1", { type: "message", channel: "C9", channel_type: "channel", text: "hey all", ts: "5.0" }))
@@ -167,7 +167,7 @@ describe("Slack source", () => {
         port: base,
         ...sqliteStores({ file: join(dir!, "pi-cloud.sqlite") }),
         runner: { plugins: [modelProviders(faux.provider)], idleMs: 300 },
-        extensions: [sources([slackSource({ signingSecret: "s", botToken: "t", apiUrl: `http://127.0.0.1:${base + 1}/api`, spec: { model } })])]
+        extensions: [sources([slackSource({ signingSecret: "s", botToken: "t", allowedUsers: ["U42"], apiUrl: `http://127.0.0.1:${base + 1}/api`, spec: { model } })])]
       })
 
     deployment = await start()

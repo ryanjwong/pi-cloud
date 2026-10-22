@@ -91,7 +91,7 @@ export const RunnerRpcLive = RunnerRpcs.toLayer(Effect.gen(function*() {
         yield* auth.check(headers).pipe(Effect.orDie)
         yield* leases.validate(sessionId, token)
         const session = yield* store.get(sessionId as SessionId)
-        if (Option.isNone(session)) return {}
+        if (Option.isNone(session) || session.value.resolved?.untrusted === true) return {}
         const issued = yield* sessionSecrets.issue(session.value, name)
         return Option.match(issued, {
           onNone: () => ({}),

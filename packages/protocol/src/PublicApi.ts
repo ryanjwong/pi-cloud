@@ -3,7 +3,8 @@ import { HttpApi, HttpApiEndpoint, HttpApiGroup, HttpApiMiddleware, HttpApiSchem
 import { SessionCommand, Submitted } from "./Commands.ts"
 import { EventBatch, SessionId, SessionSpec, SessionView, UserContent, WhenBusy } from "./Domain.ts"
 import { CredentialInfo, StoredCredential } from "./Credentials.ts"
-import { CommandFailed, ConversationBusy, RunnerUnavailable, SessionNotFound, Unauthorized } from "./Errors.ts"
+import manifest from "../package.json" with { type: "json" }
+import { CommandFailed, ConversationBusy, RunnerUnavailable, SessionNotFound, SpecRejected, Unauthorized } from "./Errors.ts"
 
 export class ApiAuth extends HttpApiMiddleware.Service<ApiAuth>()("@pi-cloud/protocol/ApiAuth", {
   requiredForClient: true,
@@ -32,7 +33,7 @@ export const EntriesPage = Schema.Struct({
 
 export class SessionsApi extends HttpApiGroup.make("sessions")
   .add(
-    HttpApiEndpoint.post("create", "/", { payload: CreateSession, success: SessionView }),
+    HttpApiEndpoint.post("create", "/", { payload: CreateSession, success: SessionView, error: SpecRejected }),
     HttpApiEndpoint.get("list", "/", { success: Schema.Array(SessionView) }),
     HttpApiEndpoint.get("get", "/:id", { params: sessionParams, success: SessionView, error: SessionNotFound }),
     HttpApiEndpoint.delete("delete", "/:id", {
@@ -94,9 +95,24 @@ export class SessionsApi extends HttpApiGroup.make("sessions")
   }))
 {}
 
+export const VERSION = manifest.version
+
 export const ServerInfo = Schema.Struct({
+  version: Schema.String,
   servicesPath: Schema.String
 })
+
+export const ServerDetails = Schema.Struct({
+  ...ServerInfo.fields,
+  defaultModel: Schema.optional(Schema.String),
+  defaultSandbox: Schema.String,
+  sandboxTemplates: Schema.Array(Schema.String)
+})
+
+export class ServerApi extends HttpApiGroup.make("server", { topLevel: true })
+  .add(HttpApiEndpoint.get("serverDetails", "/v1/server/details", { success: ServerDetails }))
+  .middleware(ApiAuth)
+{}
 
 export class CredentialsApi extends HttpApiGroup.make("credentials")
   .add(
@@ -127,6 +143,7 @@ export class SystemApi extends HttpApiGroup.make("system", { topLevel: true }).a
 export class PublicApi extends HttpApi.make("pi-cloud")
   .add(SessionsApi)
   .add(CredentialsApi)
+  .add(ServerApi)
   .add(SystemApi)
   .annotateMerge(OpenApi.annotations({ title: "pi-cloud control plane" }))
 {}

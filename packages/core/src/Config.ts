@@ -1,3 +1,4 @@
+import type { SandboxTemplate } from "@pi-cloud/protocol"
 import { Context, Layer } from "effect"
 
 export interface ControlPlaneSettings {
@@ -7,6 +8,9 @@ export interface ControlPlaneSettings {
   readonly commandTimeoutMs: number
   readonly recoveryIntervalMs: number
   readonly eventLogLimit: number
+  readonly templates: Readonly<Record<string, SandboxTemplate>>
+  readonly defaultSandbox: string
+  readonly defaultModel: string | undefined
 }
 
 export const defaultSettings = (publicUrl: string): ControlPlaneSettings => ({
@@ -15,7 +19,10 @@ export const defaultSettings = (publicUrl: string): ControlPlaneSettings => ({
   attachTimeoutMs: 30_000,
   commandTimeoutMs: 30_000,
   recoveryIntervalMs: 5_000,
-  eventLogLimit: 2_000
+  eventLogLimit: 2_000,
+  templates: {},
+  defaultSandbox: "scratch",
+  defaultModel: undefined
 })
 
 export class ControlPlaneConfig extends Context.Service<ControlPlaneConfig, ControlPlaneSettings>()(

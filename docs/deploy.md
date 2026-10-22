@@ -58,8 +58,9 @@ services.pi-cloud = {
   role = "all-in-one";
   settings = { SANDBOX_SECRETS = "GITHUB_TOKEN"; GITHUB_MENTION = "@pi"; };
   sandboxTemplates.api = {
-    provider = "local";
-    repository = { url = "https://github.com/acme/api.git"; credential = "GITHUB_TOKEN"; };
+    provider = "docker";
+    repository = { url = "https://github.com/acme/api.git"; };
+    credential = "GITHUB_TOKEN";
     setup = [ "npm ci" ];
   };
   secrets = {
@@ -96,7 +97,7 @@ lives in `$XDG_CONFIG_HOME/pi-cloud` (`~/.config/pi-cloud`), so no checkout is r
 2. Generates `PI_CLOUD_API_KEYS`, `PI_CLOUD_RUNNER_SECRET` and `PI_CLOUD_CREDENTIAL_KEY` if they are not in
    `secrets.yaml`.
 3. Asks for `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `DAYTONA_API_KEY` and `GITHUB_TOKEN`, without echoing them.
-   Enter skips one.
+   Enter skips one. `GITHUB_TOKEN` is used only by `PI_CLOUD_CONFIG` templates with `"credential": "GITHUB_TOKEN"`.
 4. Saves everything to `secrets.yaml` through `sops`.
 5. Signs you in to Cloudflare if needed, runs `wrangler deploy` on the Worker that ships with the installed CLI, and
    sends the secrets to it with `wrangler secret bulk` over stdin.

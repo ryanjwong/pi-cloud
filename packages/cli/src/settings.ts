@@ -6,7 +6,6 @@ import { dirname, join } from "node:path"
 export interface Target {
   readonly kind: "cloudflare"
   readonly url: string
-  readonly sandboxProvider?: string | undefined
 }
 
 export interface CliSettings {
@@ -74,7 +73,6 @@ export const readSecrets = (): Record<string, string> => {
 export interface Connection {
   readonly url: string
   readonly apiKey: string | undefined
-  readonly sandboxProvider: string
 }
 
 export const resolveConnection = (flagUrl?: string, flagKey?: string, secrets = readSecrets): Connection => {
@@ -88,8 +86,7 @@ export const resolveConnection = (flagUrl?: string, flagKey?: string, secrets = 
   const savedKey = () => secrets().PI_CLOUD_API_KEYS?.split(",")[0]?.trim()
   return {
     url: explicit ?? target?.url ?? LOCAL_URL,
-    apiKey: flagKey ?? process.env.PI_CLOUD_API_KEY ?? (explicit === undefined && target !== undefined ? savedKey() : undefined),
-    sandboxProvider: process.env.PI_CLOUD_SANDBOX_PROVIDER ?? target?.sandboxProvider ?? "local"
+    apiKey: flagKey ?? process.env.PI_CLOUD_API_KEY ?? (explicit === undefined && target !== undefined ? savedKey() : undefined)
   }
 }
 

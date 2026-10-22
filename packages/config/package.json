@@ -10,6 +10,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@pi-cloud/protocol": "workspace:*",
     "effect": "4.0.2"
   },
   "devDependencies": {
