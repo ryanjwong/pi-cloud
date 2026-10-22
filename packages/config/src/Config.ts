@@ -40,6 +40,31 @@ const secretList = (name: string) =>
     Config.withDefault<ReadonlyArray<Redacted.Redacted<string>>>([])
   )
 
+const model = (config: ServerConfig) => Config.String("PI_CLOUD_MODEL").pipe(Config.withDefault(config.models?.default ?? DEFAULT_MODEL))
+
+const githubApp = Config.option(Config.all({
+  appId: Config.String("GITHUB_APP_ID"),
+  privateKey: Config.Redacted("GITHUB_APP_PRIVATE_KEY")
+}))
+
+const github = (config: ServerConfig, sandboxProvider: string) =>
+  Config.option(Config.all({
+    webhookSecret: Config.Redacted("GITHUB_WEBHOOK_SECRET"),
+    mention: Config.String("GITHUB_MENTION").pipe(Config.withDefault(config.triggers?.github?.mention)),
+    sandboxProvider: Config.String("GITHUB_SANDBOX_PROVIDER").pipe(Config.withDefault(sandboxProvider)),
+    allowedAssociations: names("GITHUB_ALLOWED_ASSOCIATIONS", config.triggers?.github?.allowedAssociations ?? ["OWNER", "MEMBER", "COLLABORATOR"]),
+    template: Config.succeed(config.triggers?.github?.template ?? "github")
+  }))
+
+const githubTemplate = (trigger: Option.Option<{ readonly sandboxProvider: string }>): Record<string, SandboxTemplate> =>
+  Option.match(trigger, {
+    onNone: () => ({}),
+    onSome: ({ sandboxProvider }) => ({ github: { provider: sandboxProvider, user: SANDBOX_USER, credential: "GITHUB_TOKEN" } })
+  })
+
+const githubRequired = (trigger: Option.Option<{ readonly template: string }>) =>
+  Option.match(trigger, { onNone: () => [], onSome: ({ template }) => [["triggers.github.template", template] as const] })
+
 export const ControlPlaneEnv = serverConfig.pipe(Config.flatMap((config) =>
   Config.all({
     port: Config.Port("PORT").pipe(Config.withDefault(8787)),
@@ -50,22 +75,13 @@ export const ControlPlaneEnv = serverConfig.pipe(Config.flatMap((config) =>
     apiKeys: secretList("PI_CLOUD_API_KEYS"),
     runnerSecret: Config.option(Config.Redacted("PI_CLOUD_RUNNER_SECRET")),
     credentialKey: Config.option(Config.Redacted("PI_CLOUD_CREDENTIAL_KEY")),
-    model: Config.String("PI_CLOUD_MODEL").pipe(Config.withDefault(config.models?.default ?? DEFAULT_MODEL)),
+    model: model(config),
     unsafeLocalSandbox: unsafeLocalSandbox(config),
     templatesFile: Config.option(Config.String("SANDBOX_TEMPLATES_FILE")).pipe(
       Config.mapEffect(Option.match({ onNone: () => Effect.succeed({}), onSome: (file) => readConfigFile(SandboxTemplates, "SANDBOX_TEMPLATES_FILE", file) }))
     ),
-    githubApp: Config.option(Config.all({
-      appId: Config.String("GITHUB_APP_ID"),
-      privateKey: Config.Redacted("GITHUB_APP_PRIVATE_KEY")
-    })),
-    github: Config.option(Config.all({
-      webhookSecret: Config.Redacted("GITHUB_WEBHOOK_SECRET"),
-      mention: Config.String("GITHUB_MENTION").pipe(Config.withDefault(config.triggers?.github?.mention)),
-      sandboxProvider: Config.String("GITHUB_SANDBOX_PROVIDER").pipe(Config.withDefault("docker")),
-      allowedAssociations: names("GITHUB_ALLOWED_ASSOCIATIONS", config.triggers?.github?.allowedAssociations ?? ["OWNER", "MEMBER", "COLLABORATOR"]),
-      template: Config.succeed(config.triggers?.github?.template ?? "github")
-    })),
+    githubApp,
+    github: github(config, "docker"),
     slack: Config.option(Config.all({
       signingSecret: Config.Redacted("SLACK_SIGNING_SECRET"),
       botToken: Config.Redacted("SLACK_BOT_TOKEN"),
@@ -75,13 +91,10 @@ export const ControlPlaneEnv = serverConfig.pipe(Config.flatMap((config) =>
   }).pipe(Config.mapEffect(({ templatesFile, ...env }) =>
     settingsOf(config, {
       scratch: env.unsafeLocalSandbox ? { provider: "local" } : { provider: "docker", user: SANDBOX_USER },
-      ...Option.match(env.github, {
-        onNone: () => ({}),
-        onSome: ({ sandboxProvider }) => ({ github: { provider: sandboxProvider, user: SANDBOX_USER, credential: "GITHUB_TOKEN" } })
-      }),
+      ...githubTemplate(env.github),
       ...config.sandbox?.templates,
       ...templatesFile
-    }, env.model, Option.match(env.github, { onNone: () => [], onSome: ({ template }) => [["triggers.github.template", template] as const] })).pipe(
+    }, env.model, githubRequired(env.github)).pipe(
       Effect.map((settings) => ({ ...env, settings }))
     )
   ))
@@ -97,9 +110,11 @@ export const CloudflareEnv = serverConfig.pipe(Config.flatMap((config) =>
     credentialKey: Config.Redacted("PI_CLOUD_CREDENTIAL_KEY"),
     modelCredentials: credentials(config.providers ?? MODEL_CREDENTIALS),
     daytonaApiKey: Config.option(Config.Redacted("DAYTONA_API_KEY")),
-    githubToken: Config.option(Config.Redacted("GITHUB_TOKEN"))
+    model: model(config),
+    githubApp,
+    github: github(config, "daytona")
   }).pipe(Config.mapEffect((env) =>
-    settingsOf(config, { scratch: { provider: "daytona" }, ...config.sandbox?.templates }, config.models?.default).pipe(
+    settingsOf(config, { scratch: { provider: "daytona" }, ...githubTemplate(env.github), ...config.sandbox?.templates }, config.models?.default, githubRequired(env.github)).pipe(
       Effect.map((settings) => ({ ...env, settings }))
     )
   ))

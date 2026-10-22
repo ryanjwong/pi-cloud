@@ -51,12 +51,13 @@ never land in the Nix store or the environment.
 
 ```nix
 sops.secrets.ANTHROPIC_API_KEY.sopsFile = ./secrets.yaml;
-sops.secrets.GITHUB_TOKEN.sopsFile = ./secrets.yaml;
+sops.secrets.GITHUB_APP_PRIVATE_KEY.sopsFile = ./secrets.yaml;
+sops.secrets.GITHUB_WEBHOOK_SECRET.sopsFile = ./secrets.yaml;
 
 services.pi-cloud = {
   enable = true;
   role = "all-in-one";
-  settings = { SANDBOX_SECRETS = "GITHUB_TOKEN"; GITHUB_MENTION = "@pi"; };
+  settings = { GITHUB_APP_ID = "123456"; GITHUB_MENTION = "@pi"; };
   sandboxTemplates.api = {
     provider = "docker";
     repository = { url = "https://github.com/acme/api.git"; };
@@ -65,7 +66,8 @@ services.pi-cloud = {
   };
   secrets = {
     ANTHROPIC_API_KEY = config.sops.secrets.ANTHROPIC_API_KEY.path;
-    GITHUB_TOKEN = config.sops.secrets.GITHUB_TOKEN.path;
+    GITHUB_APP_PRIVATE_KEY = config.sops.secrets.GITHUB_APP_PRIVATE_KEY.path;
+    GITHUB_WEBHOOK_SECRET = config.sops.secrets.GITHUB_WEBHOOK_SECRET.path;
   };
 };
 ```
@@ -96,12 +98,15 @@ lives in `$XDG_CONFIG_HOME/pi-cloud` (`~/.config/pi-cloud`), so no checkout is r
    encrypts to it.
 2. Generates `PI_CLOUD_API_KEYS`, `PI_CLOUD_RUNNER_SECRET` and `PI_CLOUD_CREDENTIAL_KEY` if they are not in
    `secrets.yaml`.
-3. Asks for `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `DAYTONA_API_KEY` and `GITHUB_TOKEN`, without echoing them.
-   Enter skips one. `GITHUB_TOKEN` is used only by `PI_CLOUD_CONFIG` templates with `"credential": "GITHUB_TOKEN"`.
+3. Asks for `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` and `DAYTONA_API_KEY`, without echoing them. Enter skips one.
 4. Saves everything to `secrets.yaml` through `sops`.
-5. Signs you in to Cloudflare if needed, runs `wrangler deploy` on the Worker that ships with the installed CLI, and
-   sends the secrets to it with `wrangler secret bulk` over stdin.
-6. Saves the Worker as a target named `--name` in `config.json` (mode 0600); a new target becomes the default. The CLI
+5. Signs you in to Cloudflare if needed and runs `wrangler deploy` on the Worker that ships with the installed CLI.
+6. Sends the secrets to the Worker with `wrangler secret bulk` over stdin.
+7. Without a `GITHUB_APP_ID` in `secrets.yaml`, asks "Create the GitHub App now?", runs
+   [`pi-cloud github-app --url <worker url>`](integrations.md#github-app), which stores the App's credentials, and sends
+   them the same way. Answering no, or running off a terminal, prints that command instead; deploy again after running
+   it.
+8. Saves the Worker as a target named `--name` in `config.json` (mode 0600); a new target becomes the default. The CLI
    decrypts its API key from `secrets.yaml` when it needs it, so the key never sits unencrypted on disk.
    `--url` and `--api-key`, then `PI_CLOUD_URL` and `PI_CLOUD_API_KEY`, override the target.
 
@@ -123,7 +128,9 @@ Current limits on Cloudflare:
 - Sandboxes are Daytona only (`DAYTONA_API_KEY`). Without it, the agent can only chat.
 - The agent has Pi's coding tools but not Pi's coding-agent system prompt or subagents. Those read the runner's
   files, so they need a Node runner.
-- No GitHub or Slack connectors yet, and no WebSocket session channel (the service API and REST work).
+- GitHub works through the App only: there is no personal `GITHUB_TOKEN` on Cloudflare. The `github` template
+  uses Daytona (`GITHUB_SANDBOX_PROVIDER`).
+- No Slack connector yet, and no WebSocket session channel (the service API and REST work).
 - Leases and event buffers live in the control plane object's memory, which lasts while anything talks to it. If
   Cloudflare evicts it, running sessions stop, and resume from their last checkpoint on the next request.
 - So far this has run in a local workerd (`pnpm --filter @pi-cloud/cloudflare run dev`), not on a real account.

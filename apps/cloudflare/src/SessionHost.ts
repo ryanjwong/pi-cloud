@@ -9,6 +9,7 @@ import { CodingTools } from "@earendil-works/pi-durable/tools"
 import { extensions, modelProviders, type ReplicaDatabase, RunnerHost } from "@pi-cloud/runner"
 import { sandboxes } from "@pi-cloud/sandbox"
 import { daytonaSandboxes } from "@pi-cloud/sandbox-daytona"
+import { githubTools } from "@pi-cloud/tool-github"
 import { Option, Redacted } from "effect"
 import { CONTROL_PLANE, type Env, INTERNAL_URL, settings } from "./env.ts"
 
@@ -44,9 +45,9 @@ export class SessionHost extends DurableObject<Env> {
             onNone: () => [],
             onSome: (apiKey) => [daytonaSandboxes({ apiKey: Redacted.value(apiKey) })]
           })
-        })
+        }),
+        githubTools()
       ],
-      secrets: async (name) => (name === "GITHUB_TOKEN" ? Option.getOrUndefined(Option.map(env.githubToken, Redacted.value)) : undefined),
       replica: this.#replica
     })
   }

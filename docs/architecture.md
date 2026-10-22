@@ -72,6 +72,7 @@ Each package only uses the ones above it in this table.
 | `pi` | Pi's coding-agent prompt and subagents, for Node runners |
 | `triggers`, `sources`, `trigger-github`, `source-slack` | Connectors |
 | `github-app`, `tool-github` | GitHub App tokens; the agent's GitHub tools |
+| `connectors` | What a control plane mounts from its settings, on Node and Cloudflare alike |
 | `storage-sqlite` | Every control-plane store in one SQLite database |
 | `client`, `tui`, `cli` | The typed client, Pi's TUI on the service API, the `pi-cloud` command |
 | `apps/local` | The Node servers, and most end-to-end tests |

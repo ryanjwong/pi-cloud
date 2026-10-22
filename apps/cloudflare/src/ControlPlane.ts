@@ -1,5 +1,6 @@
 import { DurableObject } from "cloudflare:workers"
 import { DurableObjectSqliteDatabase } from "@earendil-works/pi-durable/storage/sqlite/cloudflare"
+import { connectors } from "@pi-cloud/connectors"
 import { ControlPlane as ControlPlaneApp } from "@pi-cloud/control-plane"
 import { RunnerDispatcher } from "@pi-cloud/core"
 import { sqliteStoresOn } from "@pi-cloud/storage-sqlite"
@@ -29,6 +30,7 @@ export class ControlPlane extends DurableObject<Env> {
       apiKeys: env.apiKeys.map((key) => Redacted.value(key)),
       runnerSecret: Redacted.value(env.runnerSecret),
       ...sqliteStoresOn(async () => database, { credentialKey: Redacted.value(env.credentialKey) }),
+      ...connectors(env),
       dispatcher: RunnerDispatcher.make((wake) => this.env.SESSION_HOST.getByName(wake.sessionId, { locationHint: this.env.PI_CLOUD_LOCATION ?? "wnam" }).wake(wake))
     })
     return (request: Request) => handler(request)

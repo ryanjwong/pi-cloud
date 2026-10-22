@@ -1,6 +1,7 @@
 import type { ConversationView } from "@earendil-works/pi-durable"
 import { connectServices } from "@pi-cloud/client"
 import { type ChildProcess, spawn } from "node:child_process"
+import { createHmac } from "node:crypto"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -16,7 +17,7 @@ let wrangler: ChildProcess | undefined
 const start = async () => {
   wrangler = spawn("npx", ["wrangler", "dev", "--port", String(port), "--ip", "127.0.0.1", "--persist-to", state,
     "--var", `PI_CLOUD_API_KEYS:${apiKey}`, "--var", "PI_CLOUD_RUNNER_SECRET:test-runner-secret", "--var",
-    `PI_CLOUD_CREDENTIAL_KEY:${"k".repeat(32)}`], {
+    `PI_CLOUD_CREDENTIAL_KEY:${"k".repeat(32)}`, "--var", "GITHUB_WEBHOOK_SECRET:hook"], {
     cwd: join(import.meta.dirname, ".."),
     env: { ...process.env, WRANGLER_SEND_METRICS: "false", CI: "1" },
     stdio: "ignore",
@@ -63,6 +64,18 @@ describe("pi-cloud on Cloudflare (local workerd)", () => {
     for (const path of ["/internal/runner/", "//internal/runner/", "/%69nternal/runner/", "/v1/../internal/runner/", "/v1/%2e%2e/internal/runner/", "/v1%2F..%2Finternal/runner/"]) {
       expect((await fetch(`${url}${path}`, { method: "POST", headers: auth })).status, path).toBe(404)
     }
+
+    const hook = JSON.stringify({
+      action: "opened",
+      repository: { full_name: "acme/api" },
+      sender: { login: "octocat", type: "User" },
+      issue: { number: 1, title: "Hi", author_association: "OWNER", html_url: "https://github.com/acme/api/issues/1" }
+    })
+    const signature = `sha256=${createHmac("sha256", "hook").update(hook).digest("hex")}`
+    const delivered = async (headers: Record<string, string>) =>
+      (await fetch(`${url}/v1/triggers/github`, { method: "POST", body: hook, headers: { "x-github-event": "issues", ...headers } })).status
+    expect(await delivered({})).toBe(401)
+    expect(await delivered({ "x-hub-signature-256": signature })).toBe(202)
 
     await stop()
     await start()
