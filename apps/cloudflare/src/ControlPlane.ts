@@ -29,7 +29,7 @@ export class ControlPlane extends DurableObject<Env> {
       apiKeys: env.apiKeys.map((key) => Redacted.value(key)),
       runnerSecret: Redacted.value(env.runnerSecret),
       ...sqliteStoresOn(async () => database, { credentialKey: Redacted.value(env.credentialKey) }),
-      dispatcher: RunnerDispatcher.make((wake) => this.env.SESSION_HOST.getByName(wake.sessionId).wake(wake))
+      dispatcher: RunnerDispatcher.make((wake) => this.env.SESSION_HOST.getByName(wake.sessionId, { locationHint: this.env.PI_CLOUD_LOCATION ?? "wnam" }).wake(wake))
     })
     return (request: Request) => handler(request)
   }
