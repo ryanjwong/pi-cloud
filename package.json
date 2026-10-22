@@ -23,7 +23,6 @@
     "test": "pnpm -r --if-present test",
     "start": "pnpm --filter @pi-cloud/local start",
     "cli": "node packages/cli/src/main.ts",
-    "deploy:cloudflare": "node apps/cloudflare/scripts/deploy.ts",
     "lint": "oxlint && node scripts/lint-files.ts"
   },
   "engines": {

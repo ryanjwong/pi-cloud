@@ -7,7 +7,7 @@ There are three ways to run pi-cloud. All of them read settings and secrets the 
 |---|---|---|
 | One process | `pnpm start` | `apps/local/.data/pi-cloud.sqlite` |
 | Control plane and runners apart | `apps/local/src/control-plane.ts`, `apps/local/src/runner.ts` | the control plane's SQLite file |
-| Cloudflare | `pnpm deploy:cloudflare` | the control plane Durable Object's SQLite |
+| Cloudflare | `pi-cloud deploy cloudflare` | the control plane Durable Object's SQLite |
 
 `pi-cloud-config` (or `node apps/local/src/config.ts`) lists every setting, which are set, and where each value
 came from. It never prints values.
@@ -69,9 +69,6 @@ services.pi-cloud = {
 };
 ```
 
-The package's dependency hash in `flake.nix` is still a placeholder. The first `nix build` fails and prints the
-real hash; paste it in.
-
 ## Backups
 
 On Node, everything the control plane keeps is one file, `pi-cloud.sqlite`. Runners keep nothing. Run the server
@@ -88,29 +85,32 @@ sops exec-env secrets.yaml 'litestream replicate -config litestream.yml -exec "p
 ## Cloudflare
 
 ```sh
-nix run .#deploy-cloudflare
+pi-cloud deploy cloudflare [--name pi-cloud]
 ```
 
-Or, without Nix and with Node, pnpm, `sops` and `age` installed, `pnpm install && pnpm deploy:cloudflare`. The Nix
-app brings its own tools and, after deploying, installs the `pi-cloud` command into your Nix profile
-(`nix profile add .#pi-cloud`).
+`nix run github:ryanjwong/pi-cloud/stable#deploy-cloudflare` does the same without installing anything. All state
+lives in `$XDG_CONFIG_HOME/pi-cloud` (`~/.config/pi-cloud`), so no checkout is read or written. What it does:
 
-What it does:
-
-1. Creates an age key if you have none, and points `.sops.yaml` at its public key.
+1. Runs `pi-cloud init`: creates `age.key` there unless `SOPS_AGE_KEY_FILE` names one, and a `.sops.yaml` that
+   encrypts to it.
 2. Generates `PI_CLOUD_API_KEYS`, `PI_CLOUD_RUNNER_SECRET` and `PI_CLOUD_CREDENTIAL_KEY` if they are not in
    `secrets.yaml`.
 3. Asks for `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `DAYTONA_API_KEY` and `GITHUB_TOKEN`, without echoing them.
    Enter skips one.
 4. Saves everything to `secrets.yaml` through `sops`.
-5. Signs you in to Cloudflare if needed, runs `wrangler deploy`, and sends the secrets to the Worker with
-   `wrangler secret bulk` over stdin.
-6. Saves the server's URL, the sandbox provider and the path to `secrets.yaml` in `~/.config/pi-cloud/config.json`.
-   The CLI reads that file and decrypts its API key from `secrets.yaml` with sops when it starts, so the key never
-   sits unencrypted on disk.
+5. Signs you in to Cloudflare if needed, runs `wrangler deploy` on the Worker that ships with the installed CLI, and
+   sends the secrets to it with `wrangler secret bulk` over stdin.
+6. Saves the Worker as a target named `--name` in `config.json` (mode 0600); a new target becomes the default. The CLI
+   decrypts its API key from `secrets.yaml` when it needs it, so the key never sits unencrypted on disk.
+   `--url` and `--api-key`, then `PI_CLOUD_URL` and `PI_CLOUD_API_KEY`, override the target.
 
-Run it again to redeploy. To change a key, run `sops secrets.yaml`, then deploy again. Back up the age key: without
-it nobody can decrypt `secrets.yaml`. `secrets.yaml` and `.sops.yaml` are safe to commit.
+Run it again to redeploy. To change a key, run `SOPS_AGE_KEY_FILE=~/.config/pi-cloud/age.key sops
+~/.config/pi-cloud/secrets.yaml`, then deploy again. Back up the age key: without it nobody can decrypt
+`secrets.yaml`. Coming from a checkout-based setup, move its `secrets.yaml`, `.sops.yaml` and your age key (as
+`age.key`) into `~/.config/pi-cloud`, then deploy again.
+
+`pi-cloud update` runs `nix profile upgrade pi-cloud` (or `git pull` and `pnpm install` in a checkout), redeploys
+every saved target with the new version without asking for skipped keys, and runs `pi-cloud doctor`.
 
 How it runs: the control plane is one Durable Object, and its SQLite is the central store. Each session's runner is
 its own Durable Object, which copies the session into its own SQLite and commits through the control plane object.

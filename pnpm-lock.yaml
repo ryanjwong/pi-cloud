@@ -82,9 +82,6 @@ importers:
       '@cloudflare/workers-types':
         specifier: 5.20261009.1
         version: 5.20261009.1
-      '@pi-cloud/cli':
-        specifier: workspace:*
-        version: link:../../packages/cli
       '@pi-cloud/client':
         specifier: workspace:*
         version: link:../../packages/client

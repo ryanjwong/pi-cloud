@@ -49,10 +49,15 @@ export const makeRenderer = (write: (text: string) => void) => {
         return
       }
       case "message_end": {
-        if (printed === undefined) return
-        catchUp((event.entry as { model?: ReadonlyArray<never> } | undefined)?.model?.[0])
-        printed = undefined
-        return write("\n")
+        const message = (event.entry as { model?: ReadonlyArray<{ content?: ReadonlyArray<unknown>; stopReason?: string; errorMessage?: string }> } | undefined)?.model?.[0]
+        if (printed !== undefined) {
+          catchUp(message)
+          printed = undefined
+          write("\n")
+        }
+        if (message?.stopReason !== "error") return
+        process.exitCode = 1
+        return write(`  ✗ ${message.errorMessage ?? "the model returned an error"}\n`)
       }
       case "tool_execution_start":
         return write(dim(`  ↳ ${event.toolName} ${JSON.stringify(event.args)}\n`))
@@ -61,6 +66,7 @@ export const makeRenderer = (write: (text: string) => void) => {
       case "auto_retry_start":
         return write(dim(`  retrying: ${event.errorMessage}\n`))
       case "task_failed":
+        process.exitCode = 1
         return write(`  ✗ ${event.kind}: ${event.message}\n`)
       default:
         return

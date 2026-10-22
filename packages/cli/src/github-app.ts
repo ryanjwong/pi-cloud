@@ -2,6 +2,7 @@ import { appManifest } from "@pi-cloud/github-app"
 import { createApp } from "@pi-cloud/github-app/node"
 import { existsSync } from "node:fs"
 import { openBrowser } from "./login.ts"
+import { paths } from "./settings.ts"
 import { writeSopsSecrets } from "./sops.ts"
 
 export interface GithubAppFlags {
@@ -21,10 +22,8 @@ export const githubAppCommand = async (flags: GithubAppFlags, write: (text: stri
   if (flags.manifest === true) {
     return write(`${JSON.stringify(appManifest({ ...options, redirectUrl: "http://127.0.0.1/callback" }), null, 2)}\n`)
   }
-  const secrets = flags.secrets ?? "secrets.yaml"
-  if (flags.print !== true && !existsSync(secrets) && !existsSync(".sops.yaml")) {
-    throw new Error(`No ${secrets} or .sops.yaml here: run this where your SOPS secrets live, pass --secrets <file>, or --print`)
-  }
+  const secrets = flags.secrets ?? paths().secrets
+  if (flags.print !== true && !existsSync(secrets)) throw new Error(`No ${secrets}: run pi-cloud init, pass --secrets <file>, or --print`)
   if (publicUrl === undefined) write("No public --url: the App gets no webhook, so it provides tokens but no GitHub trigger.\n")
 
   const created = await createApp({

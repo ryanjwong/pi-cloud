@@ -42,7 +42,7 @@
             cp -r . $out/lib/pi-cloud
             node=${pkgs.nodejs_22}/bin/node
             root=$out/lib/pi-cloud
-            makeWrapper $node $out/bin/pi-cloud --add-flags $root/packages/cli/src/main.ts --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.sops pkgs.git ]}
+            makeWrapper $node $out/bin/pi-cloud --add-flags $root/packages/cli/src/main.ts --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.sops pkgs.age pkgs.git ]}
             makeWrapper $node $out/bin/pi-cloud-server --add-flags $root/apps/local/src/main.ts
             makeWrapper $node $out/bin/pi-cloud-control --add-flags $root/apps/local/src/control-plane.ts
             makeWrapper $node $out/bin/pi-cloud-runner --add-flags $root/apps/local/src/runner.ts
@@ -61,24 +61,7 @@
           runner = { type = "app"; program = "${pkg}/bin/pi-cloud-runner"; };
           deploy-cloudflare = {
             type = "app";
-            program = "${pkgs.writeShellApplication {
-              name = "pi-cloud-deploy-cloudflare";
-              runtimeInputs = [ pkgs.nodejs_22 pkgs.pnpm_10 pkgs.sops pkgs.age pkgs.git ];
-              text = ''
-                root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
-                if [ ! -f "$root/apps/cloudflare/scripts/deploy.ts" ]; then
-                  echo "Run this inside a pi-cloud checkout: git clone https://github.com/ryanjwong/pi-cloud.git" >&2
-                  exit 1
-                fi
-                cd "$root"
-                pnpm install --frozen-lockfile --config.confirmModulesPurge=false
-                PI_CLOUD_VIA_NIX=1 node apps/cloudflare/scripts/deploy.ts "$@"
-                echo "Installing the pi-cloud command into your Nix profile..."
-                nix profile remove pi-cloud > /dev/null 2>&1 || true
-                nix profile add "$root#pi-cloud" 2> /dev/null || nix profile install "$root#pi-cloud"
-                echo "Done. In any repository, run: pi-cloud"
-              '';
-            }}/bin/pi-cloud-deploy-cloudflare";
+            program = "${pkgs.writeShellScript "pi-cloud-deploy-cloudflare" ''exec ${pkg}/bin/pi-cloud deploy cloudflare "$@"''}";
           };
         });
 

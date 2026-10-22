@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [claude/pi-cloud-control-plane]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: sudo apt-get update -q && sudo apt-get install -yq age
+      - run: sudo curl -fsSLo /usr/local/bin/sops https://github.com/getsops/sops/releases/download/v3.10.2/sops-v3.10.2.linux.amd64 && sudo chmod +x /usr/local/bin/sops
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm test
+
+  nix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: cachix/install-nix-action@v31
+      - run: nix build .#pi-cloud --no-link -L
+
+  stable:
+    if: github.event_name == 'push'
+    needs: [check, nix]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - run: git push origin HEAD:stable
