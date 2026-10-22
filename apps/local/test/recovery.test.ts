@@ -73,7 +73,7 @@ describe("crash recovery", () => {
   }, 30_000)
 
   it("fences writes from a runner that lost its lease", async () => {
-    deployment = await startLocal({ port: port(), settings, runnerSecret: "test-runner-secret", runner: { plugins: [] } })
+    deployment = await startLocal({ port: port(), settings: { ...settings, recoveryIntervalMs: 60_000 }, runnerSecret: "test-runner-secret", runner: { plugins: [] } })
     const local = deployment
 
     const program = Effect.gen(function*() {
