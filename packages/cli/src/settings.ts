@@ -3,16 +3,38 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "n
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 
-export interface CliSettings {
-  readonly url?: string
-  readonly sandboxProvider?: string
-  readonly secretsFile?: string
+export interface Target {
+  readonly kind: "cloudflare"
+  readonly url: string
+  readonly sandboxProvider?: string | undefined
 }
 
-export const settingsFile = () => join(process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config"), "pi-cloud", "config.json")
+export interface CliSettings {
+  readonly default?: string
+  readonly targets?: Readonly<Record<string, Target>>
+}
+
+export const LOCAL_URL = "http://127.0.0.1:8787"
+
+export const paths = () => {
+  const dir = join(process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config"), "pi-cloud")
+  return {
+    dir,
+    settings: join(dir, "config.json"),
+    ageKey: process.env.SOPS_AGE_KEY_FILE ?? join(dir, "age.key"),
+    sopsConfig: join(dir, ".sops.yaml"),
+    secrets: join(dir, "secrets.yaml")
+  }
+}
+
+export const writePrivate = (file: string, text: string) => {
+  mkdirSync(dirname(file), { recursive: true, mode: 0o700 })
+  writeFileSync(file, text, { mode: 0o600 })
+  chmodSync(file, 0o600)
+}
 
 export const readSettings = (): CliSettings => {
-  const file = settingsFile()
+  const file = paths().settings
   if (!existsSync(file)) return {}
   try {
     return JSON.parse(readFileSync(file, "utf8")) as CliSettings
@@ -21,24 +43,31 @@ export const readSettings = (): CliSettings => {
   }
 }
 
-export const writeSettings = (settings: CliSettings) => {
-  const file = settingsFile()
-  mkdirSync(dirname(file), { recursive: true })
-  writeFileSync(file, `${JSON.stringify(settings, null, 2)}\n`)
-  chmodSync(file, 0o600)
+export const saveTarget = (name: string, target: Target) => {
+  const file = paths().settings
+  const saved = readSettings()
+  const targets = { ...saved.targets, [name]: target }
+  writePrivate(file, `${JSON.stringify({ default: saved.targets?.[name] === undefined ? name : saved.default ?? name, targets }, null, 2)}\n`)
   return file
 }
 
-export const apiKeyFrom = (secretsFile: string): string => {
+export const sopsEnv = () => {
+  const { ageKey } = paths()
+  return existsSync(ageKey) ? { ...process.env, SOPS_AGE_KEY_FILE: ageKey } : process.env
+}
+
+export const readSecrets = (): Record<string, string> => {
+  const file = paths().secrets
+  if (!existsSync(file)) return {}
   try {
-    const keys = execFileSync("sops", ["decrypt", "--extract", '["PI_CLOUD_API_KEYS"]', secretsFile], {
+    return JSON.parse(execFileSync("sops", ["decrypt", "--output-type", "json", file], {
       encoding: "utf8",
+      env: sopsEnv(),
       stdio: ["ignore", "pipe", "pipe"]
-    })
-    return keys.split(",")[0]!.trim()
+    }))
   } catch (error) {
     const detail = (error as { stderr?: string }).stderr?.trim() || (error as Error).message
-    throw new Error(`Could not read the API key from ${secretsFile} with sops: ${detail}`)
+    throw new Error(`Could not decrypt ${file} with sops: ${detail}`)
   }
 }
 
@@ -48,17 +77,25 @@ export interface Connection {
   readonly sandboxProvider: string
 }
 
-export const resolveConnection = (flagUrl: string | undefined): Connection => {
-  const saved = readSettings()
-  const url = flagUrl ?? process.env.PI_CLOUD_URL ?? saved.url ?? "http://127.0.0.1:8787"
-  const fromSettings = flagUrl === undefined && process.env.PI_CLOUD_URL === undefined && saved.url !== undefined
-  const apiKey = process.env.PI_CLOUD_API_KEY ?? (fromSettings && saved.secretsFile !== undefined ? apiKeyFrom(saved.secretsFile) : undefined)
-  return { url, apiKey, sandboxProvider: process.env.PI_CLOUD_SANDBOX_PROVIDER ?? saved.sandboxProvider ?? "local" }
+export const resolveConnection = (flagUrl?: string, flagKey?: string, secrets = readSecrets): Connection => {
+  const saved: CliSettings & { readonly url?: string } = readSettings()
+  if (saved.url !== undefined && saved.targets === undefined) {
+    const { dir, settings } = paths()
+    throw new Error(`${settings} is from an older pi-cloud: move your age key (as age.key), secrets.yaml and .sops.yaml into ${dir}, then run pi-cloud deploy cloudflare`)
+  }
+  const target = saved.default === undefined ? undefined : saved.targets?.[saved.default]
+  const explicit = flagUrl ?? process.env.PI_CLOUD_URL
+  const savedKey = () => secrets().PI_CLOUD_API_KEYS?.split(",")[0]?.trim()
+  return {
+    url: explicit ?? target?.url ?? LOCAL_URL,
+    apiKey: flagKey ?? process.env.PI_CLOUD_API_KEY ?? (explicit === undefined && target !== undefined ? savedKey() : undefined),
+    sandboxProvider: process.env.PI_CLOUD_SANDBOX_PROVIDER ?? target?.sandboxProvider ?? "local"
+  }
 }
 
 export const unreachable = (url: string) =>
-  url === "http://127.0.0.1:8787"
-    ? "No pi-cloud server is set up. Run `nix run .#deploy-cloudflare` (or `pnpm start` for a local one)."
+  url === LOCAL_URL
+    ? "No pi-cloud server is set up. Run `pi-cloud deploy cloudflare`, or start a local one with `pi-cloud-server` (`pnpm start` in a checkout)."
     : `Can't reach pi-cloud at ${url}.`
 
 export const rejected = (url: string) => `pi-cloud at ${url} rejected the API key.`

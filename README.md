@@ -10,18 +10,26 @@ It is a single-tenant stack: one control plane that owns all state, and runners 
 outbound HTTP. It runs as one Node process, as a control plane and runners on separate machines, or entirely on
 Cloudflare.
 
-## Try it locally
-
-With Nix:
+## Install
 
 ```sh
-git clone https://github.com/ryanjwong/pi-cloud.git && cd pi-cloud
-nix profile add .#pi-cloud                      # the pi-cloud command
-ANTHROPIC_API_KEY=sk-ant-... nix run            # control plane and runner on 127.0.0.1:8787
+nix profile install github:ryanjwong/pi-cloud/stable#pi-cloud
 ```
 
-Without Nix, with Node 22.19+ and pnpm: `pnpm install`, then `ANTHROPIC_API_KEY=sk-ant-... pnpm start`, and
-`alias pi-cloud="node $PWD/packages/cli/src/main.ts"`. Then, in another terminal:
+That gives you `pi-cloud` and `pi-cloud-server`. Without Nix, with Node 22.19+, pnpm, `sops` and `age`:
+`git clone -b stable https://github.com/ryanjwong/pi-cloud.git && cd pi-cloud && pnpm install`, then
+`alias pi-cloud="node $PWD/packages/cli/src/main.ts"`.
+
+`pi-cloud update` updates either install from GitHub and redeploys your servers. `pi-cloud doctor` checks the
+setup: tools, secrets, the server and the API key.
+
+## Try it locally
+
+```sh
+ANTHROPIC_API_KEY=sk-ant-... pi-cloud-server    # control plane and runner on 127.0.0.1:8787; pnpm start in a checkout
+```
+
+Then, in another terminal:
 
 ```sh
 cd ~/code/some-repo && pi-cloud
@@ -35,25 +43,23 @@ The local server listens on loopback only, with no API key. The agent's sandbox 
 
 ## Deploy to Cloudflare
 
-Needs a Cloudflare account and Nix:
+Needs a Cloudflare account:
 
 ```sh
-git clone https://github.com/ryanjwong/pi-cloud.git && cd pi-cloud
-nix run .#deploy-cloudflare
+pi-cloud deploy cloudflare
 ```
 
-It creates an age key if you have none and points `.sops.yaml` at it. It generates pi-cloud's own secrets, then
-asks for your model, [Daytona](https://app.daytona.io) and GitHub keys; press Enter to skip any of them. Everything
-is kept encrypted in `secrets.yaml`. Then it signs you in to Cloudflare, deploys, saves the server's address for the
-CLI in `~/.config/pi-cloud/config.json`, and installs the `pi-cloud` command into your Nix profile. After that:
+It keeps its state in `~/.config/pi-cloud`, never in a checkout. It creates an age key and `.sops.yaml` there,
+generates pi-cloud's own secrets, then asks for your model, [Daytona](https://app.daytona.io) and GitHub keys; press
+Enter to skip any of them. Everything is kept encrypted in `secrets.yaml`. Then it signs you in to Cloudflare,
+deploys, and saves the server as the CLI's target in `config.json`. After that:
 
 ```sh
 pi-cloud login anthropic         # if you skipped the API keys: sign in with Claude Pro/Max (or openai-codex)
 cd ~/code/some-repo && pi-cloud
 ```
 
-Run it again to redeploy; it only asks for keys that are missing. Without Nix, install Node, pnpm, `sops` and `age`,
-run `pnpm install && pnpm deploy:cloudflare`, and add the alias it prints.
+Run it again to redeploy; it only asks for keys that are missing. `pi-cloud init` does only the secrets step.
 
 Daytona provides the sandboxes, since a Worker has no shell of its own. On Cloudflare the agent gets Pi's coding
 tools but not yet Pi's full coding-agent prompt or subagents. [Deploying](docs/deploy.md) has the details.
@@ -90,5 +96,4 @@ Cloudflare account, or the live GitHub and Daytona APIs. Known gaps:
 - One control-plane process at a time: leases and event streams live in its memory.
 - The TUI is Pi 1.1's durable TUI, which Pi 1.3 dropped. It has no session picker, forks or `/login`.
 - On Cloudflare: no Pi coding-agent prompt or subagents, and no GitHub or Slack connectors yet.
-- The Nix package has a placeholder dependency hash; the first `nix build` prints the real one.
 - Pi Durable is experimental; versions are pinned.

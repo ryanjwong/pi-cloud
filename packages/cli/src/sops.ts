@@ -1,7 +1,8 @@
 import { spawnSync } from "node:child_process"
 import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join, resolve } from "node:path"
+import { sopsEnv } from "./settings.ts"
 
 const encodeValue = (value: string) => {
   const body = value.replace(/\n+$/, "")
@@ -34,10 +35,11 @@ export const writeSopsSecrets = (file: string, values: Readonly<Record<string, s
     const editor = join(dir, "editor")
     writeFileSync(editor, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(new URL(import.meta.url).pathname)} "$@"\n`)
     chmodSync(editor, 0o700)
-    const result = spawnSync("sops", ["edit", file], {
+    const result = spawnSync("sops", ["edit", resolve(file)], {
+      cwd: dirname(resolve(file)),
       stdio: ["inherit", "inherit", "pipe"],
       env: {
-        ...process.env,
+        ...sopsEnv(),
         EDITOR: editor,
         SOPS_EDITOR: editor,
         PI_CLOUD_SOPS_VALUES: JSON.stringify(values),
@@ -46,6 +48,7 @@ export const writeSopsSecrets = (file: string, values: Readonly<Record<string, s
     })
     if (result.error !== undefined) throw new Error(`Could not run sops (${result.error.message}); install it, or pass --print`)
     if (result.status !== 0) throw new Error(`sops failed: ${result.stderr.toString().trim()}`)
+    chmodSync(file, 0o600)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

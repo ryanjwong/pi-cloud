@@ -2,7 +2,7 @@
 import { NodeRuntime } from "@effect/platform-node"
 import { type CommandResult, followEvents, openChannel, PiCloud } from "@pi-cloud/client"
 import { runTui } from "@pi-cloud/tui"
-import { Deferred, Effect, Stream } from "effect"
+import { Cause, Deferred, Effect, Stream } from "effect"
 import { execFileSync } from "node:child_process"
 import { createInterface } from "node:readline/promises"
 import { parseArgs } from "node:util"
@@ -10,8 +10,21 @@ import { githubAppCommand } from "./github-app.ts"
 import { importFromCodex, importFromPi, listCredentials, login, loginProviders, logout } from "./login.ts"
 import { makeRenderer } from "./render.ts"
 import { rejected, resolveConnection, unreachable } from "./settings.ts"
+import { deploy, doctor, init, update } from "./setup.ts"
 
-const { values: flags, positionals } = parseArgs({
+const write = (text: string) => void process.stdout.write(text)
+const fail = (error: unknown, hint = ""): never => {
+  write(`${error instanceof Error ? error.message : String(error)}\n${hint}`)
+  return process.exit(1)
+}
+const orExit = <A>(run: () => A, hint?: string): A => {
+  try {
+    return run()
+  } catch (error) {
+    return fail(error, hint)
+  }
+}
+const { values: flags, positionals } = orExit(() => parseArgs({
   allowPositionals: true,
   options: {
     model: { type: "string" },
@@ -27,11 +40,12 @@ const { values: flags, positionals } = parseArgs({
     name: { type: "string" },
     secrets: { type: "string" },
     print: { type: "boolean" },
-    manifest: { type: "boolean" }
+    manifest: { type: "boolean" },
+    "api-key": { type: "string" },
+    help: { type: "boolean", short: "h" }
   }
-})
+}), "Run pi-cloud --help for usage.\n")
 const [command = "tui", ...rest] = positionals
-const write = (text: string) => void process.stdout.write(text)
 
 const usage = `pi-cloud [-c | -r <id>] [--model provider/model]
       Pi's TUI on a cloud session. In a git checkout the agent works in a cloud clone of its origin at the
@@ -40,11 +54,16 @@ const usage = `pi-cloud [-c | -r <id>] [--model provider/model]
 pi-cloud login [provider] [--from-pi | --from-codex]
       sign in to a model provider (ChatGPT/Codex: openai-codex, Claude Pro/Max: anthropic, ...) in your browser and
       store the login on the server, for every session; --from-pi / --from-codex import an existing Pi or Codex login
-pi-cloud github-app --url <public control plane URL> [--org acme] [--name pi-cloud] [--secrets secrets.yaml]
+pi-cloud github-app --url <public control plane URL> [--org acme] [--name pi-cloud] [--secrets file]
       create pi-cloud's GitHub App from its manifest in your browser (one click on GitHub), and store its ID,
-      private key and webhook secret in the SOPS file; --print prints them instead, --manifest prints the manifest
+      private key and webhook secret in ~/.config/pi-cloud/secrets.yaml or --secrets; --print prints them instead, --manifest prints the manifest
 pi-cloud logout <provider>                    remove a stored credential
 pi-cloud auth                                 list stored credentials
+
+pi-cloud init                                 create the age key and secrets in ~/.config/pi-cloud
+pi-cloud deploy cloudflare [--name pi-cloud]  deploy to Cloudflare and point this CLI at it
+pi-cloud doctor                               check the tools, secrets, server and API key
+pi-cloud update                               update pi-cloud from GitHub, then redeploy every target
 
 pi-cloud <command>
 
@@ -57,9 +76,34 @@ pi-cloud <command>
   tail <id>                                   print a session's live events
   rm   <id>                                   delete a session
 
-  Connects to the server set up by \`nix run .#deploy-cloudflare\` or \`pnpm deploy:cloudflare\` (saved in
-  ~/.config/pi-cloud/config.json), else http://127.0.0.1:8787. PI_CLOUD_URL, PI_CLOUD_API_KEY and
-  PI_CLOUD_SANDBOX_PROVIDER override it.`
+  Connects to the target saved by \`pi-cloud deploy\` (~/.config/pi-cloud/config.json), else http://127.0.0.1:8787.
+  --url and --api-key, then PI_CLOUD_URL and PI_CLOUD_API_KEY, override it; PI_CLOUD_SANDBOX_PROVIDER picks the sandbox.`
+
+if (flags.help === true || command === "help") {
+  write(`${usage}\n`)
+  process.exit()
+}
+const setup = () => {
+  switch (command) {
+    case "init":
+      return init()
+    case "deploy":
+      return deploy(rest[0], flags.name)
+    case "doctor":
+      return doctor(flags.url, flags["api-key"])
+    case "update":
+      return update()
+    case "github-app":
+      return githubAppCommand(flags, write)
+    default:
+      return undefined
+  }
+}
+const local = setup()
+if (local !== undefined) {
+  await local.catch(fail)
+  process.exit()
+}
 
 const createSession = Effect.gen(function*() {
   const client = yield* PiCloud
@@ -82,16 +126,17 @@ const gitOrigin = () => {
     const branch = git("rev-parse", "--abbrev-ref", "HEAD")
     const url = remote.replace(/^git@([^:]+):/, "https://$1/").replace(/^ssh:\/\/git@([^/]+)\//, "https://$1/")
     const name = url.replace(/^https?:\/\/[^/]+\//, "").replace(/\.git$/, "")
-    let unpushed = ""
+    let note = ""
     try {
       const ahead = Number(git("rev-list", "--count", `origin/${branch}..HEAD`))
       const dirty = git("status", "--porcelain").length > 0
-      unpushed = [ahead > 0 ? `${ahead} unpushed commit${ahead === 1 ? "" : "s"}` : "", dirty ? "uncommitted changes" : ""]
+      const unpushed = [ahead > 0 ? `${ahead} unpushed commit${ahead === 1 ? "" : "s"}` : "", dirty ? "uncommitted changes" : ""]
         .filter(Boolean).join(" and ")
+      if (unpushed) note = `the cloud session works from origin; ${unpushed} are not there`
     } catch {
-      unpushed = `branch ${branch} is not on origin`
+      note = `branch ${branch} is not on origin; push it first`
     }
-    return { url, branch, label: `${name}@${branch}`, unpushed }
+    return { url, branch, label: `${name}@${branch}`, note }
   } catch {
     return undefined
   }
@@ -101,7 +146,7 @@ const cloudSession = Effect.gen(function*() {
   const client = yield* PiCloud
   const origin = gitOrigin()
   const provider = resolved.sandboxProvider
-  if (origin?.unpushed) write(`Note: the cloud session works from origin; ${origin.unpushed} are not there.\n`)
+  if (origin?.note) write(`Note: ${origin.note}.\n`)
   const session = yield* client.sessions.create({
     payload: {
       title: flags.title ?? origin?.label,
@@ -121,14 +166,7 @@ const cloudSession = Effect.gen(function*() {
   return { session, label: origin?.label }
 })
 
-const resolved = (() => {
-  try {
-    return resolveConnection(flags.url)
-  } catch (error) {
-    write(`${error instanceof Error ? error.message : String(error)}\n`)
-    process.exit(1)
-  }
-})()
+const resolved = orExit(() => resolveConnection(flags.url, flags["api-key"]))
 const connection = { url: resolved.url, apiKey: resolved.apiKey }
 
 const parseModel = (value: string) => {
@@ -136,8 +174,11 @@ const parseModel = (value: string) => {
   return { provider: provider!, modelId: modelId.join("/") }
 }
 
+const existing = (id: string) => Effect.flatMap(PiCloud, (client) => client.sessions.get({ params: { id: id as never } }))
+
 const converse = (sessionId: string, lines: AsyncIterable<string>, options: { readonly history: boolean }) =>
   Effect.gen(function*() {
+    yield* existing(sessionId)
     const channel = yield* openChannel({ ...connection, sessionId })
     const render = makeRenderer(write)
     let renderedSnapshot = !options.history
@@ -211,7 +252,7 @@ const program = Effect.gen(function*() {
   switch (command) {
     case "tui": {
       let target: { readonly id: string; readonly label?: string | undefined } | undefined
-      if (flags.resume !== undefined) target = { id: (yield* client.sessions.get({ params: { id: flags.resume as never } })).id }
+      if (flags.resume !== undefined) target = { id: (yield* existing(flags.resume)).id }
       else if (flags.continue === true) {
         const origin = gitOrigin()
         const matching = (yield* client.sessions.list()).filter((candidate) => {
@@ -230,13 +271,7 @@ const program = Effect.gen(function*() {
       return yield* Effect.promise(() => runTui({ ...connection, sessionId: id, ...(label === undefined ? {} : { label }) }))
     }
     case "login": {
-      const attempt = (run: () => Promise<void>) =>
-        Effect.promise(() =>
-          run().catch((error) => {
-            process.exitCode = 1
-            write(`Login failed: ${error instanceof Error ? error.message : String(error)}\n`)
-          })
-        )
+      const attempt = (run: () => Promise<void>) => Effect.promise(() => run().catch(fail))
       const provider = rest[0]
       if (flags["from-codex"] === true) return yield* attempt(() => importFromCodex(connection))
       if (flags["from-pi"] === true) return yield* attempt(() => importFromPi(connection, rest))
@@ -270,6 +305,7 @@ const program = Effect.gen(function*() {
     }
     case "tail": {
       if (rest[0] === undefined) return write(`${usage}\n`)
+      yield* existing(rest[0])
       const render = makeRenderer(write)
       return yield* followEvents(rest[0]).pipe(
         Stream.runForEach((batch) => Effect.sync(() => batch.events.forEach((event) => render(event as never))))
@@ -285,29 +321,27 @@ const program = Effect.gen(function*() {
       return yield* converse(id, typed(), { history: true })
     }
     default:
+      process.exitCode = 1
       return write(`${usage}\n`)
   }
 })
 
-if (command === "github-app") {
-  await githubAppCommand(flags, write).catch((error) => {
-    process.exitCode = 1
-    write(`${error instanceof Error ? error.message : String(error)}\n`)
-  })
-} else {
-  program.pipe(
-    Effect.catchIf(
-      (error) => {
-        const failure = error as { _tag?: string; reason?: { _tag?: string } }
-        return failure?.reason?._tag === "TransportError" || failure?._tag === "Unauthorized"
-      },
-      (error) =>
-        Effect.sync(() => {
-          process.exitCode = 1
-          write(`${(error as { _tag?: string })._tag === "Unauthorized" ? rejected(connection.url) : unreachable(connection.url)}\n`)
-        })
-    ),
-    Effect.provide(PiCloud.layer(connection)),
-    NodeRuntime.runMain
-  )
+const explain = (error: unknown) => {
+  const failure = error as { _tag?: string; message?: string; reason?: { _tag?: string } } | undefined
+  if (failure?._tag === "Unauthorized") return rejected(connection.url)
+  if (failure?.reason?._tag === "TransportError" || failure?.reason?._tag === "SocketOpenError") return unreachable(connection.url)
+  return failure?.message || failure?._tag || String(error)
 }
+
+program.pipe(
+  Effect.catchCause((cause) =>
+    Cause.hasInterruptsOnly(cause)
+      ? Effect.failCause(cause)
+      : Effect.sync(() => {
+        process.exitCode = 1
+        write(`${explain(Cause.squash(cause))}\n`)
+      })
+  ),
+  Effect.provide(PiCloud.layer(connection)),
+  NodeRuntime.runMain
+)

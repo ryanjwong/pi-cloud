@@ -9,6 +9,7 @@ dist
 .env
 .dev.vars
 .dev.vars.*
+.nix-node
 
 secrets.dec.yaml
 *.decrypted.*

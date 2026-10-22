@@ -30,11 +30,11 @@ hour, the App's private key never leaves the control plane, and the agent posts 
 pi-cloud github-app --url https://pi.example.com --org acme
 ```
 
-Run it in the directory with `secrets.yaml`. It opens GitHub with the App filled in: private; contents, issues and
+Run `pi-cloud init` first. It opens GitHub with the App filled in: private; contents, issues and
 pull requests set to write; the trigger's events; and the webhook at `<url>/v1/triggers/github`. You click Create.
 GitHub sends you back to the command, which stores `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY` and
-`GITHUB_WEBHOOK_SECRET` in `secrets.yaml`. Then install the App on your repositories from the link it prints and
-restart the control plane.
+`GITHUB_WEBHOOK_SECRET` in `~/.config/pi-cloud/secrets.yaml` (or `--secrets <file>`). Then install the App on
+your repositories from the link it prints and restart the control plane.
 
 - `--manifest` prints the manifest, to create the App by hand.
 - `--print` prints the credentials instead of storing them.
