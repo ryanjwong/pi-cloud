@@ -9,7 +9,7 @@ import { parseArgs } from "node:util"
 import { githubAppCommand } from "./github-app.ts"
 import { importFromCodex, importFromPi, listCredentials, login, loginProviders, logout } from "./login.ts"
 import { makeRenderer } from "./render.ts"
-import { rejected, resolveConnection, unreachable } from "./settings.ts"
+import { readSettings, rejected, resolveConnection, unreachable } from "./settings.ts"
 import { deploy, doctor, init, update } from "./setup.ts"
 
 const write = (text: string) => void process.stdout.write(text)
@@ -83,6 +83,7 @@ if (flags.help === true || command === "help") {
   write(`${usage}\n`)
   process.exit()
 }
+orExit(readSettings)
 const setup = () => {
   switch (command) {
     case "init":

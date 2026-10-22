@@ -1,14 +1,18 @@
-import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { execFileSync, spawnSync } from "node:child_process"
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { paths, readSettings, resolveConnection, saveTarget, writePrivate } from "../src/settings.ts"
+
+const hasSops = spawnSync("sops", ["--version"]).status === 0 && spawnSync("age-keygen", ["--help"]).error === undefined
 
 let home: string
 
 beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), "pi-cloud-settings-"))
   vi.stubEnv("XDG_CONFIG_HOME", home)
+  vi.stubEnv("HOME", home)
   for (const name of ["PI_CLOUD_URL", "PI_CLOUD_API_KEY", "SOPS_AGE_KEY_FILE"]) vi.stubEnv(name, undefined)
 })
 
@@ -33,9 +37,49 @@ describe("settings", () => {
     expect(readSettings().default).toBe("b")
   })
 
-  it("asks to migrate a config from before targets", () => {
-    writePrivate(paths().settings, JSON.stringify({ url: "https://old.example", secretsFile: "secrets.yaml" }))
-    expect(() => resolveConnection()).toThrow(/older pi-cloud/)
+  it("migrates a config from before targets by copying its secrets and the default sops age key", () => {
+    const checkout = join(home, "checkout")
+    const key = join(home, "sops", "age", "keys.txt")
+    mkdirSync(checkout)
+    mkdirSync(join(home, "sops", "age"), { recursive: true })
+    const legacy = { secrets: join(checkout, "secrets.yaml"), sopsConfig: join(checkout, ".sops.yaml"), key }
+    if (hasSops) {
+      execFileSync("age-keygen", ["-o", key], { stdio: "ignore" })
+      const recipient = readFileSync(key, "utf8").match(/public key: (age1\w+)/)![1]!
+      writeFileSync(legacy.sopsConfig, `creation_rules:\n  - path_regex: .*\\.yaml$\n    age: ${recipient}\n`)
+      writeFileSync(legacy.secrets, execFileSync("sops", ["encrypt", "--filename-override", legacy.secrets, "--input-type", "yaml", "--output-type", "yaml", "/dev/stdin"], {
+        cwd: checkout,
+        input: "PI_CLOUD_API_KEYS: old-key\n",
+        env: { ...process.env, SOPS_AGE_KEY_FILE: key }
+      }))
+    } else {
+      writeFileSync(key, "AGE-SECRET-KEY-1TEST\n")
+      writeFileSync(legacy.sopsConfig, "creation_rules: []\n")
+      writeFileSync(legacy.secrets, "PI_CLOUD_API_KEYS: old-key\n")
+    }
+    const before = Object.fromEntries(Object.entries(legacy).map(([name, file]) => [name, readFileSync(file, "utf8")]))
+    writePrivate(paths().settings, JSON.stringify({ url: "https://old.example", sandboxProvider: "daytona", secretsFile: legacy.secrets }))
+    chmodSync(paths().dir, 0o755)
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true)
+    readSettings()
+    expect(stderr).toHaveBeenCalledOnce()
+    stderr.mockRestore()
+    expect(readSettings()).toEqual({ default: "cloudflare", targets: { cloudflare: { kind: "cloudflare", url: "https://old.example" } } })
+    const { ageKey, dir, secrets, sopsConfig, settings } = paths()
+    expect(statSync(dir).mode & 0o777).toBe(0o700)
+    for (const [name, file] of Object.entries({ secrets, sopsConfig, key: ageKey })) {
+      expect(readFileSync(file, "utf8")).toBe(before[name])
+      expect(statSync(file).mode & 0o777).toBe(0o600)
+      expect(readFileSync(legacy[name as keyof typeof legacy], "utf8")).toBe(before[name])
+    }
+    expect(statSync(settings).mode & 0o777).toBe(0o600)
+    rmSync(key)
+    if (hasSops) expect(resolveConnection()).toEqual({ url: "https://old.example", apiKey: "old-key" })
+  })
+
+  it("explains when an older config has no secrets file to migrate", () => {
+    writePrivate(paths().settings, JSON.stringify({ url: "https://old.example" }))
+    expect(() => resolveConnection()).toThrow(/older pi-cloud and has no secrets file to migrate/)
   })
 
   it("takes the URL and key from flags, then the environment, then the saved target", () => {

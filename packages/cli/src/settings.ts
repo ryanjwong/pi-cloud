@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process"
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 
@@ -28,18 +28,46 @@ export const paths = () => {
 
 export const writePrivate = (file: string, text: string) => {
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 })
-  writeFileSync(file, text, { mode: 0o600 })
-  chmodSync(file, 0o600)
+  writeFileSync(`${file}.tmp`, text, { mode: 0o600 })
+  chmodSync(`${file}.tmp`, 0o600)
+  renameSync(`${file}.tmp`, file)
+}
+
+const parseSettings = (file: string): CliSettings & { readonly url?: string; readonly secretsFile?: string } => {
+  try {
+    return JSON.parse(readFileSync(file, "utf8"))
+  } catch {
+    throw new Error(`${file} is not valid JSON`)
+  }
+}
+
+const sopsDefaultKeys = () =>
+  [process.env.XDG_CONFIG_HOME, join(homedir(), "Library", "Application Support"), join(homedir(), ".config")].flatMap((dir) =>
+    dir === undefined ? [] : [join(dir, "sops", "age", "keys.txt")]
+  )
+
+const migrate = (url: string, secretsFile: string | undefined): CliSettings => {
+  const { dir, settings, secrets, sopsConfig, ageKey } = paths()
+  chmodSync(dir, 0o700)
+  const key = process.env.SOPS_AGE_KEY_FILE === undefined ? sopsDefaultKeys().find((file) => existsSync(file)) : undefined
+  const copies = [[secretsFile, secrets], [secretsFile && join(dirname(secretsFile), ".sops.yaml"), sopsConfig], [key, ageKey]] as const
+  const copied = copies.flatMap(([from, to]) => {
+    if (from === undefined || !existsSync(from) || existsSync(to)) return []
+    writePrivate(to, readFileSync(from, "utf8"))
+    return [to]
+  })
+  if (!existsSync(secrets)) throw new Error(`${settings} is from an older pi-cloud and has no secrets file to migrate: remove it and run \`pi-cloud deploy cloudflare\``)
+  const migrated = { default: "cloudflare", targets: { cloudflare: { kind: "cloudflare", url } } } as const
+  writePrivate(settings, `${JSON.stringify(migrated, null, 2)}\n`)
+  process.stderr.write(`Migrated your older pi-cloud config to ${[settings, ...copied].join(", ")} (originals untouched).\n`)
+  return migrated
 }
 
 export const readSettings = (): CliSettings => {
   const file = paths().settings
   if (!existsSync(file)) return {}
-  try {
-    return JSON.parse(readFileSync(file, "utf8")) as CliSettings
-  } catch {
-    throw new Error(`${file} is not valid JSON`)
-  }
+  const saved = parseSettings(file)
+  return saved.url !== undefined && saved.targets === undefined ? migrate(saved.url, saved.secretsFile) : saved
 }
 
 export const saveTarget = (name: string, target: Target) => {
@@ -76,11 +104,7 @@ export interface Connection {
 }
 
 export const resolveConnection = (flagUrl?: string, flagKey?: string, secrets = readSecrets): Connection => {
-  const saved: CliSettings & { readonly url?: string } = readSettings()
-  if (saved.url !== undefined && saved.targets === undefined) {
-    const { dir, settings } = paths()
-    throw new Error(`${settings} is from an older pi-cloud: move your age key (as age.key), secrets.yaml and .sops.yaml into ${dir}, then run pi-cloud deploy cloudflare`)
-  }
+  const saved = readSettings()
   const target = saved.default === undefined ? undefined : saved.targets?.[saved.default]
   const explicit = flagUrl ?? process.env.PI_CLOUD_URL
   const savedKey = () => secrets().PI_CLOUD_API_KEYS?.split(",")[0]?.trim()
