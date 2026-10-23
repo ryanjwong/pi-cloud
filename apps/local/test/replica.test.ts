@@ -78,7 +78,6 @@ describe("read replicas", () => {
         fauxAssistantMessage("Second answer.")
       ])
       deployment = await startLocal({
-        port: 41_000 + Math.floor(Math.random() * 10_000),
         settings: { leaseTtlMs: 1_500, recoveryIntervalMs: 250, attachTimeoutMs: 5_000 },
         ...sqliteStores({ file: join(root, "pi-cloud.sqlite"), credentialKeys: ["test-key"] }),
         runner: {

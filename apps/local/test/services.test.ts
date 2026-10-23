@@ -39,7 +39,6 @@ describe("the service API", () => {
       fauxAssistantMessage("Three files.")
     ])
     deployment = await startLocal({
-      port: 41_000 + Math.floor(Math.random() * 10_000),
       runner: {
         idleMs: 2_000,
         plugins: [
@@ -101,7 +100,6 @@ describe("the service API", () => {
     const faux = fauxProvider({ tokensPerSecond: 50 })
     faux.setResponses([fauxAssistantMessage(Array.from({ length: 40 }, (_, index) => `w${index}`).join(" "))])
     deployment = await startLocal({
-      port: 41_000 + Math.floor(Math.random() * 10_000),
       runner: { idleMs: 2_000, settings: { progress: { partialIntervalMs: 60_000 } }, plugins: [modelProviders(faux.provider)] }
     })
     const connection = await connectServices(deployment)
@@ -125,7 +123,6 @@ describe("the service API", () => {
     const faux = fauxProvider()
     faux.setResponses([fauxAssistantMessage("before"), fauxAssistantMessage("after")])
     deployment = await startLocal({
-      port: 41_000 + Math.floor(Math.random() * 10_000),
       settings: { leaseTtlMs: 1_500, recoveryIntervalMs: 250, attachTimeoutMs: 5_000 },
       runner: { idleMs: 5_000, plugins: [modelProviders(faux.provider)] }
     })

@@ -64,7 +64,6 @@ describe.skipIf(!available)("Docker sandboxes", () => {
       fauxAssistantMessage("Done")
     ])
     deployment = await startLocal({
-      port: 41_000 + Math.floor(Math.random() * 10_000),
       runner: {
         idleMs: 5_000,
         secrets: async (name) => (name === "API_TOKEN" ? "tok_in_the_container" : undefined),

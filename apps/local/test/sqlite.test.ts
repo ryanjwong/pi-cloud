@@ -33,10 +33,8 @@ describe("sqlite stores", () => {
     dir = await mkdtemp(join(tmpdir(), "pi-cloud-sqlite-"))
     const faux = fauxProvider()
     faux.setResponses([fauxAssistantMessage("first answer"), fauxAssistantMessage("second answer")])
-    const port = 41_000 + Math.floor(Math.random() * 10_000)
     const start = () =>
       startLocal({
-        port,
         ...sqliteStores({ file: join(dir!, "pi-cloud.sqlite"), credentialKeys: ["test-key"] }),
         runner: { plugins: [modelProviders(faux.provider)], idleMs: 300 }
       })

@@ -1,11 +1,11 @@
-import { type ChildProcess, spawn } from "node:child_process"
 import { createServer, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
 import { join } from "node:path"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
+import { unstable_startWorker } from "wrangler"
 
-const port = 48_000 + Math.floor(Math.random() * 1_000)
-let wrangler: ChildProcess | undefined
+let worker: Awaited<ReturnType<typeof unstable_startWorker>> | undefined
+let probe: string
 let api: Server
 const received: Array<{ method: string; path: string; authorization: string | undefined }> = []
 
@@ -19,28 +19,21 @@ beforeAll(async () => {
     })
   })
   await new Promise<void>((resolve) => api.listen(0, "127.0.0.1", resolve))
-  wrangler = spawn("npx", ["wrangler", "dev", "-c", "test/daytona-probe.json", "--port", String(port), "--inspector-port", String(port + 10_000), "--ip", "127.0.0.1"], {
-    cwd: join(import.meta.dirname, ".."),
-    env: { ...process.env, WRANGLER_SEND_METRICS: "false", CI: "1" },
-    stdio: "ignore",
-    detached: true
+  worker = await unstable_startWorker({
+    config: join(import.meta.dirname, "daytona-probe.json"),
+    dev: { server: { hostname: "127.0.0.1", port: 0 }, inspector: false, persist: false, watch: false }
   })
-  for (let attempt = 0; attempt < 120; attempt++) {
-    const up = await fetch(`http://127.0.0.1:${port}/cdn-cgi/local/explorer/api`, { signal: AbortSignal.timeout(1_000) }).then(() => true, () => false)
-    if (up) return
-    await new Promise((resolve) => setTimeout(resolve, 500))
-  }
-  throw new Error("wrangler dev did not start")
+  probe = (await worker.url).origin
 }, 90_000)
 afterAll(async () => {
-  if (wrangler?.pid !== undefined) process.kill(-wrangler.pid, "SIGTERM")
+  await worker?.dispose()
   await new Promise((resolve) => api.close(resolve))
 })
 
 describe("Daytona sandboxes on workerd", () => {
   it("reach the Daytona API with the key, and report its refusal as a sandbox error", async () => {
     const url = `http://127.0.0.1:${(api.address() as AddressInfo).port}`
-    const response = await fetch(`http://127.0.0.1:${port}/?api=${encodeURIComponent(url)}`, { signal: AbortSignal.timeout(60_000) })
+    const response = await fetch(`${probe}/?api=${encodeURIComponent(url)}`, { signal: AbortSignal.timeout(60_000) })
     const { exit } = await response.json() as { exit: string }
     const rest = received.filter((call) => !call.path.startsWith("/socket.io/"))
     expect(rest.map((call) => `${call.method} ${call.path}`)).toEqual(expect.arrayContaining(["POST /sandbox"]))

@@ -28,7 +28,6 @@ describe("GitHub trigger", () => {
     const faux = fauxProvider()
     faux.setResponses([fauxAssistantMessage("On it"), fauxAssistantMessage("Done")])
     deployment = await startLocal({
-      port: 41_000 + Math.floor(Math.random() * 10_000),
       runner: { plugins: [modelProviders(faux.provider)], idleMs: 5_000 },
       extensions: [
         triggers([githubTrigger({ secret, mention: "@pi", spec: { model: { provider: "faux", modelId: "faux-1" } } })])

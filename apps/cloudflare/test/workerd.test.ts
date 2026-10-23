@@ -1,43 +1,40 @@
 import type { ConversationView } from "@earendil-works/pi-durable"
 import { connectServices } from "@pi-cloud/client"
-import { type ChildProcess, spawn } from "node:child_process"
 import { createHmac } from "node:crypto"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
+import { unstable_startWorker } from "wrangler"
 
-const port = 46_000 + Math.floor(Math.random() * 2_000)
-const url = `http://127.0.0.1:${port}`
+type Worker = Awaited<ReturnType<typeof unstable_startWorker>>
+
 const apiKey = "test-api-key"
 const auth = { authorization: `Bearer ${apiKey}` }
+const root = join(import.meta.dirname, "..")
+const vars = { PI_CLOUD_API_KEYS: apiKey, PI_CLOUD_RUNNER_SECRET: "test-runner-secret", PI_CLOUD_CREDENTIAL_KEY: "k".repeat(32), GITHUB_WEBHOOK_SECRET: "hook" }
+let url: string
 let state: string
 const states: Array<string> = []
-let wrangler: ChildProcess | undefined
+let worker: Worker | undefined
 
 const fresh = async () => {
   state = await mkdtemp(join(tmpdir(), "pi-cloud-workerd-"))
   states.push(state)
 }
 const start = async (main?: string, health = 204) => {
-  wrangler = spawn("npx", ["wrangler", "dev", ...(main ? [main] : []), "--port", String(port), "--inspector-port", String(port + 10_000), "--ip", "127.0.0.1", "--persist-to", state,
-    "--var", `PI_CLOUD_API_KEYS:${apiKey}`, "--var", "PI_CLOUD_RUNNER_SECRET:test-runner-secret", "--var",
-    `PI_CLOUD_CREDENTIAL_KEY:${"k".repeat(32)}`, "--var", "GITHUB_WEBHOOK_SECRET:hook"], {
-    cwd: join(import.meta.dirname, ".."),
-    env: { ...process.env, WRANGLER_SEND_METRICS: "false", CI: "1" },
-    stdio: "ignore",
-    detached: true
+  worker = await unstable_startWorker({
+    config: join(root, "wrangler.json"),
+    ...(main ? { entrypoint: join(root, main) } : {}),
+    bindings: Object.fromEntries(Object.entries(vars).map(([name, value]) => [name, { type: "plain_text", value }])),
+    dev: { server: { hostname: "127.0.0.1", port: 0 }, inspector: false, persist: state, watch: false }
   })
-  for (let attempt = 0; attempt < 120; attempt++) {
-    if (await fetch(`${url}/health`, { signal: AbortSignal.timeout(1_000) }).then((response) => response.status === health, () => false)) return
-    await new Promise((resolve) => setTimeout(resolve, 500))
-  }
-  throw new Error("wrangler dev did not start")
+  url = (await worker.url).origin
+  expect((await fetch(`${url}/health`)).status).toBe(health)
 }
 const stop = async () => {
-  if (wrangler?.pid !== undefined) process.kill(-wrangler.pid, "SIGTERM")
-  wrangler = undefined
-  await new Promise((resolve) => setTimeout(resolve, 1_000))
+  await worker?.dispose()
+  worker = undefined
 }
 
 beforeAll(async () => {

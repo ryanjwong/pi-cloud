@@ -50,7 +50,6 @@ describe("stored credentials", () => {
     const { faux, provider, refreshed, used } = subscription()
     faux.setResponses([fauxAssistantMessage("Signed in and answering.")])
     deployment = await startLocal({
-      port: 41_000 + Math.floor(Math.random() * 10_000),
       runner: { idleMs: 5_000, plugins: [modelProviders(provider)] }
     })
     const { url, apiKey } = deployment
@@ -82,7 +81,7 @@ describe("stored credentials", () => {
 
   it("imports logins made with Pi or the Codex CLI", async () => {
     root = await mkdtemp(join(tmpdir(), "pi-cloud-logins-"))
-    deployment = await startLocal({ port: 41_000 + Math.floor(Math.random() * 10_000), runner: { plugins: [] } })
+    deployment = await startLocal({ runner: { plugins: [] } })
     const { url, apiKey } = deployment
     await mkdir(join(root, "pi"))
     await writeFile(join(root, "pi", "auth.json"), JSON.stringify({

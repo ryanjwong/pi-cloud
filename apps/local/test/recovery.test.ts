@@ -1,12 +1,9 @@
 import { fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai/providers/faux"
 import { entryText, PiCloud } from "@pi-cloud/client"
-import { NodeHttpServer } from "@effect/platform-node"
-import { ControlPlane } from "@pi-cloud/control-plane"
+import { listen } from "@pi-cloud/control-plane/node"
 import { RunnerDispatcher } from "@pi-cloud/core"
 import { makeClient, modelProviders, RunnerHost } from "@pi-cloud/runner"
-import { Effect, Exit, Fiber, Layer, Option, Stream } from "effect"
-import { HttpRouter } from "effect/http"
-import { createServer } from "node:http"
+import { Effect, Exit, Fiber, Option, Stream } from "effect"
 import { afterEach, describe, expect, it } from "vitest"
 import { type LocalDeployment, startLocal } from "../src/index.ts"
 
@@ -18,7 +15,6 @@ afterEach(async () => {
   deployment = undefined
 })
 
-const port = () => 41_000 + Math.floor(Math.random() * 10_000)
 const settings = { leaseTtlMs: 1_500, recoveryIntervalMs: 250, attachTimeoutMs: 5_000 }
 
 const poll = <A>(effect: Effect.Effect<A, unknown, PiCloud>, until: (value: A) => boolean, timeoutMs = 15_000) =>
@@ -41,7 +37,6 @@ describe("crash recovery", () => {
       fauxAssistantMessage("Recovered answer")
     ])
     deployment = await startLocal({
-      port: port(),
       settings,
       runner: { plugins: [modelProviders(faux.provider)], idleMs: 5_000 }
     })
@@ -73,7 +68,7 @@ describe("crash recovery", () => {
   }, 30_000)
 
   it("fences writes from a runner that lost its lease", async () => {
-    deployment = await startLocal({ port: port(), settings: { ...settings, recoveryIntervalMs: 60_000 }, runnerSecret: "test-runner-secret", dispatcher: capture, runner: { plugins: [] } })
+    deployment = await startLocal({ settings: { ...settings, recoveryIntervalMs: 60_000 }, runnerSecret: "test-runner-secret", dispatcher: capture, runner: { plugins: [] } })
     const local = deployment
 
     const program = Effect.gen(function*() {
@@ -100,7 +95,7 @@ describe("crash recovery", () => {
 
 describe("runner reconnects", () => {
   it("delivers commands to a runner's newest connection and ends the old one", async () => {
-    deployment = await startLocal({ port: port(), settings, runnerSecret: "test-runner-secret", dispatcher: capture, runner: { plugins: [] } })
+    deployment = await startLocal({ settings, runnerSecret: "test-runner-secret", dispatcher: capture, runner: { plugins: [] } })
     const local = deployment
 
     const program = Effect.gen(function*() {
@@ -170,7 +165,7 @@ const firstLease = (rpc: Rpc, sessionId: string, runnerId: string, grant: string
 
 describe("busy conversations", () => {
   it("answers 409 when the runner reports the conversation busy", async () => {
-    deployment = await startLocal({ port: port(), settings, runnerSecret: "test-runner-secret", dispatcher: capture, runner: { plugins: [] } })
+    deployment = await startLocal({ settings, runnerSecret: "test-runner-secret", dispatcher: capture, runner: { plugins: [] } })
     const local = deployment
 
     const program = Effect.gen(function*() {
@@ -211,23 +206,22 @@ describe("lost wakes", () => {
       () => new Promise((resolve) => { hang = () => resolve(fauxAssistantMessage("too late")) }),
       fauxAssistantMessage("Recovered after a lost wake")
     ])
-    const base = port()
-    const url = `http://127.0.0.1:${base}`
+    const server = await listen()
+    const { url } = server
     const secret = "lost-wake-secret"
     const runners = new RunnerHost({ plugins: [modelProviders(faux.provider)], secret, controlPlaneUrl: url, idleMs: 5_000 })
     let wakes = 0
-    const server = Effect.runFork(Layer.launch(HttpRouter.serve(ControlPlane.layer({
-      settings: { ...settings, publicUrl: url, attachTimeoutMs: 1_500 },
-      apiKeys: ["lost-wake-key"],
-      runnerSecret: secret,
-      dispatcher: RunnerDispatcher.make(async (request) => {
-        wakes++
-        if (wakes === 2) return
-        await runners.wake(request)
-      })
-    }), { disableLogger: true }).pipe(Layer.provide(NodeHttpServer.layer(createServer, { port: base, host: "127.0.0.1" })))))
     try {
-      await new Promise((resolve) => setTimeout(resolve, 300))
+      await server.serve({
+        settings: { ...settings, publicUrl: url, attachTimeoutMs: 1_500 },
+        apiKeys: ["lost-wake-key"],
+        runnerSecret: secret,
+        dispatcher: RunnerDispatcher.make(async (request) => {
+          wakes++
+          if (wakes === 2) return
+          await runners.wake(request)
+        })
+      }, { disableLogger: true })
       await Effect.runPromise(Effect.gen(function*() {
         const client = yield* PiCloud
         const session = yield* client.sessions.create({ payload: { spec: { model } } })
@@ -247,7 +241,7 @@ describe("lost wakes", () => {
       }).pipe(Effect.provide(PiCloud.layer({ url, apiKey: "lost-wake-key" }))))
     } finally {
       await runners.close()
-      await Effect.runPromise(Fiber.interrupt(server))
+      await server.close()
     }
   }, 40_000)
 })

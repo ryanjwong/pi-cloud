@@ -5,6 +5,7 @@ import { sources } from "@pi-cloud/sources"
 import { hmacSha256Hex } from "@pi-cloud/triggers"
 import { Effect } from "effect"
 import { createServer, type Server } from "node:http"
+import type { AddressInfo } from "node:net"
 import { afterEach, describe, expect, it } from "vitest"
 import { type LocalDeployment, startLocal } from "../src/index.ts"
 
@@ -18,8 +19,8 @@ afterEach(async () => {
 
 const signingSecret = "slack-signing-secret"
 
-const fakeSlack = (port: number) =>
-  new Promise<{ server: Server; posts: Array<{ channel: string; thread_ts: string; text: string; auth?: string }> }>(
+const fakeSlack = () =>
+  new Promise<{ server: Server; apiUrl: string; posts: Array<{ channel: string; thread_ts: string; text: string; auth?: string }> }>(
     (resolve) => {
       const posts: Array<{ channel: string; thread_ts: string; text: string; auth?: string }> = []
       const server = createServer((req, res) => {
@@ -31,7 +32,7 @@ const fakeSlack = (port: number) =>
           res.end(JSON.stringify({ ok: true }))
         })
       })
-      server.listen(port, "127.0.0.1", () => resolve({ server, posts }))
+      server.listen(0, "127.0.0.1", () => resolve({ server, apiUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}/api`, posts }))
     }
   )
 
@@ -45,13 +46,11 @@ const until = async (check: () => boolean, timeoutMs = 10_000) => {
 
 describe("Slack source", () => {
   it("turns mentions and thread replies into prompts and answers in the thread", async () => {
-    const base = 41_000 + Math.floor(Math.random() * 10_000)
-    const slack = await fakeSlack(base + 1)
+    const slack = await fakeSlack()
     slackApi = slack.server
     const faux = fauxProvider()
     faux.setResponses([fauxAssistantMessage("Hi from pi"), fauxAssistantMessage("Still here")])
     deployment = await startLocal({
-      port: base,
       runner: { plugins: [modelProviders(faux.provider)], idleMs: 5_000 },
       extensions: [
         sources([
@@ -59,7 +58,7 @@ describe("Slack source", () => {
             signingSecret,
             botToken: "xoxb-test",
             allowedUsers: ["U42"],
-            apiUrl: `http://127.0.0.1:${base + 1}/api`,
+            apiUrl: slack.apiUrl,
             spec: { model: { provider: "faux", modelId: "faux-1" } }
           })
         ])

@@ -93,7 +93,6 @@ describe("Pi's TUI on a cloud session", () => {
     ])
     const cloud = join(root, "cloud")
     deployment = await startLocal({
-      port: 41_000 + Math.floor(Math.random() * 10_000),
       runner: {
         idleMs: 5_000,
         plugins: [
@@ -158,7 +157,6 @@ describe("Pi's TUI on a cloud session", () => {
     root = await mkdtemp(join(tmpdir(), "pi-cloud-tui-"))
     const faux = fauxProvider({ models: [{ id: "deep", reasoning: true }, { id: "plain" }] })
     deployment = await startLocal({
-      port: 41_000 + Math.floor(Math.random() * 10_000),
       runner: {
         idleMs: 5_000,
         plugins: [modelProviders(faux.provider), extensions("coding", CodingTools), sandboxes({ providers: [localSandboxes({ root })] })]
@@ -202,7 +200,6 @@ describe("Pi's TUI on a cloud session", () => {
       fauxAssistantMessage("The subagent counted three files.")
     ])
     deployment = await startLocal({
-      port: 41_000 + Math.floor(Math.random() * 10_000),
       runner: {
         idleMs: 5_000,
         plugins: [

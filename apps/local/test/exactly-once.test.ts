@@ -23,7 +23,6 @@ let crashes = 0
 beforeAll(async () => {
   faux.setResponses(Array.from({ length: 2_000 }, () => answer))
   deployment = await startLocal({
-    port: 41_000 + Math.floor(Math.random() * 10_000),
     settings: { leaseTtlMs: 600, recoveryIntervalMs: 150, attachTimeoutMs: 5_000 },
     runner: { idleMs: 10_000, plugins: [modelProviders(faux.provider)] }
   })
