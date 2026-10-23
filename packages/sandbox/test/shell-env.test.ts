@@ -63,6 +63,7 @@ const exercise = async (env: ExecutionEnv, dir: string) => {
   results.exists = [code(await env.exists(join(dir, "bin"), context)), code(await env.exists(join(dir, "nope"), context))]
   results.rename = code(await env.renameFile(join(dir, "bin"), join(dir, "a/moved"), context))
   results.renamed = [code(await env.exists(join(dir, "bin"), context)), code(await env.exists(join(dir, "a/moved"), context))]
+  results.renameOntoItself = code(await env.renameFile(join(dir, "a/moved"), join(dir, "a/moved"), context))
   results.truncate = code(await env.truncateFile(join(dir, "a/moved"), 10, context))
   results.truncated = code(await env.fileInfo(join(dir, "a/moved"), context))
   results.truncated = (results.truncated as { ok?: { size: number } }).ok?.size

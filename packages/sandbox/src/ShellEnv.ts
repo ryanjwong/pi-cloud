@@ -461,7 +461,7 @@ s=$?; rm -f ${quote(pidFile)}; exit $s`
       const from = await absolute(source)
       const to = await absolute(destination)
       const result = await fileOp(
-        `p "$1"; p "$2"; e "$1"; if [ -d "$2" ] && [ ! -d "$1" ]; then exit 3; fi; mv -f -- "$1" "$2"`,
+        `p "$1"; p "$2"; e "$1"; if [ -d "$2" ] && [ ! -d "$1" ]; then exit 3; fi; [ "$1" = "$2" ] || mv -f -- "$1" "$2"`,
         from,
         [from, to],
         context
