@@ -8,6 +8,7 @@ import { hmacSha256Hex, triggers, webhookTrigger } from "@pi-cloud/triggers"
 import { Effect } from "effect"
 import { mkdtemp, rm } from "node:fs/promises"
 import { createServer, type Server } from "node:http"
+import type { AddressInfo } from "node:net"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
@@ -26,7 +27,6 @@ afterEach(async () => {
 })
 
 const model = { provider: "faux", modelId: "faux-1" }
-const port = () => 41_000 + Math.floor(Math.random() * 10_000)
 
 const until = async (check: () => boolean | Promise<boolean>, timeoutMs = 10_000) => {
   const deadline = Date.now() + timeoutMs
@@ -37,8 +37,8 @@ const until = async (check: () => boolean | Promise<boolean>, timeoutMs = 10_000
 }
 
 type Post = { channel: string; thread_ts: string; text: string }
-const fakeSlack = (listen: number) =>
-  new Promise<{ server: Server; posts: Array<Post> }>((resolve) => {
+const fakeSlack = () =>
+  new Promise<{ server: Server; apiUrl: string; posts: Array<Post> }>((resolve) => {
     const posts: Array<Post> = []
     const server = createServer((req, res) => {
       let body = ""
@@ -49,7 +49,7 @@ const fakeSlack = (listen: number) =>
         res.end(JSON.stringify({ ok: true }))
       })
     })
-    server.listen(listen, "127.0.0.1", () => resolve({ server, posts }))
+    server.listen(0, "127.0.0.1", () => resolve({ server, apiUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}/api`, posts }))
   })
 
 const slackSender = (url: string, signingSecret: string) => async (payload: unknown) => {
@@ -79,7 +79,6 @@ describe("generic webhook trigger", () => {
     faux.setResponses([fauxAssistantMessage("Looking at build 41")])
     const secret = "ci-secret"
     deployment = await startLocal({
-      port: port(),
       runner: { plugins: [modelProviders(faux.provider)], idleMs: 5_000 },
       extensions: [
         triggers([
@@ -137,15 +136,13 @@ describe("generic webhook trigger", () => {
 
 describe("Slack source", () => {
   it("answers direct messages", async () => {
-    const base = port()
-    const slack = await fakeSlack(base + 1)
+    const slack = await fakeSlack()
     slackApi = slack.server
     const faux = fauxProvider()
     faux.setResponses([fauxAssistantMessage("Hello in private")])
     deployment = await startLocal({
-      port: base,
       runner: { plugins: [modelProviders(faux.provider)], idleMs: 5_000 },
-      extensions: [sources([slackSource({ signingSecret: "s", botToken: "t", allowedUsers: ["U42"], apiUrl: `http://127.0.0.1:${base + 1}/api`, spec: { model } })])]
+      extensions: [sources([slackSource({ signingSecret: "s", botToken: "t", allowedUsers: ["U42"], apiUrl: slack.apiUrl, spec: { model } })])]
     })
     const send = slackSender(`${deployment.url}/v1/sources/slack`, "s")
     await send(slackEvent("E1", { type: "message", channel: "C9", channel_type: "channel", text: "hey all", ts: "5.0" }))
@@ -157,17 +154,15 @@ describe("Slack source", () => {
 
   it("keeps threads and delivered replies across a control plane restart", async () => {
     dir = await mkdtemp(join(tmpdir(), "pi-cloud-connectors-"))
-    const base = port()
-    const slack = await fakeSlack(base + 1)
+    const slack = await fakeSlack()
     slackApi = slack.server
     const faux = fauxProvider()
     faux.setResponses([fauxAssistantMessage("First answer"), fauxAssistantMessage("Second answer")])
     const start = () =>
       startLocal({
-        port: base,
         ...sqliteStores({ file: join(dir!, "pi-cloud.sqlite"), credentialKeys: ["test-key"] }),
         runner: { plugins: [modelProviders(faux.provider)], idleMs: 300 },
-        extensions: [sources([slackSource({ signingSecret: "s", botToken: "t", allowedUsers: ["U42"], apiUrl: `http://127.0.0.1:${base + 1}/api`, spec: { model } })])]
+        extensions: [sources([slackSource({ signingSecret: "s", botToken: "t", allowedUsers: ["U42"], apiUrl: slack.apiUrl, spec: { model } })])]
       })
 
     deployment = await start()

@@ -13,7 +13,6 @@ let deployment: LocalDeployment
 
 beforeAll(async () => {
   deployment = await startLocal({
-    port: 41_000 + Math.floor(Math.random() * 10_000),
     settings: { leaseTtlMs: TTL, recoveryIntervalMs: 600_000, attachTimeoutMs: 5_000 },
     runnerSecret: secret,
     dispatcher: RunnerDispatcher.make(async (wake) => void grants.set(wake.sessionId, wake.grant)),

@@ -1,6 +1,6 @@
 import type { EventBatch } from "@pi-cloud/protocol"
 import fc from "fast-check"
-import { Context, Effect, Fiber, Layer, Stream } from "effect"
+import { Context, Effect, Fiber, Layer, Scheduler, Stream } from "effect"
 import { describe, expect, it } from "vitest"
 import { EventHub, type StreamPosition } from "../src/EventHub.ts"
 
@@ -99,7 +99,7 @@ describe("EventHub invariants", () => {
               expect(mine.map(key)).toEqual(all.slice(from, until === -1 ? all.length : until).map(key))
             }
           }
-        })))
+        })).pipe(Effect.provideService(Scheduler.Scheduler, new Scheduler.MixedScheduler("sync"))))
       }),
       { numRuns: 300 }
     )

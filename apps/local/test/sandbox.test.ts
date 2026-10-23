@@ -41,7 +41,6 @@ describe("sandboxes", () => {
       fauxAssistantMessage("All done")
     ])
     deployment = await startLocal({
-      port: 41_000 + Math.floor(Math.random() * 10_000),
       runner: {
         idleMs: 5_000,
         secrets: async (name) => (name === "PI_CLOUD_TEST_SECRET" ? "s3cret-value" : undefined),
@@ -102,7 +101,6 @@ describe("sandboxes", () => {
 
   it("refuses specs that reach past the operator's templates, naming the field, over REST and Chord", async () => {
     deployment = await startLocal({
-      port: 41_000 + Math.floor(Math.random() * 10_000),
       runner: { plugins: [] },
       settings: { templates: { box: { provider: "docker", repositories: ["acme/api"], allowRef: true } } }
     })
@@ -207,7 +205,6 @@ describe("sandboxes", () => {
     }
 
     deployment = await startLocal({
-      port: 41_000 + Math.floor(Math.random() * 10_000),
       runner: { plugins: [] },
       repositoryAccess: installed,
       settings: { templates }
@@ -235,7 +232,6 @@ describe("sandboxes", () => {
     }).pipe(Effect.provide(Layer.merge(SessionStore.memory, BindingStore.memory))))
     let sessions: Sessions["Service"] | undefined
     deployment = await startLocal({
-      port: 41_000 + Math.floor(Math.random() * 10_000),
       runner: { plugins: [] },
       settings: { templates: { box: { provider: "docker" } }, defaultSandbox: "box" },
       sessions: Layer.succeed(SessionStore, store),
@@ -260,7 +256,6 @@ describe("sandboxes", () => {
 
   it("describes the server and its sandbox templates", async () => {
     deployment = await startLocal({
-      port: 41_000 + Math.floor(Math.random() * 10_000),
       runner: { plugins: [] },
       settings: { templates: { box: { provider: "docker" } }, defaultSandbox: "box" }
     })

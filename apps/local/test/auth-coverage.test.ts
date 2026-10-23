@@ -16,7 +16,6 @@ const KEYS: Record<string, ReadonlyArray<Scope>> = { "none-key": [], "read-key":
 let deployment: LocalDeployment
 beforeAll(async () => {
   deployment = await startLocal({
-    port: 41_000 + Math.floor(Math.random() * 10_000),
     apiKey: "the-key",
     runnerSecret: "the-runner-secret",
     auth: { keys: Object.entries(KEYS).map(([token, scopes]) => ({ name: token, sha256: sha256(token), scopes })) },
@@ -111,7 +110,6 @@ describe("authentication coverage", () => {
 
   it("lets configured origins through with CORS headers, and lets auth.allowedHosts replace the loopback names", async () => {
     const custom = await startLocal({
-      port: 41_000 + Math.floor(Math.random() * 10_000),
       auth: { allowedOrigins: ["https://app.example"], allowedHosts: ["pi.example", "127.0.0.1"] },
       runner: { plugins: [] }
     })
@@ -129,7 +127,6 @@ describe("authentication coverage", () => {
 
   it("lets the PUBLIC_URL host through on loopback, so a tunnel in front still works", async () => {
     const tunneled = await startLocal({
-      port: 41_000 + Math.floor(Math.random() * 10_000),
       settings: { publicUrl: "https://pi.example.com" },
       runner: { plugins: [] }
     })

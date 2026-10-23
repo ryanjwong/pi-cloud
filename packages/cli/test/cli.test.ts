@@ -1,4 +1,4 @@
-import { spawn, spawnSync } from "node:child_process"
+import { execFile, spawn, spawnSync } from "node:child_process"
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { createServer } from "node:http"
 import { tmpdir } from "node:os"
@@ -22,6 +22,13 @@ const cli = (args: ReadonlyArray<string>, cwd = home) => {
   return { status: result.status, out: result.stdout + result.stderr }
 }
 
+const cliAsync = (args: ReadonlyArray<string>) =>
+  new Promise<{ status: number | null; out: string }>((done) => {
+    const child = execFile(process.execPath, [main, ...args], { cwd: home, env: cliEnv(), encoding: "utf8", timeout: 30_000 }, (_error, stdout, stderr) =>
+      done({ status: child.exitCode, out: stdout + stderr }))
+    child.stdin?.end()
+  })
+
 describe("pi-cloud", { timeout: 30_000 }, () => {
   it("prints help without touching the network or the config", () => {
     const help = cli(["--help"])
@@ -31,11 +38,10 @@ describe("pi-cloud", { timeout: 30_000 }, () => {
     expect(cli(["nonsense"]).status).toBe(1)
   })
 
-  it("reports an unreachable server in one line and exits 1", () => {
-    for (const command of [["ls"], ["auth"], ["rm", "x"]]) {
-      expect(cli([...command, "--url", "http://127.0.0.1:1"])).toEqual({ status: 1, out: "Can't reach pi-cloud at http://127.0.0.1:1.\n" })
-    }
-    expect(cli(["doctor", "--url", "http://127.0.0.1:1"])).toMatchObject({ status: 1, out: expect.stringContaining("✗ Can't reach") })
+  it("reports an unreachable server in one line and exits 1", async () => {
+    const [ls, auth, rm, doctor] = await Promise.all([["ls"], ["auth"], ["rm", "x"], ["doctor"]].map((command) => cliAsync([...command, "--url", "http://127.0.0.1:1"])))
+    for (const result of [ls, auth, rm]) expect(result).toEqual({ status: 1, out: "Can't reach pi-cloud at http://127.0.0.1:1.\n" })
+    expect(doctor).toMatchObject({ status: 1, out: expect.stringContaining("✗ Can't reach") })
   })
 
   it("prints a failed turn and exits 1", () => {

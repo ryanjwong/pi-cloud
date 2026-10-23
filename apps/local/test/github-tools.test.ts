@@ -30,7 +30,6 @@ afterEach(async () => {
   root = undefined
 })
 
-const port = () => 41_000 + Math.floor(Math.random() * 10_000)
 const toolUse = (name: string, args: Parameters<typeof fauxToolCall>[1]) =>
   fauxAssistantMessage(fauxToolCall(name, args), { stopReason: "toolUse" })
 
@@ -76,7 +75,6 @@ describe("GitHub tools", () => {
       fauxAssistantMessage("Done")
     ])
     deployment = await startLocal({
-      port: port(),
       runner: {
         idleMs: 5_000,
         secrets: async (name) => (name === "GITHUB_TOKEN" ? "ghs_test" : undefined),
@@ -132,7 +130,6 @@ describe("GitHub tools", () => {
     ])
     const { SessionSecrets } = await import("@pi-cloud/core")
     deployment = await startLocal({
-      port: port(),
       sessionSecrets: SessionSecrets.issuers(async (_, name) => {
         issued.push(name)
         return { value: "ghs_app" }
@@ -196,7 +193,6 @@ describe("repository sandboxes", () => {
       fauxAssistantMessage("Done")
     ])
     deployment = await startLocal({
-      port: port(),
       runner: {
         idleMs: 5_000,
         secrets: async (name) => (name === "GITHUB_TOKEN" ? "ghs_sandbox_token" : undefined),
@@ -296,7 +292,6 @@ describe("GitHub App", () => {
       }
     ])
     deployment = await startLocal({
-      port: port(),
       sessionSecrets: SessionSecrets.issuers(githubAppTokens(githubApp({
         appId: "1",
         privateKey: privateKey.export({ type: "pkcs1", format: "pem" }).toString(),

@@ -13,7 +13,6 @@ afterEach(async () => {
   deployment = undefined
 })
 
-const port = () => 41_000 + Math.floor(Math.random() * 10_000)
 
 const collect = (sessionId: string, until: (event: { type: string }) => boolean) =>
   followEvents(sessionId).pipe(
@@ -26,7 +25,7 @@ describe("pi-cloud end to end", () => {
   it("runs a turn through the control plane and a woken runner", async () => {
     const faux = fauxProvider()
     faux.setResponses([fauxAssistantMessage("Hello from a runner")])
-    deployment = await startLocal({ port: port(), runner: { plugins: [modelProviders(faux.provider)], idleMs: 2_000 } })
+    deployment = await startLocal({ runner: { plugins: [modelProviders(faux.provider)], idleMs: 2_000 } })
 
     const program = Effect.gen(function*() {
       const client = yield* PiCloud

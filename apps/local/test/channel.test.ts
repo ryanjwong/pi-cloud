@@ -19,7 +19,6 @@ describe("session channel", () => {
     const faux = fauxProvider({ models: [{ id: "faux-1" }, { id: "faux-2" }] })
     faux.setResponses([fauxAssistantMessage("first"), fauxAssistantMessage("second")])
     deployment = await startLocal({
-      port: 41_000 + Math.floor(Math.random() * 10_000),
       apiKeys: ["key-1"],
       runner: { plugins: [modelProviders(faux.provider)], idleMs: 5_000 }
     })
@@ -65,7 +64,7 @@ describe("session channel", () => {
   }, 30_000)
 
   it("refuses channels without a valid key", async () => {
-    deployment = await startLocal({ port: 41_000 + Math.floor(Math.random() * 10_000), apiKeys: ["key-1"], runner: { plugins: [] } })
+    deployment = await startLocal({ apiKeys: ["key-1"], runner: { plugins: [] } })
     const session = await fetch(`${deployment.url}/v1/sessions`, {
       method: "POST",
       headers: { authorization: "Bearer key-1", "content-type": "application/json" },
