@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it, onTestFinished } from "vitest"
-import { ControlPlaneEnv, modelCredentialLookup, RunnerEnv, sandboxSecretLookup, SETTINGS } from "../src/index.ts"
+import { CloudflareEnv, ControlPlaneEnv, modelCredentialLookup, RunnerEnv, sandboxSecretLookup, SETTINGS } from "../src/index.ts"
 
 let dir: string | undefined
 afterEach(async () => {
@@ -65,8 +65,17 @@ describe("server config", () => {
   it("defaults to isolated docker sandboxes and no local provider", async () => {
     const control = value(await load(ControlPlaneEnv, { GITHUB_WEBHOOK_SECRET: "gh" }))
     expect(control.settings.templates).toEqual({
-      scratch: { provider: "docker", user: "1000:1000" },
+      scratch: { provider: "docker", user: "1000:1000", repositories: "installed", allowRef: true },
       github: { provider: "docker", user: "1000:1000", credential: "GITHUB_TOKEN" }
+    })
+    expect(value(await load(ControlPlaneEnv, { GITHUB_WEBHOOK_SECRET: "gh", GITHUB_APP_ID: "1", GITHUB_APP_PRIVATE_KEY: "key" })).settings.templates["github"])
+      .toEqual({ provider: "docker", user: "1000:1000", credential: "GITHUB_TOKEN", repositories: "installed" })
+    const app = { GITHUB_APP_ID: "1", GITHUB_APP_PRIVATE_KEY: "key" }
+    expect(value(await load(ControlPlaneEnv, app)).settings.templates).toEqual({
+      scratch: { provider: "docker", user: "1000:1000", repositories: "installed", allowRef: true, credential: "GITHUB_TOKEN" }
+    })
+    expect(value(await load(CloudflareEnv, { ...app, PI_CLOUD_RUNNER_SECRET: "r" })).settings.templates).toEqual({
+      scratch: { provider: "daytona", repositories: "installed", allowRef: true, credential: "GITHUB_TOKEN" }
     })
     expect(Option.getOrThrow(control.github).allowedAssociations).toEqual(["OWNER", "MEMBER", "COLLABORATOR"])
     const runner = value(await load(RunnerEnv, {}))

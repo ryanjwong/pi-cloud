@@ -1,7 +1,7 @@
 import type { Session } from "@pi-cloud/protocol"
 import { generateKeyPairSync, verify } from "node:crypto"
 import { describe, expect, it } from "vitest"
-import { githubApp, githubAppTokens } from "../src/index.ts"
+import { githubApp, githubAppTokens, installedRepositories, publicRepositories } from "../src/index.ts"
 
 const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 })
 const pkcs1 = privateKey.export({ type: "pkcs1", format: "pem" }).toString()
@@ -25,6 +25,7 @@ const fakeGithub = (options: { expiresInMs?: number } = {}) => {
     if (installation !== null) {
       return installation[1] === "acme" ? Response.json({ id: 42 }) : Response.json({ message: "Not Found" }, { status: 404 })
     }
+    if (url.pathname === "/app") return Response.json({ html_url: "https://github.com/apps/pi-cloud" })
     if (url.pathname === "/app/installations/42/access_tokens") {
       minted++
       return Response.json(
@@ -97,6 +98,50 @@ describe("GitHub App tokens", () => {
     const untrusted = { id: "s1", createdAt: 0, spec: {}, resolved: { sandboxes: {}, repository: "acme/api", untrusted: true } }
     expect(await issue(untrusted as never, "GITHUB_TOKEN")).toBeUndefined()
     expect(github.calls).toEqual([])
+  })
+})
+
+describe("GitHub App installations", () => {
+  it("allows repositories the App is installed on, caching briefly, and names the install link for the rest", async () => {
+    const github = fakeGithub()
+    let now = 0
+    const check = installedRepositories(githubApp({ appId: "123", privateKey: pkcs1, fetch: github.fetch, now: () => now }))
+    expect(await check("Acme/API")).toBeUndefined()
+    expect(await check("acme/api")).toBeUndefined()
+    expect(await check("other/api")).toBe("install the GitHub App on other/api: https://github.com/apps/pi-cloud/installations/new")
+    await check("other/api")
+    now += 6 * 60_000
+    await check("acme/api")
+    expect(github.calls.map((call) => `${call.method} ${call.path}`)).toEqual([
+      "GET /repos/acme/api/installation",
+      "GET /repos/other/api/installation",
+      "GET /app",
+      "GET /repos/other/api/installation",
+      "GET /repos/acme/api/installation"
+    ])
+  })
+
+  it("without an App, allows only repositories GitHub says are public and refuses the rest, failing closed", async () => {
+    const seen: Array<{ path: string; authorization: string | undefined }> = []
+    const fetch = (async (input: string, init: RequestInit) => {
+      const path = new URL(input).pathname
+      seen.push({ path, authorization: (init.headers as Record<string, string>).authorization })
+      if (path === "/repos/acme/offline") throw new TypeError("fetch failed")
+      return {
+        "/repos/acme/public": Response.json({ private: false }),
+        "/repos/acme/hidden": Response.json({ private: true }),
+        "/repos/acme/limited": Response.json({ message: "API rate limit exceeded" }, { status: 403 }),
+        "/repos/acme/down": new Response("oops", { status: 502 })
+      }[path] ?? Response.json({ message: "Not Found" }, { status: 404 })
+    }) as unknown as typeof globalThis.fetch
+    const check = publicRepositories({ fetch })
+    expect(await check("acme/public")).toBeUndefined()
+    expect(await check("acme/private")).toMatch(/^acme\/private is private or does not exist.*`pi-cloud deploy cloudflare`/)
+    expect(await check("acme/hidden")).toMatch(/^acme\/hidden is private/)
+    expect(await check("acme/limited")).toBe("could not check acme/limited: GitHub 403")
+    expect(await check("acme/down")).toBe("could not check acme/down: GitHub 502")
+    await expect(check("acme/offline")).rejects.toThrow("fetch failed")
+    expect(seen.every((request) => request.authorization === undefined)).toBe(true)
   })
 })
 

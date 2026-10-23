@@ -1,8 +1,9 @@
-import { spawnSync } from "node:child_process"
-import { existsSync, mkdtempSync, readdirSync, rmSync, statSync } from "node:fs"
+import { spawn, spawnSync } from "node:child_process"
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { createServer } from "node:http"
 import { tmpdir } from "node:os"
 import { isAbsolute, join, resolve } from "node:path"
-import { afterAll, describe, expect, it } from "vitest"
+import { afterAll, describe, expect, it, vi } from "vitest"
 import { makeRenderer } from "../src/render.ts"
 import { workerConfig } from "../src/setup.ts"
 
@@ -10,10 +11,14 @@ const main = resolve(import.meta.dirname, "../src/main.ts")
 const home = mkdtempSync(join(tmpdir(), "pi-cloud-cli-"))
 afterAll(() => rmSync(home, { recursive: true, force: true }))
 
-const cli = (args: ReadonlyArray<string>, cwd = home) => {
+const cliEnv = () => {
   const env: NodeJS.ProcessEnv = { ...process.env, XDG_CONFIG_HOME: join(home, "config") }
   for (const name of ["PI_CLOUD_URL", "PI_CLOUD_API_KEY", "SOPS_AGE_KEY_FILE"]) delete env[name]
-  const result = spawnSync(process.execPath, [main, ...args], { cwd, env, input: "", encoding: "utf8", timeout: 30_000 })
+  return env
+}
+
+const cli = (args: ReadonlyArray<string>, cwd = home) => {
+  const result = spawnSync(process.execPath, [main, ...args], { cwd, env: cliEnv(), input: "", encoding: "utf8", timeout: 30_000 })
   return { status: result.status, out: result.stdout + result.stderr }
 }
 
@@ -50,6 +55,40 @@ describe("pi-cloud", { timeout: 30_000 }, () => {
     expect(config.name).toBe("staging")
     expect(isAbsolute(config.main) && existsSync(config.main)).toBe(true)
     expect(config.migrations.slice(0, 1)).toEqual([{ tag: "v1", new_sqlite_classes: ["ControlPlane", "SessionHost"] }])
+    vi.stubEnv("PI_CLOUD_BUILD", "abc1234")
+    expect(workerConfig("staging").define).toEqual({ PI_CLOUD_BUILD: '"abc1234"' })
+    vi.unstubAllEnvs()
+  })
+
+  it("explains a refused session socket by the deployed target's other build, else keeps the socket error", async () => {
+    let version = "0.1.0"
+    const server = createServer((request, response) => {
+      const body = request.url === "/v1/server"
+        ? { version, servicesPath: "/v1/pi" }
+        : { id: "ses_1", spec: {}, createdAt: 0, runner: { state: "idle" } }
+      response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(body))
+    })
+    server.on("upgrade", (_request, socket) => socket.end("HTTP/1.1 401 Unauthorized\r\n\r\n"))
+    await new Promise<void>((listening) => server.listen(0, "127.0.0.1", listening))
+    const url = `http://127.0.0.1:${(server.address() as { port: number }).port}`
+    mkdirSync(join(home, "config", "pi-cloud"), { recursive: true })
+    writeFileSync(join(home, "config", "pi-cloud", "config.json"), JSON.stringify({ default: "pi-cloud", targets: { "pi-cloud": { kind: "cloudflare", url } } }))
+    const attach = () =>
+      new Promise<string>((done) => {
+        const child = spawn(process.execPath, [main, "-r", "ses_1"], { cwd: home, env: { ...cliEnv(), PI_CLOUD_BUILD: "abc1234" } })
+        let out = ""
+        child.stdout.on("data", (chunk) => (out += chunk))
+        child.stderr.on("data", (chunk) => (out += chunk))
+        child.on("close", () => done(out))
+      })
+    try {
+      expect(await attach()).toBe(`pi-cloud at ${url} runs 0.1.0, this CLI is 0.1.0+abc1234: run \`pi-cloud deploy cloudflare\` (or \`pi-cloud update\`)\n`)
+      version = "0.1.0+abc1234"
+      expect(await attach()).toBe(`Cannot connect to ${url.replace("http", "ws")}/v1/pi\n`)
+    } finally {
+      server.close()
+      rmSync(join(home, "config", "pi-cloud", "config.json"))
+    }
   })
 
   const hasSops = spawnSync("sops", ["--version"]).status === 0 && spawnSync("age-keygen", ["--help"]).error === undefined

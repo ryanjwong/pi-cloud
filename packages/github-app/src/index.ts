@@ -19,9 +19,14 @@ export interface InstallationToken {
 
 export interface GithubApp {
   installationToken(repositories: ReadonlyArray<string>): Promise<InstallationToken>
+  installed(repository: string): Promise<boolean>
+  installUrl(): Promise<string>
 }
 
 const REUSE_MARGIN_MS = 5 * 60_000
+const INSTALLATION_TTL_MS = 5 * 60_000
+const API_URL = "https://api.github.com"
+const API_HEADERS = { accept: "application/vnd.github+json", "user-agent": "pi-cloud", "x-github-api-version": "2022-11-28" }
 
 const base64url = (bytes: Uint8Array) => {
   let binary = ""
@@ -58,7 +63,7 @@ const importKey = (pem: string) => {
 }
 
 export const githubApp = (options: GithubAppOptions): GithubApp => {
-  const apiUrl = (options.apiUrl ?? "https://api.github.com").replace(/\/$/, "")
+  const apiUrl = (options.apiUrl ?? API_URL).replace(/\/$/, "")
   const request = options.fetch ?? globalThis.fetch
   const now = options.now ?? Date.now
   const permissions = options.permissions ?? APP_PERMISSIONS
@@ -77,32 +82,42 @@ export const githubApp = (options: GithubAppOptions): GithubApp => {
     const response = await request(`${apiUrl}${path}`, {
       method,
       headers: {
-        accept: "application/vnd.github+json",
+        ...API_HEADERS,
         authorization: `Bearer ${await jwt()}`,
-        "user-agent": "pi-cloud",
-        "x-github-api-version": "2022-11-28",
         ...(body === undefined ? {} : { "content-type": "application/json" })
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) })
     })
     const result = (await response.json().catch(() => ({}))) as A & { message?: string }
-    if (!response.ok) throw new Error(`GitHub ${response.status} on ${method} ${path}: ${result.message ?? response.statusText}`)
+    if (!response.ok) {
+      throw Object.assign(new Error(`GitHub ${response.status} on ${method} ${path}: ${result.message ?? response.statusText}`), { status: response.status })
+    }
     return result
   }
 
-  const installations = new Map<string, Promise<number>>()
+  const installations = new Map<string, { readonly at: number; readonly id: Promise<number> }>()
   const installationOf = (repository: string) => {
-    let found = installations.get(repository)
-    if (found === undefined) {
-      found = call<{ id: number }>("GET", `/repos/${repository}/installation`).then((installation) => installation.id)
-      found.catch(() => installations.delete(repository))
-      installations.set(repository, found)
-    }
-    return found
+    const cached = installations.get(repository)
+    if (cached !== undefined && now() - cached.at < INSTALLATION_TTL_MS) return cached.id
+    const entry = { at: now(), id: call<{ id: number }>("GET", `/repos/${repository}/installation`).then((installation) => installation.id) }
+    entry.id.catch(() => installations.get(repository) === entry && installations.delete(repository))
+    installations.set(repository, entry)
+    return entry.id
   }
+
+  let app: Promise<{ html_url: string }> | undefined
 
   const tokens = new Map<string, Promise<InstallationToken>>()
   return {
+    installed: (repository) =>
+      installationOf(repository.toLowerCase()).then(() => true, (error) => (error as { status?: number }).status === 404 ? false : Promise.reject(error)),
+    installUrl: async () => {
+      if (app === undefined) {
+        app = call<{ html_url: string }>("GET", "/app")
+        app.catch(() => (app = undefined))
+      }
+      return `${(await app).html_url}/installations/new`
+    },
     async installationToken(repositories) {
       const names = [...new Set(repositories.map((repository) => repository.toLowerCase()))].sort()
       if (names.length === 0) throw new Error("A GitHub App token needs at least one repository")
@@ -144,4 +159,18 @@ export const githubAppTokens = (app: GithubApp, options: GithubAppTokensOptions 
     const issued = await app.installationToken([bound])
     return { value: issued.token, expiresAt: issued.expiresAt }
   }
+}
+
+export type RepositoryCheck = (repository: string) => Promise<string | undefined>
+
+export const installedRepositories = (app: GithubApp): RepositoryCheck => async (repository) =>
+  (await app.installed(repository)) ? undefined : `install the GitHub App on ${repository}: ${await app.installUrl()}`
+
+export const publicRepositories = (options: Pick<GithubAppOptions, "apiUrl" | "fetch"> = {}): RepositoryCheck => async (repository) => {
+  const response = await (options.fetch ?? globalThis.fetch)(`${(options.apiUrl ?? API_URL).replace(/\/$/, "")}/repos/${repository}`, { headers: API_HEADERS })
+  const body = (await response.json().catch(() => ({}))) as { private?: unknown }
+  if (response.ok && body.private === false) return undefined
+  return response.ok || response.status === 404
+    ? `${repository} is private or does not exist, and without a GitHub App this server clones public repositories only: set one up with \`pi-cloud deploy cloudflare\` (or \`pi-cloud github-app\`)`
+    : `could not check ${repository}: GitHub ${response.status}`
 }

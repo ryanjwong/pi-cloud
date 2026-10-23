@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import "@pi-cloud/protocol/build"
 import { NodeRuntime } from "@effect/platform-node"
 import { type CommandResult, followEvents, openChannel, PiCloud, VERSION } from "@pi-cloud/client"
 import { runTui } from "@pi-cloud/tui"
@@ -9,7 +10,7 @@ import { parseArgs } from "node:util"
 import { githubAppCommand } from "./github-app.ts"
 import { importFromCodex, importFromPi, listCredentials, login, loginProviders, logout } from "./login.ts"
 import { makeRenderer } from "./render.ts"
-import { readSettings, rejected, resolveConnection, unreachable } from "./settings.ts"
+import { readSettings, rejected, resolveConnection, unreachable, versionSkew } from "./settings.ts"
 import { deploy, doctor, init, update } from "./setup.ts"
 
 const write = (text: string) => void process.stdout.write(text)
@@ -106,17 +107,16 @@ if (local !== undefined) {
   process.exit()
 }
 
-const defaultModel = Effect.gen(function*() {
-  const server = yield* Effect.flatMap(PiCloud, (client) => client.serverDetails()).pipe(Effect.orElseSucceed(() => undefined))
-  if (server !== undefined && server.version !== VERSION) {
-    process.stderr.write(`Note: pi-cloud at ${connection.url} runs ${server.version} and this CLI ${VERSION}; run \`pi-cloud update\`.\n`)
-  }
-  return parseModel(flags.model ?? process.env.PI_CLOUD_MODEL ?? server?.defaultModel ?? "anthropic/claude-opus-5-5")
-})
+const serverDetails = Effect.flatMap(PiCloud, (client) => client.serverDetails()).pipe(Effect.orElseSucceed(() => undefined))
+const modelOf = (server: { readonly defaultModel?: string | undefined } | undefined) =>
+  parseModel(flags.model ?? process.env.PI_CLOUD_MODEL ?? server?.defaultModel ?? "anthropic/claude-opus-5-5")
 
 const createSession = Effect.gen(function*() {
   const client = yield* PiCloud
-  const model = yield* defaultModel
+  const server = yield* serverDetails
+  const skew = server === undefined ? undefined : versionSkew(connection.url, server.version, VERSION)
+  if (skew !== undefined) process.stderr.write(`${skew}\n`)
+  const model = modelOf(server)
   return yield* client.sessions.create({
     payload: {
       title: flags.title,
@@ -154,7 +154,7 @@ const gitOrigin = () => {
 
 const cloudSession = Effect.gen(function*() {
   const client = yield* PiCloud
-  const model = yield* defaultModel
+  const model = modelOf(yield* serverDetails)
   const origin = gitOrigin()
   if (origin?.note) write(`Note: ${origin.note}.\n`)
   const create = (home: { readonly repository?: string; readonly ref?: string }) =>
@@ -174,13 +174,24 @@ const cloudSession = Effect.gen(function*() {
     Effect.catchTag("SpecRejected", (error) =>
       origin === undefined || !error.field.startsWith("sandboxes.home.")
         ? Effect.fail(error)
-        : Effect.andThen(Effect.sync(() => write(`Note: ${error.message}; the cloud session starts without the repository.\n`)), create({})))
+        : Effect.andThen(Effect.sync(() => write(`Note: the cloud session starts without the repository: ${error.reason}\n`)), create({})))
   )
   return { session, label: origin?.label }
 })
 
 const resolved = orExit(() => resolveConnection(flags.url, flags["api-key"]))
 const connection = { url: resolved.url, apiKey: resolved.apiKey }
+
+const refusedSocket = (error: Error) =>
+  Effect.flatMap(PiCloud, (client) => client.server()).pipe(
+    Effect.match({
+      onFailure: () => new Error(unreachable(connection.url)),
+      onSuccess: (server) => {
+        const skew = versionSkew(connection.url, server.version, VERSION)
+        return skew === undefined ? error : new Error(skew)
+      }
+    })
+  )
 
 const parseModel = (value: string) => {
   const [provider, ...modelId] = value.split("/")
@@ -281,7 +292,12 @@ const program = Effect.gen(function*() {
         target = { id: created.session.id, label: created.label }
       }
       const { id, label } = target
-      return yield* Effect.promise(() => runTui({ ...connection, sessionId: id, ...(label === undefined ? {} : { label }) }))
+      return yield* Effect.tryPromise({
+        try: () => runTui({ ...connection, sessionId: id, ...(label === undefined ? {} : { label }) }),
+        catch: (error) => error
+      }).pipe(Effect.catch((error) =>
+        error instanceof Error && error.message.startsWith("Cannot connect to") ? Effect.flatMap(refusedSocket(error), Effect.fail) : Effect.fail(error)
+      ))
     }
     case "login": {
       const attempt = (run: () => Promise<void>) => Effect.promise(() => run().catch(fail))

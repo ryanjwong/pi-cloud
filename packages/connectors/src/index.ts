@@ -1,7 +1,7 @@
 import type { ControlPlaneEnv } from "@pi-cloud/config"
 import type { Extension } from "@pi-cloud/control-plane"
-import { SessionSecrets } from "@pi-cloud/core"
-import { githubApp, githubAppTokens } from "@pi-cloud/github-app"
+import { RepositoryAccess, SessionSecrets } from "@pi-cloud/core"
+import { githubApp, githubAppTokens, installedRepositories, publicRepositories } from "@pi-cloud/github-app"
 import type { SessionSpec } from "@pi-cloud/protocol"
 import { slackSource } from "@pi-cloud/source-slack"
 import { sources } from "@pi-cloud/sources"
@@ -31,12 +31,10 @@ export const connectors = (env: Pick<ControlPlaneEnv, "model" | "github" | "gith
       sources([slackSource({ signingSecret: Redacted.value(signingSecret), botToken: Redacted.value(botToken), allowedUsers, allowedChannels, spec })])
     )
   }
+  const app = Option.map(env.githubApp, ({ appId, privateKey }) => githubApp({ appId, privateKey: Redacted.value(privateKey) }))
   return {
     extensions,
-    sessionSecrets: Option.match(env.githubApp, {
-      onNone: () => SessionSecrets.none,
-      onSome: ({ appId, privateKey }) =>
-        SessionSecrets.issuers(githubAppTokens(githubApp({ appId, privateKey: Redacted.value(privateKey) })))
-    })
+    sessionSecrets: Option.match(app, { onNone: () => SessionSecrets.none, onSome: (app) => SessionSecrets.issuers(githubAppTokens(app)) }),
+    repositoryAccess: RepositoryAccess.make(Option.match(app, { onNone: () => publicRepositories(), onSome: installedRepositories }))
   }
 }

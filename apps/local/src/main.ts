@@ -1,3 +1,4 @@
+import "@pi-cloud/protocol/build"
 import { ControlPlaneEnv, modelCredentialLookup, RunnerEnv, sandboxSecretLookup } from "@pi-cloud/config"
 import { isLoopback } from "@pi-cloud/control-plane"
 import { connectors } from "@pi-cloud/connectors"

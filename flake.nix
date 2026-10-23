@@ -42,11 +42,12 @@
             cp -r . $out/lib/pi-cloud
             node=${pkgs.nodejs_22}/bin/node
             root=$out/lib/pi-cloud
-            makeWrapper $node $out/bin/pi-cloud --add-flags $root/packages/cli/src/main.ts --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.sops pkgs.age pkgs.git ]}
-            makeWrapper $node $out/bin/pi-cloud-server --add-flags $root/apps/local/src/main.ts
-            makeWrapper $node $out/bin/pi-cloud-control --add-flags $root/apps/local/src/control-plane.ts
-            makeWrapper $node $out/bin/pi-cloud-runner --add-flags $root/apps/local/src/runner.ts
-            makeWrapper $node $out/bin/pi-cloud-config --add-flags $root/apps/local/src/config.ts
+            build="--set PI_CLOUD_BUILD ${self.shortRev or self.dirtyShortRev or "dirty"}"
+            makeWrapper $node $out/bin/pi-cloud $build --add-flags $root/packages/cli/src/main.ts --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.sops pkgs.age pkgs.git ]}
+            makeWrapper $node $out/bin/pi-cloud-server $build --add-flags $root/apps/local/src/main.ts
+            makeWrapper $node $out/bin/pi-cloud-control $build --add-flags $root/apps/local/src/control-plane.ts
+            makeWrapper $node $out/bin/pi-cloud-runner $build --add-flags $root/apps/local/src/runner.ts
+            makeWrapper $node $out/bin/pi-cloud-config $build --add-flags $root/apps/local/src/config.ts
             runHook postInstall
           '';
         };

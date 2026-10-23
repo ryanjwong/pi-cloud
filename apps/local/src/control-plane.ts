@@ -1,3 +1,4 @@
+import "@pi-cloud/protocol/build"
 import { NodeRuntime } from "@effect/platform-node"
 import { ControlPlaneEnv } from "@pi-cloud/config"
 import { pullDispatcher } from "@pi-cloud/control-plane"

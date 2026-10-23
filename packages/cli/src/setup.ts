@@ -164,7 +164,8 @@ const STALE = `dependencies are out of date: run pnpm install in ${root}`
 
 export const workerConfig = (name: string) => {
   const base = JSON.parse(readFileSync(join(app, "wrangler.json"), "utf8"))
-  return { ...base, name, main: join(app, base.main) }
+  const build = process.env.PI_CLOUD_BUILD
+  return { ...base, name, main: join(app, base.main), ...(build === undefined ? {} : { define: { PI_CLOUD_BUILD: JSON.stringify(build) } }) }
 }
 
 export const deploy = async (kind: string | undefined, name = "pi-cloud") => {
@@ -260,7 +261,8 @@ export const update = async () => {
     need("pnpm", ["install", "--frozen-lockfile"], { cwd: root })
   }
   const [cli = "pi-cloud", ...prefix] = method === "nix" ? [] : [process.execPath, process.argv[1]!]
+  const env = { ...process.env, PI_CLOUD_BUILD: undefined }
   const targets = Object.entries(readSettings().targets ?? {})
-  for (const [name, target] of targets) need(cli, [...prefix, "deploy", target.kind, "--name", name], { stdio: ["ignore", "inherit", "inherit"] })
-  if (targets.length > 0) process.exitCode = spawnSync(cli, [...prefix, "doctor"], { stdio: "inherit" }).status ?? 1
+  for (const [name, target] of targets) need(cli, [...prefix, "deploy", target.kind, "--name", name], { stdio: ["ignore", "inherit", "inherit"], env })
+  if (targets.length > 0) process.exitCode = spawnSync(cli, [...prefix, "doctor"], { stdio: "inherit", env }).status ?? 1
 }

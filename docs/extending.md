@@ -73,7 +73,9 @@ name, the git credential, and which repositories and refs sessions may ask for:
 ```
 
 A session spec can only narrow a template: `spec.sandboxes.<name>` takes `template`, `repository` (from the
-template's `repositories`), `ref` (if `allowRef`), a relative `cwd` and extra `setup`. The control plane resolves
+template's `repositories`), `ref` (if `allowRef`), a relative `cwd` and extra `setup`. `"repositories": "installed"`
+allows any github.com repository the GitHub App is installed on, or, without an App, any public one, cloned
+anonymously. The built-in `scratch` template uses it (and `github`, with an App), so `pi-cloud` in a checkout works with no config. The control plane resolves
 the templates when it creates the session and the runner uses only that copy. `spec.sandbox` names the sandbox the
 agent starts in, and the agent can make more with `sandbox_create`.
 
@@ -82,7 +84,7 @@ agent starts in, and the agent can make more with `sandbox_create`.
 Every store and service in `ControlPlane.layer` is an Effect layer you can replace. `dispatcher` decides how
 runners are started: `pullDispatcher` hands wake requests to runner hosts connected with `RunnerHost.connect()`,
 and `RunnerDispatcher.make` calls your own function. `sqliteStores` provides the sessions, state, bindings and
-credentials stores; `leases`, `events`, `clientAuth` and `sessionSecrets` are optional replacements; `extensions`
+credentials stores; `leases`, `events`, `clientAuth`, `sessionSecrets` and `repositoryAccess` are optional replacements; `extensions`
 add routes.
 
 ```ts
