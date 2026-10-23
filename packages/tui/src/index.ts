@@ -3,6 +3,7 @@ import { SettingsManager } from "./pi/internal.ts"
 import { runDurableTui } from "./pi/DurableTui.ts"
 import { project, type ProjectionOptions } from "./Projection.ts"
 
+export { runPicker as pick } from "./pi/DurableTui.ts"
 export { project, type Projection, type ProjectionOptions } from "./Projection.ts"
 export type { Terminal } from "@earendil-works/pi-tui"
 
