@@ -3,7 +3,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writ
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { LOCAL_URL, paths, readSettings, resolveConnection, saveTarget, writePrivate } from "../src/settings.ts"
+import { LOCAL_URL, paths, readSettings, resolveConnection, saveTarget, versionSkew, writePrivate } from "../src/settings.ts"
 
 const hasSops = spawnSync("sops", ["--version"]).status === 0 && spawnSync("age-keygen", ["--help"]).error === undefined
 
@@ -96,5 +96,16 @@ describe("settings", () => {
     expect(resolveConnection()).toEqual({ url: LOCAL_URL, apiKey: "local-key" })
     expect(resolveConnection("http://[::1]:8787").apiKey).toBe("local-key")
     expect(resolveConnection("https://remote.example").apiKey).toBeUndefined()
+  })
+
+  it("points at a redeploy when a target this CLI deployed runs another build", () => {
+    saveTarget("pi-cloud", { kind: "cloudflare", url: "https://a.example" })
+    saveTarget("staging", { kind: "cloudflare", url: "https://b.example" })
+    expect(versionSkew("https://a.example", "0.1.0", "0.1.0+abc1234")).toBe(
+      "pi-cloud at https://a.example runs 0.1.0, this CLI is 0.1.0+abc1234: run `pi-cloud deploy cloudflare` (or `pi-cloud update`)"
+    )
+    expect(versionSkew("https://b.example", "0.1.0+0000000", "0.1.0+abc1234")).toContain("`pi-cloud deploy cloudflare --name staging`")
+    expect(versionSkew("https://a.example", "0.1.0+abc1234", "0.1.0+abc1234")).toBeUndefined()
+    expect(versionSkew("https://elsewhere.example", "0.1.0", "0.1.0+abc1234")).toBeUndefined()
   })
 })

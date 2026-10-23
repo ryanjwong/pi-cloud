@@ -95,7 +95,9 @@ export class SessionsApi extends HttpApiGroup.make("sessions")
   }))
 {}
 
-export const VERSION = manifest.version
+declare const PI_CLOUD_BUILD: string | undefined
+const build = typeof PI_CLOUD_BUILD === "string" ? PI_CLOUD_BUILD : globalThis.process?.env?.["PI_CLOUD_BUILD"]
+export const VERSION = build ? `${manifest.version}+${build}` : manifest.version
 
 export const ServerInfo = Schema.Struct({
   version: Schema.String,

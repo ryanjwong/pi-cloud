@@ -87,6 +87,11 @@ There is no open mode: every API request, WebSocket and runner call needs a key.
 
 A spec can only narrow an operator template. `spec.sandboxes.<name>` accepts `template`, `repository` (if the
 template lists it in `repositories`), `ref` (if the template sets `allowRef`), a relative `cwd` and extra `setup`.
+A template with `"repositories": "installed"`, like the built-in `scratch` (and `github` with an App), takes any github.com
+repository the GitHub App is installed on: the control plane asks GitHub for the repository's installation when it
+creates the session (cached for five minutes) and refuses the rest with the App's install link. Without an App it
+takes only repositories GitHub reports as public, refusing on any error, and clones them with no credential; the
+`github` template then refuses requested repositories, since its credential is a personal token. An explicit list still allows only what it names.
 The control plane checks this when it creates a session, whether the spec comes over REST, Chord, a trigger or a
 source, and refuses with `400 SpecRejected` naming the field: for example `sandboxes.box.provider`,
 `sandboxes.box.options`, `sandboxes.box.env`, `plugins` or `metadata.github`. It then stores the resolved

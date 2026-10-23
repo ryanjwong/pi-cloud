@@ -2,12 +2,14 @@ import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-work
 import { CodingTools } from "@earendil-works/pi-durable/tools"
 import { connectServices, entryText, PiCloud } from "@pi-cloud/client"
 import { resolveSpec, Sessions } from "@pi-cloud/control-plane"
-import { BindingStore, SessionStore } from "@pi-cloud/core"
-import { Session, SessionId, VERSION } from "@pi-cloud/protocol"
+import { BindingStore, RepositoryAccess, SessionStore } from "@pi-cloud/core"
+import { githubApp, installedRepositories, publicRepositories } from "@pi-cloud/github-app"
+import { type SandboxTemplate, Session, SessionId, VERSION } from "@pi-cloud/protocol"
 import { extensions, modelProviders } from "@pi-cloud/runner"
 import { sandboxes } from "@pi-cloud/sandbox"
 import { localSandboxes } from "@pi-cloud/sandbox-local"
 import { Effect, Layer } from "effect"
+import { generateKeyPairSync } from "node:crypto"
 import { mkdtemp, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -148,20 +150,78 @@ describe("sandboxes", () => {
       templates: { box: { provider: "docker", repositories: ["acme/api"], secrets: ["NPM_TOKEN"], credential: "GITHUB_TOKEN" } }
     }
     const spec = { sandbox: "repo", sandboxes: { repo: { repository: "https://github.com/acme/api.git" } } }
-    const resolved = await Effect.runPromise(resolveSpec(spec, settings))
+    const narrow = (...args: Parameters<typeof resolveSpec>) => resolveSpec(...args).pipe(Effect.provide(RepositoryAccess.none))
+    const resolved = await Effect.runPromise(narrow(spec, settings))
     expect(resolved.repository).toBe("acme/api")
     expect(resolved.untrusted).toBeUndefined()
     expect(resolved.sandboxes.repo).toMatchObject({ provider: "docker", repository: { url: "https://github.com/acme/api.git" }, secrets: ["NPM_TOKEN"] })
-    const forked = await Effect.runPromise(resolveSpec(spec, settings, { repository: "acme/api", thread: 7, untrusted: true }))
+    const forked = await Effect.runPromise(narrow(spec, settings, { repository: "acme/api", thread: 7, untrusted: true }))
     expect(forked).toMatchObject({ repository: "acme/api", thread: 7, untrusted: true })
     for (const template of Object.values(forked.sandboxes)) {
       expect(template.secrets).toEqual([])
       expect(template.credential).toBeUndefined()
     }
     const other = { sandboxes: { repo: { repository: "https://github.com/other/api" } } }
-    expect(await Effect.runPromise(resolveSpec(other, settings, { repository: "other/api" }))).toMatchObject({ repository: "other/api" })
-    const refused = await Effect.runPromise(Effect.flip(resolveSpec(other, settings)))
+    expect(await Effect.runPromise(narrow(other, settings, { repository: "other/api" }))).toMatchObject({ repository: "other/api" })
+    const refused = await Effect.runPromise(Effect.flip(narrow(other, settings)))
     expect(refused.field).toBe("sandboxes.repo.repository")
+  })
+
+  it("clones any repository the GitHub App is installed on, public ones without an App, and still narrows to allowlists", async () => {
+    const github = (async (input: string) => {
+      const { pathname } = new URL(input)
+      if (pathname === "/app") return Response.json({ html_url: "https://github.com/apps/pi-cloud" })
+      if (/^\/repos\/acme\/[^/]+\/installation$/.test(pathname)) return Response.json({ id: 42 })
+      if (pathname === "/repos/torvalds/linux") return Response.json({ private: false })
+      return Response.json({ message: "Not Found" }, { status: 404 })
+    }) as unknown as typeof globalThis.fetch
+    const privateKey = generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey.export({ type: "pkcs1", format: "pem" }).toString()
+    const installed = RepositoryAccess.make(installedRepositories(githubApp({ appId: "1", privateKey, fetch: github })))
+    const anonymous = RepositoryAccess.make(publicRepositories({ fetch: github }))
+    const templates = {
+      scratch: { provider: "docker", repositories: "installed", allowRef: true, credential: "GITHUB_TOKEN" },
+      narrow: { provider: "docker", repositories: ["acme/api"] }
+    } as const
+    const spec = (repository: string, template = "scratch") => ({ sandbox: "home", sandboxes: { home: { template, repository, ...(template === "scratch" ? { ref: "dev" } : {}) } } })
+    const resolve = (repository: string, access: Layer.Layer<RepositoryAccess>, template?: string, settings: { defaultSandbox: string; templates: Record<string, SandboxTemplate> } = { defaultSandbox: "scratch", templates }) =>
+      Effect.runPromise(resolveSpec(spec(repository, template), settings).pipe(Effect.provide(access)))
+    const refusal = (...args: Parameters<typeof resolve>) => resolve(...args).then(() => undefined, (error) => error.reason as string)
+
+    expect(await resolve("git@github.com:acme/web.git", installed)).toMatchObject({
+      repository: "acme/web",
+      sandboxes: { home: { credential: "GITHUB_TOKEN", repository: { url: "git@github.com:acme/web.git", ref: "dev" } } }
+    })
+    expect(await refusal("https://github.com/other/api", installed)).toBe("install the GitHub App on other/api: https://github.com/apps/pi-cloud/installations/new")
+    expect(await refusal("https://gitlab.com/acme/api", installed)).toMatch(/does not allow/)
+    expect(await refusal("https://github.com/acme/web", installed, "narrow")).toMatch(/template "narrow" does not allow/)
+    expect(await resolve("https://github.com/acme/api", installed, "narrow")).toMatchObject({ repository: "acme/api" })
+
+    const withoutApp = { defaultSandbox: "scratch", templates: { scratch: { provider: "docker", repositories: "installed", allowRef: true } } } as const
+    const cloned = await resolve("https://github.com/torvalds/linux", anonymous, undefined, withoutApp)
+    expect(cloned.sandboxes.home).toMatchObject({ repository: { url: "https://github.com/torvalds/linux" } })
+    expect(cloned.sandboxes.home!.credential).toBeUndefined()
+    expect(await refusal("https://github.com/acme/secret", anonymous, undefined, withoutApp)).toMatch(/private or does not exist.*pi-cloud deploy cloudflare/)
+    expect(await refusal("https://github.com/acme/api", RepositoryAccess.none, undefined, withoutApp)).toMatch(/no GitHub access configured/)
+    for (const dotted of ["https://github.com/../..", "https://github.com/acme/.", "https://github.com/acme/..git", "git@github.com:./api"]) {
+      expect(await refusal(dotted, anonymous, undefined, withoutApp)).toMatch(/does not allow/)
+    }
+
+    deployment = await startLocal({
+      port: 41_000 + Math.floor(Math.random() * 10_000),
+      runner: { plugins: [] },
+      repositoryAccess: installed,
+      settings: { templates }
+    })
+    const create = (repository: string) =>
+      fetch(`${deployment!.url}/v1/sessions`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${deployment!.apiKey}` },
+        body: JSON.stringify({ spec: spec(repository) })
+      })
+    expect((await create("https://github.com/acme/api")).status).toBe(200)
+    const refused = await create("https://github.com/other/api")
+    expect(refused.status).toBe(400)
+    expect(await refused.text()).toContain("install the GitHub App on other/api")
   })
 
   it("refuses commands to sessions from before spec checks and gives their threads a new session", async () => {

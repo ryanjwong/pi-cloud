@@ -13,7 +13,7 @@ export const SandboxTemplate = Schema.Struct({
   provider: Schema.String,
   repository: Schema.optional(Schema.Struct({ url: Schema.String, ref: Schema.optional(Schema.String) })),
   credential: Schema.optional(Schema.String),
-  repositories: Schema.optional(Schema.Array(Schema.String)),
+  repositories: Schema.optional(Schema.Union([Schema.Literal("installed"), Schema.Array(Schema.String)])),
   allowRef: Schema.optional(Schema.Boolean),
   image: Schema.optional(Schema.String),
   user: Schema.optional(Schema.String),

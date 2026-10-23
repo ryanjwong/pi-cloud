@@ -14,6 +14,7 @@ import {
   type ControlPlaneSettings,
   EventHub,
   LeaseManager,
+  RepositoryAccess,
   SessionStore,
   StateStore,
   storageFailure,
@@ -63,14 +64,17 @@ export interface BindingInit extends CreateInput {
 }
 
 const GITHUB_REPOSITORY = /^(?:https:\/\/|git@)github\.com[/:]([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+?)(?:\.git)?\/?$/
-const githubName = (url: string | undefined) => GITHUB_REPOSITORY.exec(url ?? "")?.[1]?.toLowerCase()
+const githubName = (url: string | undefined) => {
+  const name = GITHUB_REPOSITORY.exec(url ?? "")?.[1]?.toLowerCase()
+  return name?.split("/").some((part) => /^\.+$/.test(part)) ? undefined : name
+}
 const repositoryName = (url: string) => githubName(url) ?? url.toLowerCase()
 
 export const resolveSpec = (
   spec: SessionSpec,
   settings: Pick<ControlPlaneSettings, "templates" | "defaultSandbox">,
   trust: Trust = {}
-): Effect.Effect<Resolved, SpecRejected> =>
+): Effect.Effect<Resolved, SpecRejected, RepositoryAccess> =>
   Effect.gen(function*() {
     const reject = (field: string, reason: string) => Effect.fail(new SpecRejected({ field, reason }))
     if (spec.plugins !== undefined) return yield* reject("plugins", "plugins are configured by the operator")
@@ -87,9 +91,14 @@ export const resolveSpec = (
       }
       const template = settings.templates[templateName]!
       const url = request.repository
-      if (url !== undefined && repositoryName(url) !== repository &&
-        !(template.repositories ?? []).some((allowed) => repositoryName(allowed) === repositoryName(url))) {
-        return yield* reject(`${field}.repository`, `template "${templateName}" does not allow ${url}`)
+      if (url !== undefined && repositoryName(url) !== repository) {
+        const allowed = template.repositories ?? []
+        const name = githubName(url)
+        if (allowed === "installed" && name !== undefined) {
+          yield* RepositoryAccess.use((access) => access.check(name)).pipe(Effect.catchTag("RepositoryRefused", ({ reason }) => reject(`${field}.repository`, reason)))
+        } else if (allowed === "installed" || !allowed.some((entry) => repositoryName(entry) === repositoryName(url))) {
+          return yield* reject(`${field}.repository`, `template "${templateName}" does not allow ${url}`)
+        }
       }
       if (request.ref !== undefined && template.allowRef !== true) {
         return yield* reject(`${field}.ref`, `template "${templateName}" does not allow choosing a ref`)
@@ -142,7 +151,7 @@ export class Sessions extends Context.Service<Sessions, {
   static readonly layer: Layer.Layer<
     Sessions,
     never,
-    SessionStore | StateStore | LeaseManager | EventHub | BindingStore | Runners | ControlPlaneConfig
+    SessionStore | StateStore | LeaseManager | EventHub | BindingStore | Runners | ControlPlaneConfig | RepositoryAccess
   > = Layer.effect(
     Sessions,
     Effect.gen(function*() {
@@ -153,6 +162,7 @@ export class Sessions extends Context.Service<Sessions, {
       const hub = yield* EventHub
       const bindings = yield* BindingStore
       const config = yield* ControlPlaneConfig
+      const access = yield* RepositoryAccess
       const keyLocks = new Map<string, Semaphore.Semaphore>()
       const keyLock = (key: string) => {
         let lock = keyLocks.get(key)
@@ -203,7 +213,7 @@ export class Sessions extends Context.Service<Sessions, {
           id: SessionId.make(`ses_${crypto.randomUUID().replaceAll("-", "")}`),
           title: input.title,
           spec,
-          resolved: yield* resolveSpec(spec, config, input),
+          resolved: yield* resolveSpec(spec, config, input).pipe(Effect.provideService(RepositoryAccess, access)),
           createdAt: yield* Clock.currentTimeMillis
         })
         yield* store.put(session).pipe(Effect.orDie)

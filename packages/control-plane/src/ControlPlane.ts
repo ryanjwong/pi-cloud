@@ -5,6 +5,7 @@ import {
   CredentialStore,
   EventHub,
   LeaseManager,
+  RepositoryAccess,
   type RunnerDispatcher,
   SessionSecrets,
   SessionStore,
@@ -57,6 +58,7 @@ export interface ControlPlaneOptions {
   readonly bindings?: Layer.Layer<BindingStore>
   readonly credentials?: Layer.Layer<CredentialStore>
   readonly sessionSecrets?: Layer.Layer<SessionSecrets>
+  readonly repositoryAccess?: Layer.Layer<RepositoryAccess>
   readonly extensions?: ReadonlyArray<Extension>
 }
 
@@ -75,6 +77,7 @@ export const layer = (options: ControlPlaneOptions) => {
       options.bindings ?? BindingStore.memory,
       options.credentials ?? CredentialStore.memory,
       options.sessionSecrets ?? SessionSecrets.none,
+      options.repositoryAccess ?? RepositoryAccess.none,
       runnerAuth,
       options.clientAuth ?? ClientAuth.keys([...options.auth?.keys ?? [], ...adminKeys(options.apiKeys ?? [])]),
       config

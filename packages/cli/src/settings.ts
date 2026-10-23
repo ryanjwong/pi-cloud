@@ -126,3 +126,10 @@ export const unreachable = (url: string) =>
     : `Can't reach pi-cloud at ${url}.`
 
 export const rejected = (url: string) => `pi-cloud at ${url} rejected the API key.`
+
+export const versionSkew = (url: string, server: string, cli: string) => {
+  const [name, target] = Object.entries(readSettings().targets ?? {}).find(([, saved]) => saved.url === url) ?? []
+  return target === undefined || server === cli
+    ? undefined
+    : `pi-cloud at ${url} runs ${server}, this CLI is ${cli}: run \`pi-cloud deploy ${target.kind}${name === "pi-cloud" ? "" : ` --name ${name}`}\` (or \`pi-cloud update\`)`
+}

@@ -56,11 +56,19 @@ const github = (config: ServerConfig, sandboxProvider: string) =>
     template: Config.succeed(config.triggers?.github?.template ?? "github")
   }))
 
-const githubTemplate = (trigger: Option.Option<{ readonly sandboxProvider: string }>): Record<string, SandboxTemplate> =>
-  Option.match(trigger, {
-    onNone: () => ({}),
-    onSome: ({ sandboxProvider }) => ({ github: { provider: sandboxProvider, user: SANDBOX_USER, credential: "GITHUB_TOKEN" } })
-  })
+const builtIn = (
+  scratch: SandboxTemplate,
+  env: { readonly githubApp: Option.Option<unknown>; readonly github: Option.Option<{ readonly sandboxProvider: string }> }
+): Record<string, SandboxTemplate> => {
+  const app = Option.isSome(env.githubApp)
+  return {
+    scratch: { ...scratch, repositories: "installed", allowRef: true, ...(app ? { credential: "GITHUB_TOKEN" } : {}) },
+    ...Option.match(env.github, {
+      onNone: () => ({}),
+      onSome: ({ sandboxProvider }) => ({ github: { provider: sandboxProvider, user: SANDBOX_USER, credential: "GITHUB_TOKEN", ...(app ? { repositories: "installed" } : {}) } })
+    })
+  }
+}
 
 const githubRequired = (trigger: Option.Option<{ readonly template: string }>) =>
   Option.match(trigger, { onNone: () => [], onSome: ({ template }) => [["triggers.github.template", template] as const] })
@@ -90,8 +98,7 @@ export const ControlPlaneEnv = serverConfig.pipe(Config.flatMap((config) =>
     }))
   }).pipe(Config.mapEffect(({ templatesFile, ...env }) =>
     settingsOf(config, {
-      scratch: env.unsafeLocalSandbox ? { provider: "local" } : { provider: "docker", user: SANDBOX_USER },
-      ...githubTemplate(env.github),
+      ...builtIn(env.unsafeLocalSandbox ? { provider: "local" } : { provider: "docker", user: SANDBOX_USER }, env),
       ...config.sandbox?.templates,
       ...templatesFile
     }, env.model, githubRequired(env.github)).pipe(
@@ -113,7 +120,7 @@ export const CloudflareEnv = serverConfig.pipe(Config.flatMap((config) =>
     githubApp,
     github: github(config, "daytona")
   }).pipe(Config.mapEffect((env) =>
-    settingsOf(config, { scratch: { provider: "daytona" }, ...githubTemplate(env.github), ...config.sandbox?.templates }, config.models?.default, githubRequired(env.github)).pipe(
+    settingsOf(config, { ...builtIn({ provider: "daytona" }, env), ...config.sandbox?.templates }, config.models?.default, githubRequired(env.github)).pipe(
       Effect.map((settings) => ({ ...env, settings }))
     )
   ))
