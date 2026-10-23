@@ -6,16 +6,36 @@ export interface CredentialTransport {
   put(providerId: string, version: number, credential: Credential): Promise<{ readonly stored: boolean; readonly version: number }>
 }
 
+const FRESH_MS = 30_000
+const REFRESH_MARGIN_MS = 2 * 60_000
+
+interface Cached {
+  readonly credential: Promise<Credential | undefined>
+  until: number
+}
+
 export class RemoteCredentialStore implements CredentialStore {
   readonly #transport: CredentialTransport
   readonly #chains = new Map<string, Promise<unknown>>()
+  readonly #cache = new Map<string, Cached>()
 
   constructor(transport: CredentialTransport) {
     this.#transport = transport
   }
 
-  async read(providerId: string): Promise<Credential | undefined> {
-    return (await this.#transport.get(providerId)).credential
+  read(providerId: string): Promise<Credential | undefined> {
+    const cached = this.#cache.get(providerId)
+    if (cached !== undefined && cached.until > Date.now()) return cached.credential
+    const cell: Cached = { credential: this.#transport.get(providerId).then(({ credential }) => credential), until: Infinity }
+    this.#cache.set(providerId, cell)
+    const evict = () => {
+      if (this.#cache.get(providerId) === cell) this.#cache.delete(providerId)
+    }
+    cell.credential.then((credential) => {
+      if (credential === undefined) return evict()
+      cell.until = Math.min(Date.now() + FRESH_MS, credential.type === "oauth" ? credential.expires - REFRESH_MARGIN_MS : Infinity)
+    }, evict)
+    return cell.credential
   }
 
   list(): Promise<ReadonlyArray<CredentialInfo>> {
@@ -32,7 +52,7 @@ export class RemoteCredentialStore implements CredentialStore {
       }
       throw new Error(`Could not update the ${providerId} credential: it keeps changing`)
     }
-    const result = (this.#chains.get(providerId) ?? Promise.resolve()).then(run, run)
+    const result = (this.#chains.get(providerId) ?? Promise.resolve()).then(run, run).finally(() => this.#cache.delete(providerId))
     this.#chains.set(providerId, result.catch(() => {}))
     return result
   }
