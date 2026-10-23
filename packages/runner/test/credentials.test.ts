@@ -31,4 +31,22 @@ describe("RemoteCredentialStore", () => {
     expect((result as { access: string }).access).toBe("theirs")
     expect((stored.credential as { access: string }).access).toBe("theirs")
   })
+
+  it("shares one read per credential until it nears expiry, never caching a missing one", async () => {
+    const gets: Array<string> = []
+    const store = new RemoteCredentialStore({
+      get: async (providerId) => {
+        gets.push(providerId)
+        if (providerId === "none") return { version: 0 }
+        return { credential: { ...oauth(providerId), expires: Date.now() + (providerId === "soon" ? 60_000 : 3_600_000) }, version: 1 }
+      },
+      list: async () => [],
+      put: async () => ({ stored: true, version: 2 })
+    })
+    for (const providerId of ["soon", "later", "none"]) {
+      await Promise.all([store.read(providerId), store.read(providerId)])
+      await store.read(providerId)
+    }
+    expect(gets).toEqual(["soon", "soon", "later", "none", "none"])
+  })
 })

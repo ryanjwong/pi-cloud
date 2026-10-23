@@ -1,5 +1,5 @@
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai/providers/faux"
-import type { ConversationView } from "@earendil-works/pi-durable"
+import type { ConversationView, LiveState } from "@earendil-works/pi-durable"
 import { CodingTools } from "@earendil-works/pi-durable/tools"
 import { connectServices, follow } from "@pi-cloud/client"
 import { piAgent } from "@pi-cloud/pi"
@@ -96,6 +96,30 @@ describe("the service API", () => {
       await connection.close()
     }
   }, 60_000)
+
+  it("streams an answer into the view before committing it", async () => {
+    const faux = fauxProvider({ tokensPerSecond: 50 })
+    faux.setResponses([fauxAssistantMessage(Array.from({ length: 40 }, (_, index) => `w${index}`).join(" "))])
+    deployment = await startLocal({
+      port: 41_000 + Math.floor(Math.random() * 10_000),
+      runner: { idleMs: 2_000, settings: { progress: { partialIntervalMs: 60_000 } }, plugins: [modelProviders(faux.provider)] }
+    })
+    const connection = await connectServices(deployment)
+    try {
+      const created = await (await connection.sessions()).create({ spec: { model: { provider: "faux", modelId: "faux-1" } } })
+      const main = await connection.conversation(created.id)
+      const view = () => main.view.value as ConversationView
+      const streamed = () => JSON.stringify((view().docs["pi.live"] as LiveState | undefined)?.generation?.message ?? null)
+      const response = await main.prompt({ message: "go" })
+      await until(() => streamed().includes("w2 "), "streamed text")
+      expect(view().entries.some((entry) => entry.kind === "pi.assistant")).toBe(false)
+      expect(await main.waitForPrompt({ operationId: response.accepted ? response.operationId : "" })).toMatchObject({ status: "done" })
+      await until(() => streamed() === "null" && view().entries.some((entry) => entry.kind === "pi.assistant"), "the committed answer")
+      main.release()
+    } finally {
+      await connection.close()
+    }
+  }, 30_000)
 
   it("moves a presentation's references to a new runner when its runner dies", async () => {
     const faux = fauxProvider()

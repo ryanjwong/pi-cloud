@@ -74,6 +74,7 @@ export class ReplicatedStorage implements Storage {
     try {
       await loadDump(db, dump)
       const local = await SqliteStorage.open(db, dump.prefix === undefined ? {} : { prefix: dump.prefix })
+      remote.seed(await local.mintId())
       return new ReplicatedStorage(remote, local, onDrop)
     } catch (error) {
       await db.close().catch(() => {})

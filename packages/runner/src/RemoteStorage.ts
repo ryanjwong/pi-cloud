@@ -108,7 +108,12 @@ export class RemoteStorage implements Storage {
     return seq
   }
 
+  seed(nextId: number): void {
+    this.nextId ??= nextId
+  }
+
   async mintId<I extends Id<string>>(): Promise<I> {
+    if (this.closed) throw new Error("RemoteStorage is closed")
     if (this.nextId === undefined) {
       this.minting ??= this.call<number>("mintId")
       const base = await this.minting

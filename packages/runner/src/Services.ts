@@ -14,9 +14,12 @@ import {
   type Conversation as PiConversation,
   type ConversationId,
   ConversationBusy,
+  type ConversationView,
   type Cursor,
   type EntryRecord,
   type Harness,
+  type LiveState,
+  type ProviderState,
   type Submission,
   type SubmissionId,
   type TaskId,
@@ -37,6 +40,8 @@ import {
   sessionHost
 } from "@pi-cloud/protocol"
 import { Type } from "typebox"
+import type { LiveStreams, Streamed } from "./LiveStreams.ts"
+import { outbox } from "./Outbox.ts"
 
 export interface SessionServices {
   frames(link: number, frames: ReadonlyArray<unknown>): void
@@ -82,6 +87,7 @@ export const openSessionServices = async (options: {
   readonly root: PiConversation
   readonly models: ModelRegistry
   readonly facets: ReadonlyArray<Facet<Principal>>
+  readonly live: LiveStreams
   readonly transmit: (link: number, frames: ReadonlyArray<Frame>) => Promise<void>
   readonly context: Context
 }): Promise<SessionServices> => {
@@ -275,8 +281,31 @@ export const openSessionServices = async (options: {
       list.find((item) => item.id === id) ?? { id, label: label(id), title: null }
 
     const summary = mirror(self, "summary", () => conversations, (value) => summaryOf(value.list))
-    const viewCell = self.state("view", Anything, { init: () => view.value.value })
-    self.on("view", view, (state) => state, (value, ctx) => viewCell.replace(ctx, value))
+    const streamOf = (value: ConversationView) => {
+      const id = (value.docs["pi.provider"] as ProviderState | undefined)?.sessionId
+      return id === undefined ? undefined : options.live.get(id)
+    }
+    let superseded: Streamed | undefined
+    const shown = (value: ConversationView) => {
+      const streamed = streamOf(value)
+      const live = value.docs["pi.live"] as LiveState | undefined
+      const generation = live?.generation
+      if (generation === undefined || generation.retry !== undefined || generation.deferred !== undefined) superseded = streamed
+      if (streamed?.message === undefined || streamed === superseded) return value
+      const message = JSON.parse(JSON.stringify(streamed.message))
+      return { ...value, docs: { ...value.docs, "pi.live": { ...live, generation: { ...generation, message } } } }
+    }
+    const viewCell = self.state("view", Anything, {
+      init: () => {
+        const streamed = streamOf(view.value.value)
+        if (streamed?.ended === true) superseded = streamed
+        return shown(view.value.value)
+      }
+    })
+    self.on("view", view, (state) => state, (value, ctx) => viewCell.replace(ctx, shown(value)))
+    self.on("live", options.live, (id, ctx) => {
+      if (options.live.get(id) === streamOf(view.value.value)) viewCell.replace(ctx, shown(view.value.value))
+    })
     const configuration = self.state("configuration", Anything, { init: () => configurationOf(agent.value.value) })
     self.on("configuration", agent, (state) => state, (value, ctx) => configuration.replace(ctx, configurationOf(value)))
 
@@ -357,12 +386,10 @@ export const openSessionServices = async (options: {
   else if (models.getModel(saved.provider, saved.modelId) === undefined) notice("warning", `Saved model is unavailable: ${saved.provider}/${saved.modelId}`)
 
   let upstream: { readonly id: number; readonly link: FrameLink } | undefined
-  let sending = Promise.resolve()
   const connect = (id: number) => {
     upstream?.link.end("replaced")
-    const link: FrameLink = new FrameLink((frames) => {
-      sending = sending.then(() => options.transmit(id, frames)).catch(() => link.end("lease lost"))
-    })
+    const send = outbox<Frame>((frames) => options.transmit(id, frames))
+    const link: FrameLink = new FrameLink((frames) => void send(frames).catch(() => link.end("lease lost")))
     upstream = { id, link }
     host.connect(link, { principal: { kind: "server" } })
     return link

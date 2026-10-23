@@ -16,6 +16,8 @@ import {
 import type { CommandResult, EventBatch, RunnerCommand, Session } from "@pi-cloud/protocol"
 import { Cause, Deferred, Effect, Exit, Fiber, Schedule, Stream } from "effect"
 import type { ControlPlaneClient } from "./ControlPlaneClient.ts"
+import { liveStreams } from "./LiveStreams.ts"
+import { outbox } from "./Outbox.ts"
 import { noSecrets, type PluginParts, type RunnerPlugin, runSetup, type RunningSession, type SecretResolver } from "./Plugin.ts"
 import { LeaseLostError, RemoteStorage, StorageBackendError } from "./RemoteStorage.ts"
 import { type ReplicaDatabase, ReplicatedStorage } from "./ReplicatedStorage.ts"
@@ -53,7 +55,7 @@ interface Hosted extends RunningSession {
   services: SessionServices | undefined
   readonly models: Models
   seq: number
-  publishing: Promise<void>
+  readonly publish: (batches: ReadonlyArray<EventBatch>) => Promise<void>
 }
 
 const REFRESH_MARGIN_MS = 2 * 60_000
@@ -104,15 +106,8 @@ export const hostSession = Effect.fnUntraced(function*(
 
   const run = <A, E>(effect: Effect.Effect<A, E>) => Effect.runPromise(effect)
 
-  const publish = (current: Hosted, conversationId: number, events: ReadonlyArray<unknown>) => {
-    const batch: EventBatch = { epoch: current.epoch, seq: ++current.seq, conversationId, events: toJson(events) as any }
-    current.publishing = current.publishing.then(() =>
-      run(client.Publish({ sessionId, token: current.token, batches: [batch] })).catch((error) => {
-        if ((error as { _tag?: string })._tag === "LeaseLost") stopNow("lease-lost")
-      })
-    )
-    return current.publishing
-  }
+  const publish = (current: Hosted, conversationId: number, events: ReadonlyArray<unknown>) =>
+    void current.publish([{ epoch: current.epoch, seq: ++current.seq, conversationId, events: toJson(events) as any }])
 
   const startWatch = async (current: Hosted) => {
     const previous = current.watch
@@ -120,10 +115,10 @@ export const hostSession = Effect.fnUntraced(function*(
     await previous?.stop()
     const watch = await watchEvents(current.harness, current.root.id, current.context)
     current.watch = watch
-    await publish(current, current.root.id, [watch.snapshot])
+    publish(current, current.root.id, [watch.snapshot])
     watch.start(async (events) => {
       lastActive = Date.now()
-      await publish(current, current.root.id, events)
+      publish(current, current.root.id, events)
     })
   }
 
@@ -151,6 +146,13 @@ export const hostSession = Effect.fnUntraced(function*(
         throw error
       }
     })
+    const store = new RemoteCredentialStore({
+      get: (providerId) => run(client.CredentialGet({ sessionId, token, providerId })) as never,
+      list: () => run(client.CredentialList({ sessionId, token })) as never,
+      put: (providerId, version, credential) =>
+        run(client.CredentialPut({ sessionId, token, providerId, version, credential: credential as never }))
+    })
+    if (session.spec.model !== undefined) store.read(session.spec.model.provider).catch(() => {})
     const dump = options.replica === undefined
       ? undefined
       : (await run(client.StorageDump({ sessionId, token })).catch((error) => {
@@ -175,20 +177,15 @@ export const hostSession = Effect.fnUntraced(function*(
       parts.push(await runSetup(plugin, { session, secrets: session.resolved?.untrusted === true ? noSecrets : sessionSecrets }))
     }
     const credentials = options.modelCredentials
-    const store = new RemoteCredentialStore({
-      get: (providerId) => run(client.CredentialGet({ sessionId, token, providerId })) as never,
-      list: () => run(client.CredentialList({ sessionId, token })) as never,
-      put: (providerId, version, credential) =>
-        run(client.CredentialPut({ sessionId, token, providerId, version, credential: credential as never }))
-    })
     const models = createModels({
       credentials: store,
       ...(credentials === undefined
         ? {}
         : { authContext: { env: async (name: string) => credentials(name), fileExists: async () => false } })
     })
+    const live = liveStreams(models)
     const registry = createRegistry()
-    let settings: HarnessSettings = { ...options.settings }
+    let settings: HarnessSettings = { progress: { partialIntervalMs: 500 }, ...options.settings }
     for (const part of parts) {
       part.models?.(models)
       for (const extension of part.extensions ?? []) registry.install(extension)
@@ -238,7 +235,11 @@ export const hostSession = Effect.fnUntraced(function*(
       services: undefined,
       models,
       seq: 0,
-      publishing: Promise.resolve()
+      publish: outbox((batches) =>
+        run(client.Publish({ sessionId, token, batches })).catch((error) => {
+          if ((error as { _tag?: string })._tag === "LeaseLost") stopNow("lease-lost")
+        })
+      )
     }
     for (const part of parts) await part.ready?.(current, context)
     await startWatch(current)
@@ -248,6 +249,7 @@ export const hostSession = Effect.fnUntraced(function*(
       root,
       models,
       facets: parts.flatMap((part) => part.facets ?? []),
+      live,
       transmit: (link, frames) =>
         run(client.Frames({ sessionId, token, link, frames: frames as never })).catch((error) => {
           if ((error as { _tag?: string })._tag === "LeaseLost") stopNow("lease-lost")
