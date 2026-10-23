@@ -11,7 +11,24 @@ export interface Env {
   readonly [setting: string]: unknown
 }
 
-export const CONTROL_PLANE = "control-plane"
+export const LEGACY_CONTROL_PLANE = "control-plane"
+
+export const CONTROL_PLANE = "control-plane-2"
+
+export const near = (env: Env) => ({ locationHint: env.PI_CLOUD_LOCATION ?? "wnam" })
+
+export const controlPlane = (env: Env) => env.CONTROL_PLANE.getByName(CONTROL_PLANE, near(env))
+
+export const quote = (name: string) => `"${name.replaceAll('"', '""')}"`
+
+export const schema = (sql: SqlStorage) =>
+  sql.exec<{ type: string; name: string; sql: string }>(
+    "SELECT type, name, sql FROM sqlite_master WHERE sql IS NOT NULL AND tbl_name NOT GLOB 'sqlite_*' AND tbl_name NOT GLOB '_*' ORDER BY type = 'table' DESC, rowid"
+  ).toArray()
+
+export const wipe = (sql: SqlStorage) => {
+  for (const { type, name } of schema(sql)) if (type === "table") sql.exec(`DROP TABLE IF EXISTS ${quote(name)}`)
+}
 
 export const INTERNAL_URL = "https://control-plane.internal"
 
