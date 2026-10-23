@@ -238,7 +238,7 @@ describe("repository sandboxes", () => {
       const config = yield* Effect.promise(() => readFile(join(root!, "sandboxes", `${session.id}_api`, ".git", "config"), "utf8"))
       expect(config).not.toContain("ghs_sandbox_token")
       expect(config).not.toContain("credential")
-    }).pipe(Effect.provide(PiCloud.layer({ url: deployment.url }))))
+    }).pipe(Effect.provide(PiCloud.layer(deployment!))))
   }, 30_000)
 })
 
@@ -351,6 +351,6 @@ describe("GitHub App", () => {
         expect(JSON.stringify(entries)).not.toContain(token)
         expect(prompts).not.toContain(token)
       }
-    }).pipe(Effect.provide(PiCloud.layer({ url: deployment.url }))))
+    }).pipe(Effect.provide(PiCloud.layer(deployment!))))
   }, 30_000)
 })

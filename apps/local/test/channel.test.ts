@@ -1,5 +1,5 @@
 import { fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai/providers/faux"
-import { openChannel, PiCloud } from "@pi-cloud/client"
+import { openChannel, PiCloud, webSocketProtocols } from "@pi-cloud/client"
 import { modelProviders } from "@pi-cloud/runner"
 import { Effect, Stream } from "effect"
 import { afterEach, describe, expect, it } from "vitest"
@@ -71,17 +71,17 @@ describe("session channel", () => {
       headers: { authorization: "Bearer key-1", "content-type": "application/json" },
       body: "{}"
     }).then((response) => response.json()) as { id: string }
-    const outcome = (query: string, headers: Record<string, string> = {}) =>
+    const outcome = (query: string, token?: string) =>
       new Promise<string>((resolve) => {
-        const socket = new WebSocket(`${deployment!.url.replace("http", "ws")}/v1/sessions/${session.id}/channel${query}`, { headers } as never)
+        const socket = new WebSocket(`${deployment!.url.replace("http", "ws")}/v1/sessions/${session.id}/channel${query}`, webSocketProtocols(token))
         socket.onopen = () => {
           socket.close()
-          resolve("open")
+          resolve(`open ${socket.protocol}`)
         }
         socket.onerror = () => resolve("refused")
       })
-    expect(await outcome("", { authorization: "Bearer wrong" })).toBe("refused")
+    expect(await outcome("", "wrong")).toBe("refused")
     expect(await outcome("?token=key-1")).toBe("refused")
-    expect(await outcome("", { authorization: "Bearer key-1" })).toBe("open")
+    expect(await outcome("", "key-1")).toBe("open pi-cloud.v1")
   })
 })

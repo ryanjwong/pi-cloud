@@ -3,7 +3,7 @@ import { Rpc, RpcGroup } from "effect/rpc"
 import { CommandResult, SessionCommand } from "./Commands.ts"
 import { StoredCredential } from "./Credentials.ts"
 import { EventBatch, Session } from "./Domain.ts"
-import { LeaseHeld, LeaseLost, SessionNotFound, StorageFailure } from "./Errors.ts"
+import { LeaseHeld, LeaseLost, SessionNotFound, StorageFailure, Unauthorized } from "./Errors.ts"
 
 export const StorageMethod = Schema.Literals([
   "commit",
@@ -74,10 +74,11 @@ export class RunnerRpcs extends RpcGroup.make(
     payload: {
       sessionId: Schema.String,
       runnerId: Schema.String,
+      grant: Schema.String,
       token: Schema.optional(Schema.String)
     },
     success: RunnerMessage,
-    error: Schema.Union([LeaseHeld, SessionNotFound]),
+    error: Schema.Union([LeaseHeld, SessionNotFound, Unauthorized]),
     stream: true
   }),
   Rpc.make("Renew", {
@@ -97,17 +98,17 @@ export class RunnerRpcs extends RpcGroup.make(
   Rpc.make("CredentialGet", {
     payload: { ...leaseFields, providerId: Schema.String },
     success: Schema.Struct({ credential: Schema.optional(StoredCredential), version: Schema.Number }),
-    error: LeaseLost
+    error: Schema.Union([LeaseLost, StorageFailure])
   }),
   Rpc.make("CredentialList", {
     payload: leaseFields,
     success: Schema.Array(Schema.Struct({ providerId: Schema.String, type: Schema.Literals(["api_key", "oauth"]) })),
-    error: LeaseLost
+    error: Schema.Union([LeaseLost, StorageFailure])
   }),
   Rpc.make("CredentialPut", {
     payload: { ...leaseFields, providerId: Schema.String, version: Schema.Number, credential: StoredCredential },
     success: Schema.Struct({ stored: Schema.Boolean, version: Schema.Number }),
-    error: LeaseLost
+    error: Schema.Union([LeaseLost, StorageFailure])
   }),
   Rpc.make("SessionSecret", {
     payload: { ...leaseFields, name: Schema.String },
@@ -131,9 +132,11 @@ export class RunnerRpcs extends RpcGroup.make(
 ) {}
 
 export const RUNNER_RPC_PATH = "/internal/runner"
+export const RUNNER_WAKE_PATH = "/internal/runner/wake"
 
 export const WakeRequest = Schema.Struct({
   sessionId: Schema.String,
-  controlPlaneUrl: Schema.String
+  controlPlaneUrl: Schema.String,
+  grant: Schema.String
 })
 export type WakeRequest = typeof WakeRequest.Type

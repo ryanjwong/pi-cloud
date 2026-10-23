@@ -28,14 +28,13 @@ Don't put secrets in `.env` or `.dev.vars`.
 
 | | Needs | Without it |
 |---|---|---|
-| Public API: REST, `/v1/pi`, the session channel | `PI_CLOUD_API_KEYS`, sent as `Authorization: Bearer` | open on 127.0.0.1; anywhere else the server won't start |
-| Runner RPC: session state and stored credentials | `PI_CLOUD_RUNNER_SECRET` on every call | the one-process server makes a random one per start; split servers and Cloudflare won't start |
-| A runner's wake endpoint | the runner secret, and a fixed `CONTROL_PLANE_URL` | rejects every wake |
-| Stored model logins | `PI_CLOUD_CREDENTIAL_KEY` (AES-256-GCM) | stored as plain JSON on 127.0.0.1; anywhere else the server won't start |
+| Public API: REST, `/v1/pi`, the session channel | a scoped key from `auth.keys`, or an admin key from `PI_CLOUD_API_KEYS` | on 127.0.0.1 the server writes `DATA_DIR/admin-token`; anywhere else it won't start |
+| Runner RPC and the runner wake socket | `PI_CLOUD_RUNNER_SECRET` on every call, plus the session's wake token | the one-process server makes a random one per start; split servers and Cloudflare won't start |
+| Stored model logins | `PI_CLOUD_CREDENTIAL_KEY` (AES-256-GCM, comma-separated for rotation) | on 127.0.0.1 the server writes `DATA_DIR/credential-key`; anywhere else it won't start |
 
-API keys are only accepted in the `Authorization` header, never in a URL, because proxies and logs keep URLs.
-Browsers can't set that header on a WebSocket, so a browser UI has to sit behind a same-origin proxy that adds
-it. On Cloudflare the runner RPC isn't routed at all: the Worker forwards only public paths, and session objects
+Keys go in the `Authorization` header, or on a WebSocket as the `bearer.<base64url key>` subprotocol, never in a URL,
+because proxies and logs keep URLs. [Security](security.md#authentication) has the scopes and origin rules. On
+Cloudflare the runner RPC isn't routed at all: the Worker forwards only public paths, and session objects
 call the control plane object directly.
 
 ## What the agent can see

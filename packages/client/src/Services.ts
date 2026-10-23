@@ -1,6 +1,5 @@
 import { createHost, type Host, type Ref, type WebSocketLike, webSocketLink } from "@earendil-works/chord"
-import { ConversationObject, type Principal, principalKey, SessionObject, SessionsObject } from "@pi-cloud/protocol"
-import { authorization } from "./auth.ts"
+import { ConversationObject, type Principal, principalKey, SessionObject, SessionsObject, webSocketProtocols } from "@pi-cloud/protocol"
 import type { ClientOptions } from "./index.ts"
 
 export interface ServiceConnection {
@@ -59,12 +58,12 @@ export const connectServices = async (options: ClientOptions): Promise<ServiceCo
   const url = new URL("/v1/pi", options.url)
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:"
 
-  const host = createHost<Principal>({ self: { kind: "client" }, principalKey, kind: "client" })
+  const host = createHost<Principal>({ self: { kind: "host" }, principalKey, kind: "client" })
   let closing = false
 
   const open = () =>
     new Promise<void>((resolve, reject) => {
-      const socket = new WebSocket(url, { headers: authorization(options.apiKey) } as never)
+      const socket = new WebSocket(url, webSocketProtocols(options.apiKey))
       socket.binaryType = "arraybuffer"
       let opened = false
       socket.addEventListener("open", () => {
@@ -72,8 +71,12 @@ export const connectServices = async (options: ClientOptions): Promise<ServiceCo
         host.connect(webSocketLink(socket as unknown as WebSocketLike), { principal: { kind: "server" } })
         resolve()
       })
+      const refused = () => reject(new Error(`Cannot connect to ${url.origin}${url.pathname}`))
+      socket.addEventListener("error", () => {
+        if (!opened) refused()
+      })
       socket.addEventListener("close", () => {
-        if (!opened) reject(new Error(`Cannot connect to ${url.origin}${url.pathname}`))
+        if (!opened) refused()
         else if (!closing) setTimeout(() => void reconnect(), 500)
       })
     })

@@ -71,10 +71,10 @@ export const ControlPlaneEnv = serverConfig.pipe(Config.flatMap((config) =>
     host: Config.String("HOST").pipe(Config.withDefault("127.0.0.1")),
     dataDir: Config.String("DATA_DIR").pipe(Config.withDefault(".data")),
     publicUrl: Config.option(Config.String("PUBLIC_URL")),
-    runnerUrl: Config.option(Config.String("RUNNER_URL")),
+    auth: Config.succeed(config.auth ?? {}),
     apiKeys: secretList("PI_CLOUD_API_KEYS"),
     runnerSecret: Config.option(Config.Redacted("PI_CLOUD_RUNNER_SECRET")),
-    credentialKey: Config.option(Config.Redacted("PI_CLOUD_CREDENTIAL_KEY")),
+    credentialKeys: secretList("PI_CLOUD_CREDENTIAL_KEY"),
     model: model(config),
     unsafeLocalSandbox: unsafeLocalSandbox(config),
     templatesFile: Config.option(Config.String("SANDBOX_TEMPLATES_FILE")).pipe(
@@ -103,11 +103,10 @@ export type ControlPlaneEnv = Config.Success<typeof ControlPlaneEnv>
 
 export const CloudflareEnv = serverConfig.pipe(Config.flatMap((config) =>
   Config.all({
-    apiKeys: Config.Redacted("PI_CLOUD_API_KEYS").pipe(
-      Config.map((value) => Redacted.value(value).split(",").map((item) => item.trim()).filter(Boolean).map((item) => Redacted.make(item)))
-    ),
+    auth: Config.succeed(config.auth ?? {}),
+    apiKeys: secretList("PI_CLOUD_API_KEYS"),
     runnerSecret: Config.Redacted("PI_CLOUD_RUNNER_SECRET"),
-    credentialKey: Config.Redacted("PI_CLOUD_CREDENTIAL_KEY"),
+    credentialKeys: secretList("PI_CLOUD_CREDENTIAL_KEY"),
     modelCredentials: credentials(config.providers ?? MODEL_CREDENTIALS),
     daytonaApiKey: Config.option(Config.Redacted("DAYTONA_API_KEY")),
     model: model(config),
@@ -123,8 +122,6 @@ export type CloudflareEnv = Config.Success<typeof CloudflareEnv>
 
 export const RunnerEnv = serverConfig.pipe(Config.flatMap((config) =>
   Config.all({
-    port: Config.Port("PORT").pipe(Config.withDefault(8788)),
-    host: Config.String("HOST").pipe(Config.withDefault("127.0.0.1")),
     dataDir: Config.String("DATA_DIR").pipe(Config.withDefault(".data")),
     controlPlaneUrl: Config.option(Config.String("CONTROL_PLANE_URL")),
     runnerSecret: Config.option(Config.Redacted("PI_CLOUD_RUNNER_SECRET")),

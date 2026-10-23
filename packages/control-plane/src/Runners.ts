@@ -7,11 +7,14 @@ import {
   type RunnerCommand,
   type RunnerMessage,
   RunnerUnavailable,
+  secretsEqual,
   type Session,
-  SessionNotFound
+  SessionNotFound,
+  Unauthorized
 } from "@pi-cloud/protocol"
 import { type Cause, Context, Deferred, Effect, Layer, Option, Queue, Schedule, Stream } from "effect"
 import { ControlPlaneConfig, LeaseManager, RunnerDispatcher, SessionStore } from "@pi-cloud/core"
+import { randomBytes } from "node:crypto"
 
 type Envelope = Exclude<RunnerMessage, { readonly _tag: "LeaseGranted" }>
 
@@ -19,8 +22,9 @@ export class Runners extends Context.Service<Runners, {
   attach(input: {
     readonly sessionId: string
     readonly runnerId: string
+    readonly grant: string
     readonly token?: string | undefined
-  }): Stream.Stream<RunnerMessage, LeaseHeld | SessionNotFound>
+  }): Stream.Stream<RunnerMessage, LeaseHeld | SessionNotFound | Unauthorized>
   send(session: Session, command: RunnerCommand): Effect.Effect<CommandResult, RunnerUnavailable>
   reply(sessionId: string, token: string, commandId: string, result: CommandResult): Effect.Effect<void, LeaseLost>
   notify(sessionId: string, command: RunnerCommand): Effect.Effect<void>
@@ -52,6 +56,12 @@ export class Runners extends Context.Service<Runners, {
       }
       const channels = new Map<string, Channel>()
       const waiters = new Map<string, Array<Deferred.Deferred<Channel>>>()
+      const grants = new Map<string, string>()
+
+      const verifyGrant = (sessionId: string, grant: string) =>
+        secretsEqual(grant, grants.get(sessionId) ?? "") && grant !== ""
+          ? Effect.void
+          : Effect.fail(new Unauthorized({ message: "This runner was not woken for the session" }))
 
       const closeChannel = Effect.fnUntraced(function*(sessionId: string, channel: Channel, message: string) {
         if (channels.get(sessionId) === channel) channels.delete(sessionId)
@@ -73,8 +83,9 @@ export class Runners extends Context.Service<Runners, {
         return undefined
       })
 
-      const attach = (input: { readonly sessionId: string; readonly runnerId: string; readonly token?: string | undefined }) =>
+      const attach = (input: { readonly sessionId: string; readonly runnerId: string; readonly grant: string; readonly token?: string | undefined }) =>
         Stream.unwrap(Effect.gen(function*() {
+          yield* verifyGrant(input.sessionId, input.grant)
           const session = yield* sessions.get(input.sessionId as Session["id"]).pipe(Effect.orDie)
           if (Option.isNone(session)) return yield* new SessionNotFound({ sessionId: input.sessionId })
           const lease = yield* leases.acquire(input.sessionId, input.runnerId, input.token)
@@ -122,7 +133,9 @@ export class Runners extends Context.Service<Runners, {
         const waiting = waiters.get(sessionId)
         if (waiting === undefined) {
           waiters.set(sessionId, [deferred])
-          yield* dispatcher.wake({ sessionId, controlPlaneUrl: config.publicUrl }).pipe(
+          const grant = randomBytes(32).toString("base64url")
+          grants.set(sessionId, grant)
+          yield* dispatcher.wake({ sessionId, controlPlaneUrl: config.publicUrl, grant }).pipe(
             Effect.tapError(() =>
               Effect.gen(function*() {
                 const failed = waiters.get(sessionId) ?? []

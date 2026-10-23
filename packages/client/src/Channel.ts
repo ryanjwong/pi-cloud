@@ -4,11 +4,11 @@ import {
   channelPath,
   type CommandResult,
   type EventBatch,
-  type SessionCommand
+  type SessionCommand,
+  webSocketProtocols
 } from "@pi-cloud/protocol"
-import { type Cause, Deferred, Effect, Layer, Queue, Schema, type Scope, Stream } from "effect"
+import { type Cause, Deferred, Effect, Queue, Schema, type Scope, Stream } from "effect"
 import { Socket } from "effect/socket"
-import { authorization } from "./auth.ts"
 import type { ClientOptions } from "./index.ts"
 
 export interface SessionChannel {
@@ -27,9 +27,8 @@ export const openChannel = (
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:"
     if (options.after !== undefined) url.searchParams.set("after", options.after)
 
-    const headers = authorization(options.apiKey)
-    const socket = yield* Socket.makeWebSocket(url.toString()).pipe(
-      Effect.provide(Layer.succeed(Socket.WebSocketConstructor, (target) => new globalThis.WebSocket(target, { headers } as never) as never))
+    const socket = yield* Socket.makeWebSocket(url.toString(), { protocols: webSocketProtocols(options.apiKey) }).pipe(
+      Effect.provide(Socket.layerWebSocketConstructorGlobal)
     )
     const writer = yield* socket.writer
     const reader = yield* socket.reader

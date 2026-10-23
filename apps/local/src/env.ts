@@ -1,6 +1,8 @@
 import { NodeServices } from "@effect/platform-node"
-import { ConfigSource } from "@pi-cloud/config"
+import { ConfigSource, type ControlPlaneEnv } from "@pi-cloud/config"
 import { type Config, Effect } from "effect"
+
+export const keyed = (env: ControlPlaneEnv) => env.apiKeys.length > 0 || (env.auth.keys ?? []).length > 0
 
 export const load = <A>(config: Config.Config<A>): Promise<A> =>
   Effect.runPromise(

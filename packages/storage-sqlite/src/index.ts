@@ -155,14 +155,34 @@ const bindings: Layer.Layer<BindingStore, never, SqliteFile> = Layer.effect(Bind
   })
 }))
 
-const credentials = (key: string | undefined): Layer.Layer<CredentialStore, never, SqliteFile> =>
-  Layer.effect(CredentialStore, Effect.map(SqliteFile, (db) => {
-    const sealer = credentialSealer(key)
+const credentials = (keys: ReadonlyArray<string>): Layer.Layer<CredentialStore, never, SqliteFile> =>
+  Layer.effect(CredentialStore, Effect.gen(function*() {
+    const db = yield* SqliteFile
+    const sealer = credentialSealer(keys)
     type Row = { provider_id: string; sealed: string; version: number; updated_at: number }
     const columns = "provider_id, sealed, version, updated_at"
+    const reseal = (row: Row) => {
+      try {
+        return sealer.migrate(row.provider_id, row.sealed)
+      } catch {
+        return null
+      }
+    }
+    const skipped = yield* attempt(() =>
+      db.transaction(async (transaction) => {
+        const skipped: Array<string> = []
+        for (const row of await transaction.all<Row>(`SELECT ${columns} FROM credentials`)) {
+          const resealed = reseal(row)
+          if (resealed === null) skipped.push(row.provider_id)
+          else if (resealed !== undefined) await transaction.run("UPDATE credentials SET sealed = ? WHERE provider_id = ?", resealed, row.provider_id)
+        }
+        return skipped
+      })
+    ).pipe(Effect.orDie)
+    if (skipped.length > 0) yield* Effect.logWarning(`No configured credential key opens: ${skipped.join(", ")}`)
     const parse = (row: Row): VersionedCredential => ({
       providerId: row.provider_id,
-      credential: sealer.open(row.sealed),
+      credential: sealer.open(row.provider_id, row.sealed),
       version: row.version,
       updatedAt: row.updated_at
     })
@@ -178,12 +198,13 @@ const credentials = (key: string | undefined): Layer.Layer<CredentialStore, neve
             const current = (await transaction.get<Row>(`SELECT ${columns} FROM credentials WHERE provider_id = ?`, providerId))?.version ?? 0
             if (expectedVersion !== undefined && expectedVersion !== current) return { stored: false, version: current }
             const now = Date.now()
+            const sealed = sealer.seal(providerId, credential)
             if (current === 0) {
-              await transaction.run("INSERT INTO credentials (provider_id, sealed, version, updated_at) VALUES (?, ?, ?, ?)", providerId, sealer.seal(credential), 1, now)
+              await transaction.run("INSERT INTO credentials (provider_id, sealed, version, updated_at) VALUES (?, ?, ?, ?)", providerId, sealed, 1, now)
             } else {
               await transaction.run(
                 "UPDATE credentials SET sealed = ?, version = ?, updated_at = ? WHERE provider_id = ? AND version = ?",
-                sealer.seal(credential),
+                sealed,
                 current + 1,
                 now,
                 providerId,
@@ -199,13 +220,13 @@ const credentials = (key: string | undefined): Layer.Layer<CredentialStore, neve
 
 export const sqliteStoresOn = (
   open: () => Promise<SqliteDatabase>,
-  options: { readonly credentialKey?: string | undefined } = {}
+  options: { readonly credentialKeys: ReadonlyArray<string> }
 ) => {
   const database = SqliteFile.layer(open)
   return {
     sessions: sessions.pipe(Layer.provide(database)),
     state: state.pipe(Layer.provide(database)),
     bindings: bindings.pipe(Layer.provide(database)),
-    credentials: credentials(options.credentialKey).pipe(Layer.provide(database))
+    credentials: credentials(options.credentialKeys).pipe(Layer.provide(database))
   }
 }

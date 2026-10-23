@@ -3,7 +3,7 @@ import { ChannelMessage, ChannelRequest, type CommandResult } from "@pi-cloud/pr
 import { Effect, Fiber, Layer, Schema, Stream } from "effect"
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http"
 import { type CommandError, Sessions, toJson } from "../Sessions.ts"
-import { ClientAuth } from "./Auth.ts"
+import { authorize, ClientAuth, guarded } from "./Auth.ts"
 
 const encode = Schema.encodeSync(ChannelMessage)
 const decode = Schema.decodeUnknownEffect(Schema.fromJsonString(ChannelRequest))
@@ -25,16 +25,10 @@ export const ChannelRoute = Layer.effectDiscard(Effect.gen(function*() {
   const sessions = yield* Sessions
   const auth = yield* ClientAuth
 
-  yield* router.add("GET", "/v1/sessions/:id/channel", Effect.gen(function*() {
+  yield* router.add("GET", "/v1/sessions/:id/channel", guarded((headers) => authorize(auth, headers, "write"), () => Effect.gen(function*() {
     const request = yield* HttpServerRequest.HttpServerRequest
     const { id } = yield* HttpRouter.params
     const url = new URL(request.url, "http://localhost")
-    const bearer = request.headers["authorization"]?.replace(/^Bearer\s+/i, "")
-    const authorized = yield* auth.check(bearer).pipe(
-      Effect.as(true),
-      Effect.orElseSucceed(() => false)
-    )
-    if (!authorized) return HttpServerResponse.text("Unauthorized", { status: 401 })
 
     const events = yield* sessions.events(id ?? "", parsePosition(url.searchParams.get("after") ?? undefined)).pipe(
       Effect.option
@@ -79,5 +73,5 @@ export const ChannelRoute = Layer.effectDiscard(Effect.gen(function*() {
     )
     yield* Fiber.interrupt(pump)
     return HttpServerResponse.empty()
-  }))
+  })))
 }))

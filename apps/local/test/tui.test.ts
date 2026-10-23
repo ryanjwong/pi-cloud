@@ -105,7 +105,7 @@ describe("Pi's TUI on a cloud session", () => {
       },
       settings: { templates: { home: { provider: "local", repository: { url: `file://${origin}`, ref: "main" } } } }
     })
-    const url = deployment.url
+    const { url, apiKey } = deployment
     const session = await Effect.runPromise(Effect.gen(function*() {
       const client = yield* PiCloud
       return yield* client.sessions.create({
@@ -116,10 +116,10 @@ describe("Pi's TUI on a cloud session", () => {
           }
         }
       })
-    }).pipe(Effect.provide(PiCloud.layer({ url }))))
+    }).pipe(Effect.provide(PiCloud.layer({ url, apiKey }))))
 
     const { terminal, screen, type } = fakeTerminal()
-    const done = runTui({ url, sessionId: session.id, label: "acme/api@main", terminal })
+    const done = runTui({ url, apiKey, sessionId: session.id, label: "acme/api@main", terminal })
     try {
       await until(() => screen().includes("acme/api@main"), "the footer", screen)
       expect(screen()).toContain("faux/faux-1")
@@ -143,7 +143,7 @@ describe("Pi's TUI on a cloud session", () => {
     }
 
     const again = fakeTerminal()
-    const reattached = runTui({ url, sessionId: session.id, label: "acme/api@main", terminal: again.terminal })
+    const reattached = runTui({ url, apiKey, sessionId: session.id, label: "acme/api@main", terminal: again.terminal })
     try {
       await until(() => again.screen().includes("The readme says hello."), "the history", again.screen)
       expect(again.screen()).toContain("hello from the repository")
@@ -165,16 +165,16 @@ describe("Pi's TUI on a cloud session", () => {
       },
       settings: { templates: { home: { provider: "local" } } }
     })
-    const url = deployment.url
+    const { url, apiKey } = deployment
     const session = await Effect.runPromise(Effect.gen(function*() {
       const client = yield* PiCloud
       return yield* client.sessions.create({
         payload: { spec: { model: { provider: "faux", modelId: "deep" }, sandbox: "home" } }
       })
-    }).pipe(Effect.provide(PiCloud.layer({ url }))))
+    }).pipe(Effect.provide(PiCloud.layer({ url, apiKey }))))
 
     const { terminal, screen, type } = fakeTerminal()
-    const done = runTui({ url, sessionId: session.id, label: "scratch", terminal })
+    const done = runTui({ url, apiKey, sessionId: session.id, label: "scratch", terminal })
     try {
       await until(() => screen().includes("faux/deep · thinking:off"), "the footer", screen)
       type("\x1b[Z")
@@ -214,16 +214,16 @@ describe("Pi's TUI on a cloud session", () => {
       },
       settings: { templates: { home: { provider: "local" } } }
     })
-    const url = deployment.url
+    const { url, apiKey } = deployment
     const session = await Effect.runPromise(Effect.gen(function*() {
       const client = yield* PiCloud
       return yield* client.sessions.create({
         payload: { spec: { model: { provider: "faux", modelId: "faux-1" }, sandbox: "home" } }
       })
-    }).pipe(Effect.provide(PiCloud.layer({ url }))))
+    }).pipe(Effect.provide(PiCloud.layer({ url, apiKey }))))
 
     const { terminal, screen, type } = fakeTerminal()
-    const done = runTui({ url, sessionId: session.id, terminal })
+    const done = runTui({ url, apiKey, sessionId: session.id, terminal })
     try {
       await until(() => screen().includes("faux/faux-1"), "the footer", screen)
       for (const key of "delegate it") type(key)

@@ -7,7 +7,6 @@ import { Runners } from "../Runners.ts"
 import { toJson } from "../Sessions.ts"
 import { RunnerAuth } from "./Auth.ts"
 
-
 const call = (storage: Storage, method: StorageMethod, args: ReadonlyArray<unknown>): Promise<unknown> => {
   const fn = (storage as unknown as Record<string, (...args: Array<unknown>) => Promise<unknown>>)[method]
   if (typeof fn !== "function") return Promise.reject(new Error(`Unknown storage method ${method}`))
@@ -64,7 +63,7 @@ export const RunnerRpcLive = RunnerRpcs.toLayer(Effect.gen(function*() {
       Effect.gen(function*() {
         yield* auth.check(headers).pipe(Effect.orDie)
         yield* leases.validate(sessionId, token)
-        const found = yield* credentials.get(providerId).pipe(Effect.orDie)
+        const found = yield* credentials.get(providerId)
         return Option.match(found, {
           onNone: () => ({ version: 0 }),
           onSome: (entry) => ({ credential: entry.credential, version: entry.version })
@@ -75,7 +74,7 @@ export const RunnerRpcLive = RunnerRpcs.toLayer(Effect.gen(function*() {
       Effect.gen(function*() {
         yield* auth.check(headers).pipe(Effect.orDie)
         yield* leases.validate(sessionId, token)
-        const all = yield* credentials.list().pipe(Effect.orDie)
+        const all = yield* credentials.list()
         return all.map((entry) => ({ providerId: entry.providerId, type: entry.credential.type }))
       }),
 
@@ -83,7 +82,7 @@ export const RunnerRpcLive = RunnerRpcs.toLayer(Effect.gen(function*() {
       Effect.gen(function*() {
         yield* auth.check(headers).pipe(Effect.orDie)
         yield* leases.validate(sessionId, token)
-        return yield* credentials.put(providerId, credential, version).pipe(Effect.orDie)
+        return yield* credentials.put(providerId, credential, version)
       }),
 
     SessionSecret: ({ sessionId, token, name }, { headers }) =>

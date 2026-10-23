@@ -2,6 +2,7 @@ import { createHost, forbidden, type Host, invalid, replicatedState, type WebSoc
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context"
 import { SessionStore } from "@pi-cloud/core"
 import {
+  allows,
   type CloudSession,
   type Principal,
   principalKey,
@@ -10,13 +11,14 @@ import {
   SessionSpec,
   sessionOfHost,
   SessionsObject,
-  type SessionView
+  type SessionView,
+  WEBSOCKET_PROTOCOL
 } from "@pi-cloud/protocol"
 import { Context as EffectContext, Deferred, Effect, Layer, Option, Schedule, Schema } from "effect"
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http"
 import { Socket } from "effect/socket"
 import { Type } from "typebox"
-import { ClientAuth } from "../http/Auth.ts"
+import { authorize, ClientAuth, guarded } from "../http/Auth.ts"
 import { Runners } from "../Runners.ts"
 import { Sessions } from "../Sessions.ts"
 
@@ -64,13 +66,17 @@ export class ServiceHost extends EffectContext.Service<ServiceHost, {
     yield* Effect.promise(refresh).pipe(Effect.ignore, Effect.repeat(Schedule.spaced(1_000)), Effect.forkScoped)
 
     host.serve(SessionsObject, (_input, principal, self) => {
-      if (principal.kind === "runner") throw forbidden("Runners cannot use the session directory")
+      if (!allows(principal, "read")) throw forbidden("This key cannot read the session directory")
+      const writable = () => {
+        if (!allows(principal, "write")) throw forbidden("This key cannot change sessions")
+      }
       const list = self.state("sessions", Anything, { init: () => directory.value.list })
       self.on("sessions", directory, (value, ctx) => list.replace(ctx, value.list))
       return {
         variant: "default",
         sessions: list,
         create: async ({ title, spec }) => {
+          writable()
           const created = await run(sessions.create({
             ...(title === undefined ? {} : { title }),
             ...(spec === undefined ? {} : { spec: decodeSpec(spec) })
@@ -79,6 +85,7 @@ export class ServiceHost extends EffectContext.Service<ServiceHost, {
           return cloudOf(created)
         },
         remove: async ({ id }) => {
+          writable()
           await run(Effect.orDie(sessions.remove(id as SessionId)))
           await refresh()
         }
@@ -86,7 +93,7 @@ export class ServiceHost extends EffectContext.Service<ServiceHost, {
     })
 
     host.route("session:", {
-      authorize: (principal) => principal.kind !== "runner",
+      authorize: (principal) => allows(principal, "write"),
       resolve: async (name) => {
         const sessionId = sessionOfHost(name) ?? ""
         const session = await run(store.get(sessionId as SessionId).pipe(Effect.orDie))
@@ -96,22 +103,17 @@ export class ServiceHost extends EffectContext.Service<ServiceHost, {
       principal: (name) => ({ kind: "runner", session: sessionOfHost(name) ?? "" })
     })
 
-    yield* router.add("GET", SERVICES_PATH, Effect.gen(function*() {
+    yield* router.add("GET", SERVICES_PATH, guarded((headers) => authorize(auth, headers, "read"), (principal) => Effect.gen(function*() {
       const request = yield* HttpServerRequest.HttpServerRequest
-      const bearer = request.headers["authorization"]?.replace(/^Bearer\s+/i, "")
-      const authorized = yield* auth.check(bearer).pipe(
-        Effect.as(true),
-        Effect.orElseSucceed(() => false)
-      )
-      if (!authorized) return HttpServerResponse.text("Unauthorized", { status: 401 })
-
       const WebSocketPair = (globalThis as { WebSocketPair?: new () => Record<0 | 1, WebSocketLike & { accept(): void }> })
         .WebSocketPair
       if (WebSocketPair !== undefined) {
         const pair = new WebSocketPair()
         pair[1].accept()
-        host.accept(webSocketLink(pair[1], { acceptPacked: false }), { principal: { kind: "client" }, kind: "client" })
-        return HttpServerResponse.raw(new Response(null, { status: 101, webSocket: pair[0] } as ResponseInit))
+        host.accept(webSocketLink(pair[1], { acceptPacked: false }), { principal, kind: "client" })
+        return HttpServerResponse.raw(
+          new Response(null, { status: 101, webSocket: pair[0], headers: { "sec-websocket-protocol": WEBSOCKET_PROTOCOL } } as unknown as ResponseInit)
+        )
       }
 
       const socket = yield* Effect.orDie(request.upgrade)
@@ -140,7 +142,7 @@ export class ServiceHost extends EffectContext.Service<ServiceHost, {
           else if (type === "close" || type === "error") listeners.close.push(listener as () => void)
         }) as WebSocketLike["addEventListener"]
       }
-      host.accept(webSocketLink(like, { acceptPacked: false }), { principal: { kind: "client" }, kind: "client" })
+      host.accept(webSocketLink(like, { acceptPacked: false }), { principal, kind: "client" })
       yield* reader.pull.pipe(
         Effect.flatMap((chunks) =>
           Effect.sync(() => {
@@ -153,7 +155,7 @@ export class ServiceHost extends EffectContext.Service<ServiceHost, {
       )
       end()
       return HttpServerResponse.empty()
-    }))
+    })))
 
     return ServiceHost.of({ host })
   }))

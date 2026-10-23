@@ -15,7 +15,7 @@ import { Layer } from "effect"
 import { HttpRouter, HttpServer } from "effect/http"
 import { HttpApiBuilder, HttpApiScalar } from "effect/http-api"
 import { RpcSerialization, RpcServer } from "effect/rpc"
-import { ApiAuthLive, ClientAuth, RunnerAuth } from "./http/Auth.ts"
+import { adminKeys, ApiAuthLive, type AuthSettings, ClientAuth, requestGuard, RunnerAuth } from "./http/Auth.ts"
 import { ChannelRoute } from "./http/ChannelLive.ts"
 import { PublicApiHandlers } from "./http/PublicApiLive.ts"
 import { RunnerRpcLive } from "./http/RunnerRpcLive.ts"
@@ -45,10 +45,11 @@ export const routes = (extensions: ReadonlyArray<Extension> = []) =>
 
 export interface ControlPlaneOptions {
   readonly settings: Partial<ControlPlaneSettings> & { readonly publicUrl: string }
-  readonly dispatcher: Layer.Layer<RunnerDispatcher>
+  readonly dispatcher: Layer.Layer<RunnerDispatcher, never, HttpRouter.HttpRouter | RunnerAuth>
   readonly apiKeys?: ReadonlyArray<string>
+  readonly auth?: AuthSettings
   readonly clientAuth?: Layer.Layer<ClientAuth>
-  readonly runnerSecret?: string
+  readonly runnerSecret: string
   readonly sessions?: Layer.Layer<SessionStore>
   readonly state?: Layer.Layer<StateStore>
   readonly leases?: Layer.Layer<LeaseManager>
@@ -63,9 +64,10 @@ export const layer = (options: ControlPlaneOptions) => {
   const config = ControlPlaneConfig.layer(options.settings)
   const ttlMs = options.settings.leaseTtlMs ?? 15_000
   const logLimit = options.settings.eventLogLimit ?? 2_000
-  return routes(options.extensions).pipe(
+  const runnerAuth = RunnerAuth.sharedSecret(options.runnerSecret)
+  return Layer.mergeAll(routes(options.extensions), requestGuard(options.auth ?? {})).pipe(
     Layer.provide([
-      options.dispatcher,
+      options.dispatcher.pipe(Layer.provide(runnerAuth)),
       options.sessions ?? SessionStore.memory,
       options.state ?? StateStore.memory,
       options.leases ?? LeaseManager.memory({ ttlMs }),
@@ -73,8 +75,8 @@ export const layer = (options: ControlPlaneOptions) => {
       options.bindings ?? BindingStore.memory,
       options.credentials ?? CredentialStore.memory,
       options.sessionSecrets ?? SessionSecrets.none,
-      RunnerAuth.sharedSecret(options.runnerSecret),
-      options.clientAuth ?? ClientAuth.apiKeys(options.apiKeys),
+      runnerAuth,
+      options.clientAuth ?? ClientAuth.keys([...options.auth?.keys ?? [], ...adminKeys(options.apiKeys ?? [])]),
       config
     ])
   )

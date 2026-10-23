@@ -27,9 +27,10 @@ export class ControlPlane extends DurableObject<Env> {
     const database = new DurableObjectSqliteDatabase(this.ctx.storage as never)
     const { handler } = ControlPlaneApp.toWebHandler({
       settings: { ...env.settings, publicUrl: INTERNAL_URL },
+      auth: env.auth,
       apiKeys: env.apiKeys.map((key) => Redacted.value(key)),
       runnerSecret: Redacted.value(env.runnerSecret),
-      ...sqliteStoresOn(async () => database, { credentialKey: Redacted.value(env.credentialKey) }),
+      ...sqliteStoresOn(async () => database, { credentialKeys: env.credentialKeys.map((key) => Redacted.value(key)) }),
       ...connectors(env),
       dispatcher: RunnerDispatcher.make((wake) => this.env.SESSION_HOST.getByName(wake.sessionId, { locationHint: this.env.PI_CLOUD_LOCATION ?? "wnam" }).wake(wake))
     })

@@ -34,6 +34,38 @@ and so does a `sandbox.default` or `triggers.github.template` that names no temp
 `GET /v1/server` reports only the pi-cloud version and the services path without authentication.
 `GET /v1/server/details` adds the default model and sandbox and the template names, and needs an API key.
 
+## Authentication
+
+There is no open mode: every API request, WebSocket and runner call needs a key.
+
+- **API keys** come from `auth.keys` in the server config, stored as SHA-256 hashes (`printf %s "$key" | shasum -a
+  256`) and compared in constant time, each with a name and scopes. `PI_CLOUD_API_KEYS` keys are admin keys. To
+  revoke a key, remove it and restart.
+
+  ```json
+  { "auth": { "keys": [{ "name": "dashboard", "sha256": "9f86d0...", "scopes": ["read"] }] } }
+  ```
+
+- **Scopes** are `read`, `write` and `admin`, each including the ones before it. `GET` routes and `/v1/pi` need
+  `read`; creating, deleting and talking to sessions (REST, the session channel, `SessionsObject.create` and
+  `remove`, and opening a `session:` host over Chord) need `write`; `/v1/credentials` needs `admin`. A missing or
+  unknown key gets `401`, a key without the scope `403`.
+- **No keys on `127.0.0.1`:** the one-process server writes an admin key to `DATA_DIR/admin-token` (mode 0600)
+  and prints its path. The CLI on the same machine finds it through `~/.config/pi-cloud/admin-token`. On any other
+  `HOST` it refuses to start without a key.
+- **Origin and Host.** A request whose `Origin` is not in `auth.allowedOrigins` gets `403`, on HTTP, SSE and both
+  WebSockets, and CORS allows exactly that list. On loopback the `Host` must be a loopback name or the `PUBLIC_URL` host, which stops
+  DNS rebinding; `auth.allowedHosts` replaces that list on any address.
+- **WebSockets** take the key as a subprotocol, `Sec-WebSocket-Protocol: pi-cloud.v1, bearer.<base64url key>`, and the
+  server answers `pi-cloud.v1`. Keys in a query string are never read.
+- **Runners** need `PI_CLOUD_RUNNER_SECRET` on every call. Each wake carries a fresh token for that session, and
+  `Attach` refuses a runner without it, so a runner can attach only a session it was woken for.
+- **Stored credentials** are sealed with AES-256-GCM under `PI_CLOUD_CREDENTIAL_KEY`, a comma-separated list: the
+  first key encrypts and every listed key decrypts. Each entry is bound to its provider id and prefixed with its
+  key id. At startup, entries under an older key or in the old formats are resealed under the first key, and
+  plain entries are refused from then on. Without a key on loopback, the server generates
+  `DATA_DIR/credential-key`; once you set a key, that file still decrypts and its entries are resealed. SQLite files are created with mode 0600.
+
 ## Sandboxes
 
 - The built-in `scratch` template is a Docker container running as user `1000:1000`. GitHub sessions use the

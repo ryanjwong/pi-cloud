@@ -28,10 +28,10 @@ export const settings = async (env: Env): Promise<CloudflareEnv> => {
       Effect.result
     )
   )
-  if (result._tag === "Failure" || result.success.apiKeys.length === 0) {
+  if (result._tag === "Failure" || (result.success.apiKeys.length === 0 && (result.success.auth.keys ?? []).length === 0) || result.success.credentialKeys.length === 0) {
     if (result._tag === "Failure") console.error(result.failure.message)
     throw new NotConfigured(
-      "pi-cloud is not configured: set the secrets PI_CLOUD_API_KEYS, PI_CLOUD_RUNNER_SECRET and PI_CLOUD_CREDENTIAL_KEY (wrangler secret put), and check PI_CLOUD_CONFIG; details are in the Worker logs"
+      "pi-cloud is not configured: set the secrets PI_CLOUD_RUNNER_SECRET, PI_CLOUD_CREDENTIAL_KEY and PI_CLOUD_API_KEYS or auth.keys in PI_CLOUD_CONFIG (wrangler secret put); details are in the Worker logs"
     )
   }
   return result.success

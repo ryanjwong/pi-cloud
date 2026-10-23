@@ -210,14 +210,15 @@ export class Sessions extends Context.Service<Sessions, {
         return yield* view(session)
       })
 
-      const forKey = (key: string, init: BindingInit) =>
-        keyLock(key).withPermits(1)(Effect.gen(function*() {
+      const forKey = (thread: string, init: BindingInit) => {
+        const key = init.untrusted === true ? `${thread}#untrusted` : thread
+        return keyLock(key).withPermits(1)(Effect.gen(function*() {
           const existing = yield* bindings.get(key).pipe(Effect.orDie)
           if (Option.isSome(existing)) {
             const alive = yield* store.get(existing.value.sessionId as SessionId).pipe(Effect.orDie)
             if (Option.isSome(alive) && alive.value.resolved !== undefined) return { binding: existing.value, created: false }
           }
-          const session = yield* create({ ...init, title: init.title ?? key })
+          const session = yield* create({ ...init, title: init.title ?? thread })
           const binding: Binding = {
             key,
             sessionId: session.id,
@@ -229,6 +230,7 @@ export class Sessions extends Context.Service<Sessions, {
           yield* bindings.put(binding).pipe(Effect.orDie)
           return { binding, created: true }
         }))
+      }
 
       return Sessions.of({
         create,

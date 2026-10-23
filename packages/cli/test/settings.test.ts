@@ -3,7 +3,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writ
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { paths, readSettings, resolveConnection, saveTarget, writePrivate } from "../src/settings.ts"
+import { LOCAL_URL, paths, readSettings, resolveConnection, saveTarget, writePrivate } from "../src/settings.ts"
 
 const hasSops = spawnSync("sops", ["--version"]).status === 0 && spawnSync("age-keygen", ["--help"]).error === undefined
 
@@ -89,5 +89,12 @@ describe("settings", () => {
     expect(resolveConnection("https://flag.example", "flag-key")).toMatchObject({ url: "https://flag.example", apiKey: "flag-key" })
     vi.stubEnv("PI_CLOUD_API_KEY", undefined)
     expect(resolveConnection().apiKey).toBeUndefined()
+  })
+
+  it("reads the local server's admin key only for a loopback URL", () => {
+    writePrivate(paths().adminToken, "local-key\n")
+    expect(resolveConnection()).toEqual({ url: LOCAL_URL, apiKey: "local-key" })
+    expect(resolveConnection("http://[::1]:8787").apiKey).toBe("local-key")
+    expect(resolveConnection("https://remote.example").apiKey).toBeUndefined()
   })
 })

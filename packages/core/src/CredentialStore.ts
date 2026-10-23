@@ -36,25 +36,52 @@ export class CredentialStore extends Context.Service<CredentialStore, {
   })
 }
 
-export const credentialSealer = (secret: string | undefined) => {
-  const key = secret === undefined ? undefined : createHash("sha256").update(secret).digest()
-  return {
-    encrypted: key !== undefined,
-    seal(value: StoredCredential): string {
-      const json = JSON.stringify(value)
-      if (key === undefined) return `plain:${json}`
-      const iv = randomBytes(12)
-      const cipher = createCipheriv("aes-256-gcm", key, iv)
-      const sealed = Buffer.concat([cipher.update(json, "utf8"), cipher.final()])
-      return `aes256gcm:${Buffer.concat([iv, cipher.getAuthTag(), sealed]).toString("base64")}`
-    },
-    open(stored: string): StoredCredential {
-      if (stored.startsWith("plain:")) return JSON.parse(stored.slice("plain:".length))
-      if (key === undefined) throw new Error("Credentials are encrypted; set the credential key to read them")
-      const bytes = Buffer.from(stored.slice("aes256gcm:".length), "base64")
-      const decipher = createDecipheriv("aes-256-gcm", key, bytes.subarray(0, 12))
-      decipher.setAuthTag(bytes.subarray(12, 28))
-      return JSON.parse(Buffer.concat([decipher.update(bytes.subarray(28)), decipher.final()]).toString("utf8"))
+const PREFIX_LENGTH = "gcm:00000000:".length
+
+const decrypt = (key: Buffer, bytes: Buffer, aad?: string): StoredCredential => {
+  if (bytes.length < 28) throw new Error("Credential entry is truncated")
+  const decipher = createDecipheriv("aes-256-gcm", key, bytes.subarray(0, 12), { authTagLength: 16 })
+  if (aad !== undefined) decipher.setAAD(Buffer.from(aad))
+  decipher.setAuthTag(bytes.subarray(12, 28))
+  return JSON.parse(Buffer.concat([decipher.update(bytes.subarray(28)), decipher.final()]).toString("utf8"))
+}
+
+export const credentialSealer = (secrets: ReadonlyArray<string>) => {
+  if (secrets.length === 0) throw new Error("Set PI_CLOUD_CREDENTIAL_KEY to store credentials")
+  const keys = new Map<string, Buffer>(secrets.map((secret) => {
+    const key = createHash("sha256").update(secret).digest()
+    return [`gcm:${createHash("sha256").update(key).digest("hex").slice(0, 8)}:`, key] as const
+  }))
+  const [primary, primaryKey] = [...keys][0]!
+  const legacy = (stored: string): StoredCredential => {
+    if (stored.startsWith("plain:")) return JSON.parse(stored.slice("plain:".length))
+    const bytes = Buffer.from(stored.slice("aes256gcm:".length), "base64")
+    for (const key of keys.values()) {
+      try {
+        return decrypt(key, bytes)
+      } catch {
+        continue
+      }
     }
+    throw new Error("No credential key opens this legacy entry")
+  }
+  const seal = (providerId: string, value: StoredCredential): string => {
+    const iv = randomBytes(12)
+    const cipher = createCipheriv("aes-256-gcm", primaryKey, iv).setAAD(Buffer.from(providerId))
+    const sealed = Buffer.concat([cipher.update(JSON.stringify(value), "utf8"), cipher.final()])
+    return `${primary}${Buffer.concat([iv, cipher.getAuthTag(), sealed]).toString("base64")}`
+  }
+  const open = (providerId: string, stored: string): StoredCredential => {
+    const key = keys.get(stored.slice(0, PREFIX_LENGTH))
+    if (key === undefined) {
+      throw new Error(stored.startsWith("gcm:") ? "No configured credential key opens this entry" : "Unencrypted or legacy credential entries are refused")
+    }
+    return decrypt(key, Buffer.from(stored.slice(PREFIX_LENGTH), "base64"), providerId)
+  }
+  return {
+    seal,
+    open,
+    migrate: (providerId: string, stored: string): string | undefined =>
+      stored.startsWith(primary) ? undefined : seal(providerId, stored.startsWith("gcm:") ? open(providerId, stored) : legacy(stored))
   }
 }

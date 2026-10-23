@@ -122,7 +122,7 @@ describe("generic webhook trigger", () => {
       yield* Effect.promise(() =>
         until(async () => {
           entries = (await Effect.runPromise(
-            client.sessions.entries({ params: { id }, query: {} }).pipe(Effect.provide(PiCloud.layer({ url: deployment!.url })))
+            client.sessions.entries({ params: { id }, query: {} }).pipe(Effect.provide(PiCloud.layer(deployment!)))
           )).entries
           return entries.some((entry: any) => entry.kind === "pi.assistant")
         })
@@ -131,7 +131,7 @@ describe("generic webhook trigger", () => {
       const { entries: settled } = yield* client.sessions.entries({ params: { id }, query: {} })
       const prompts = settled.filter((entry: any) => entry.kind === "pi.user").map((entry) => entryText(entry as never))
       expect(prompts).toEqual(["Build 41 failed"])
-    }).pipe(Effect.provide(PiCloud.layer({ url: deployment.url }))))
+    }).pipe(Effect.provide(PiCloud.layer(deployment!))))
   }, 30_000)
 })
 
@@ -165,7 +165,7 @@ describe("Slack source", () => {
     const start = () =>
       startLocal({
         port: base,
-        ...sqliteStores({ file: join(dir!, "pi-cloud.sqlite") }),
+        ...sqliteStores({ file: join(dir!, "pi-cloud.sqlite"), credentialKeys: ["test-key"] }),
         runner: { plugins: [modelProviders(faux.provider)], idleMs: 300 },
         extensions: [sources([slackSource({ signingSecret: "s", botToken: "t", allowedUsers: ["U42"], apiUrl: `http://127.0.0.1:${base + 1}/api`, spec: { model } })])]
       })

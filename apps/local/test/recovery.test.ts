@@ -69,23 +69,24 @@ describe("crash recovery", () => {
       expect(faux.state.callCount).toBe(2)
     })
 
-    await Effect.runPromise(program.pipe(Effect.provide(PiCloud.layer({ url: local.url }))))
+    await Effect.runPromise(program.pipe(Effect.provide(PiCloud.layer(local))))
   }, 30_000)
 
   it("fences writes from a runner that lost its lease", async () => {
-    deployment = await startLocal({ port: port(), settings: { ...settings, recoveryIntervalMs: 60_000 }, runnerSecret: "test-runner-secret", runner: { plugins: [] } })
+    deployment = await startLocal({ port: port(), settings: { ...settings, recoveryIntervalMs: 60_000 }, runnerSecret: "test-runner-secret", dispatcher: capture, runner: { plugins: [] } })
     const local = deployment
 
     const program = Effect.gen(function*() {
       const api = yield* PiCloud
       const session = yield* api.sessions.create({ payload: {} })
       const rpc = yield* makeClient({ url: local.url, secret: "test-runner-secret" })
-      const first = yield* firstLease(rpc, session.id, "stale-runner")
-      const held = yield* Effect.exit(firstLease(rpc, session.id, "eager-runner"))
+      const grant = yield* woken(api, session.id)
+      const first = yield* firstLease(rpc, session.id, "stale-runner", grant)
+      const held = yield* Effect.exit(firstLease(rpc, session.id, "eager-runner", grant))
       expect(Exit.isFailure(held)).toBe(true)
 
       yield* Effect.sleep(settings.leaseTtlMs + 200)
-      const second = yield* firstLease(rpc, session.id, "new-runner")
+      const second = yield* firstLease(rpc, session.id, "new-runner", grant)
       expect(second.epoch).toBeGreaterThan(first.epoch)
       const stale = yield* Effect.exit(rpc.Storage({ sessionId: session.id, token: first.token, method: "mintId", args: [] }))
       expect(Exit.isFailure(stale)).toBe(true)
@@ -93,28 +94,29 @@ describe("crash recovery", () => {
       expect(typeof fresh.value).toBe("number")
     })
 
-    await Effect.runPromise(program.pipe(Effect.scoped, Effect.provide(PiCloud.layer({ url: local.url }))))
+    await Effect.runPromise(program.pipe(Effect.scoped, Effect.provide(PiCloud.layer(local))))
   }, 30_000)
 })
 
 describe("runner reconnects", () => {
   it("delivers commands to a runner's newest connection and ends the old one", async () => {
-    deployment = await startLocal({ port: port(), settings, runnerSecret: "test-runner-secret", runner: { plugins: [] } })
+    deployment = await startLocal({ port: port(), settings, runnerSecret: "test-runner-secret", dispatcher: capture, runner: { plugins: [] } })
     const local = deployment
 
     const program = Effect.gen(function*() {
       const api = yield* PiCloud
       const session = yield* api.sessions.create({ payload: {} })
       const rpc = yield* makeClient({ url: local.url, secret: "test-runner-secret" })
+      const grant = yield* woken(api, session.id)
 
       const firstMessages: Array<string> = []
       let token = ""
       const first = yield* Effect.forkChild(
-        rpc.Attach({ sessionId: session.id, runnerId: "flaky" }).pipe(
+        rpc.Attach({ sessionId: session.id, runnerId: "flaky", grant }).pipe(
           Stream.runForEach((message) =>
             Effect.sync(() => {
               if (message._tag === "LeaseGranted") token = message.token
-              firstMessages.push(message._tag)
+              firstMessages.push(message._tag === "Command" ? message.command._tag : message._tag)
             })
           )
         )
@@ -122,7 +124,7 @@ describe("runner reconnects", () => {
       while (token === "") yield* Effect.sleep(20)
 
       const second = yield* Effect.forkChild(
-        rpc.Attach({ sessionId: session.id, runnerId: "flaky", token }).pipe(
+        rpc.Attach({ sessionId: session.id, runnerId: "flaky", grant, token }).pipe(
           Stream.runForEach((message) =>
             message._tag === "Command" && message.command._tag === "Prompt"
               ? rpc.Reply({
@@ -136,25 +138,70 @@ describe("runner reconnects", () => {
         )
       )
       yield* Fiber.join(first)
-      expect(firstMessages).toEqual(["LeaseGranted"])
+      expect(firstMessages[0]).toBe("LeaseGranted")
+      expect(firstMessages).not.toContain("Prompt")
 
       const submitted = yield* api.sessions.submit({ params: { id: session.id }, payload: { content: "hello" } })
       expect(submitted.submissionId).toBe(42)
       yield* Fiber.interrupt(second)
     })
 
-    await Effect.runPromise(program.pipe(Effect.scoped, Effect.provide(PiCloud.layer({ url: local.url }))))
+    await Effect.runPromise(program.pipe(Effect.scoped, Effect.provide(PiCloud.layer(local))))
   }, 30_000)
 })
 
 type Rpc = Effect.Success<ReturnType<typeof makeClient>>
 
-const firstLease = (rpc: Rpc, sessionId: string, runnerId: string) =>
+const grants = new Map<string, string>()
+const capture = RunnerDispatcher.make(async (wake) => void grants.set(wake.sessionId, wake.grant))
+const woken = (api: PiCloud["Service"], sessionId: string) =>
   Effect.gen(function*() {
-    const first = yield* Stream.runHead(rpc.Attach({ sessionId, runnerId }))
+    yield* api.sessions.command({ params: { id: sessionId as never }, payload: { _tag: "Abort" } }).pipe(Effect.ignore, Effect.forkScoped)
+    while (!grants.has(sessionId)) yield* Effect.sleep(5)
+    return grants.get(sessionId)!
+  })
+
+const firstLease = (rpc: Rpc, sessionId: string, runnerId: string, grant: string) =>
+  Effect.gen(function*() {
+    const first = yield* Stream.runHead(rpc.Attach({ sessionId, runnerId, grant }))
     if (Option.isNone(first) || first.value._tag !== "LeaseGranted") return yield* Effect.die("no lease")
     return first.value
   })
+
+describe("busy conversations", () => {
+  it("answers 409 when the runner reports the conversation busy", async () => {
+    deployment = await startLocal({ port: port(), settings, runnerSecret: "test-runner-secret", dispatcher: capture, runner: { plugins: [] } })
+    const local = deployment
+
+    const program = Effect.gen(function*() {
+      const api = yield* PiCloud
+      const session = yield* api.sessions.create({ payload: {} })
+      const rpc = yield* makeClient({ url: local.url, secret: "test-runner-secret" })
+      const grant = yield* woken(api, session.id)
+      let token = ""
+      yield* rpc.Attach({ sessionId: session.id, runnerId: "busy", grant }).pipe(
+        Stream.runForEach((message) =>
+          message._tag === "LeaseGranted"
+            ? Effect.sync(() => void (token = message.token))
+            : message._tag === "Command"
+            ? rpc.Reply({ sessionId: session.id, token, commandId: message.commandId, result: { _tag: "Err", tag: "ConversationBusy", message: "busy" } })
+            : Effect.void
+        ),
+        Effect.forkScoped
+      )
+      const response = yield* Effect.promise(() =>
+        fetch(`${local.url}/v1/sessions/${session.id}/abort`, {
+          method: "POST",
+          headers: { authorization: `Bearer ${local.apiKey}`, "content-type": "application/json" },
+          body: "{}"
+        })
+      )
+      expect(response.status).toBe(409)
+    })
+
+    await Effect.runPromise(program.pipe(Effect.scoped, Effect.provide(PiCloud.layer(local))))
+  }, 30_000)
+})
 
 describe("lost wakes", () => {
   it("recovers a session whose recovery wake was lost, by waking it again", async () => {
@@ -171,6 +218,7 @@ describe("lost wakes", () => {
     let wakes = 0
     const server = Effect.runFork(Layer.launch(HttpRouter.serve(ControlPlane.layer({
       settings: { ...settings, publicUrl: url, attachTimeoutMs: 1_500 },
+      apiKeys: ["lost-wake-key"],
       runnerSecret: secret,
       dispatcher: RunnerDispatcher.make(async (request) => {
         wakes++
@@ -196,7 +244,7 @@ describe("lost wakes", () => {
         )
         expect(record).toBeTruthy()
         expect(wakes).toBeGreaterThanOrEqual(3)
-      }).pipe(Effect.provide(PiCloud.layer({ url }))))
+      }).pipe(Effect.provide(PiCloud.layer({ url, apiKey: "lost-wake-key" }))))
     } finally {
       await runners.close()
       await Effect.runPromise(Fiber.interrupt(server))

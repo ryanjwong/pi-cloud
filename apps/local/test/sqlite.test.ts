@@ -37,7 +37,7 @@ describe("sqlite stores", () => {
     const start = () =>
       startLocal({
         port,
-        ...sqliteStores({ file: join(dir!, "pi-cloud.sqlite") }),
+        ...sqliteStores({ file: join(dir!, "pi-cloud.sqlite"), credentialKeys: ["test-key"] }),
         runner: { plugins: [modelProviders(faux.provider)], idleMs: 300 }
       })
 
@@ -48,7 +48,7 @@ describe("sqlite stores", () => {
       const submitted = yield* client.sessions.submit({ params: { id: session.id }, payload: { content: "one" } })
       yield* waitDone(session.id, submitted.submissionId)
       return session.id
-    }).pipe(Effect.provide(PiCloud.layer({ url: deployment.url }))))
+    }).pipe(Effect.provide(PiCloud.layer(deployment!))))
     await deployment.stop()
 
     deployment = await start()
@@ -61,6 +61,6 @@ describe("sqlite stores", () => {
       const { entries } = yield* client.sessions.entries({ params: { id: sessionId as never }, query: {} })
       const texts = entries.map((entry) => entryText(entry as never))
       expect(texts).toEqual(expect.arrayContaining(["one", "first answer", "two", "second answer"]))
-    }).pipe(Effect.provide(PiCloud.layer({ url: deployment.url }))))
+    }).pipe(Effect.provide(PiCloud.layer(deployment!))))
   }, 30_000)
 })
