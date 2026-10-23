@@ -12,10 +12,15 @@ const url = `http://127.0.0.1:${port}`
 const apiKey = "test-api-key"
 const auth = { authorization: `Bearer ${apiKey}` }
 let state: string
+const states: Array<string> = []
 let wrangler: ChildProcess | undefined
 
-const start = async () => {
-  wrangler = spawn("npx", ["wrangler", "dev", "--port", String(port), "--inspector-port", String(port + 10_000), "--ip", "127.0.0.1", "--persist-to", state,
+const fresh = async () => {
+  state = await mkdtemp(join(tmpdir(), "pi-cloud-workerd-"))
+  states.push(state)
+}
+const start = async (main?: string, health = 204) => {
+  wrangler = spawn("npx", ["wrangler", "dev", ...(main ? [main] : []), "--port", String(port), "--inspector-port", String(port + 10_000), "--ip", "127.0.0.1", "--persist-to", state,
     "--var", `PI_CLOUD_API_KEYS:${apiKey}`, "--var", "PI_CLOUD_RUNNER_SECRET:test-runner-secret", "--var",
     `PI_CLOUD_CREDENTIAL_KEY:${"k".repeat(32)}`, "--var", "GITHUB_WEBHOOK_SECRET:hook"], {
     cwd: join(import.meta.dirname, ".."),
@@ -24,7 +29,7 @@ const start = async () => {
     detached: true
   })
   for (let attempt = 0; attempt < 120; attempt++) {
-    if (await fetch(`${url}/health`, { signal: AbortSignal.timeout(1_000) }).then((response) => response.ok, () => false)) return
+    if (await fetch(`${url}/health`, { signal: AbortSignal.timeout(1_000) }).then((response) => response.status === health, () => false)) return
     await new Promise((resolve) => setTimeout(resolve, 500))
   }
   throw new Error("wrangler dev did not start")
@@ -36,12 +41,12 @@ const stop = async () => {
 }
 
 beforeAll(async () => {
-  state = await mkdtemp(join(tmpdir(), "pi-cloud-workerd-"))
+  await fresh()
   await start()
 }, 90_000)
 afterAll(async () => {
   await stop()
-  await rm(state, { recursive: true, force: true })
+  await Promise.all(states.map((dir) => rm(dir, { recursive: true, force: true })))
 })
 
 const api = (path: string, method?: "PUT" | "POST", body?: unknown) =>
@@ -59,6 +64,16 @@ const answer = async (provider: string, modelId: string, expires: number) => {
   }
   throw new Error("submission did not settle")
 }
+
+const hook = JSON.stringify({
+  action: "opened",
+  repository: { full_name: "acme/api" },
+  sender: { login: "octocat", type: "User" },
+  issue: { number: 1, title: "Hi", author_association: "OWNER", html_url: "https://github.com/acme/api/issues/1" }
+})
+const signature = `sha256=${createHmac("sha256", "hook").update(hook).digest("hex")}`
+const delivered = async (headers: Record<string, string> = { "x-hub-signature-256": signature }) =>
+  (await fetch(`${url}/v1/triggers/github`, { method: "POST", body: hook, headers: { "x-github-event": "issues", ...headers } })).status
 
 const entries = (view: unknown) => (view as ConversationView).entries.map((entry) => entry.kind)
 
@@ -81,17 +96,8 @@ describe("pi-cloud on Cloudflare (local workerd)", () => {
       expect((await fetch(`${url}${path}`, { method: "POST", headers: auth })).status, path).toBe(404)
     }
 
-    const hook = JSON.stringify({
-      action: "opened",
-      repository: { full_name: "acme/api" },
-      sender: { login: "octocat", type: "User" },
-      issue: { number: 1, title: "Hi", author_association: "OWNER", html_url: "https://github.com/acme/api/issues/1" }
-    })
-    const signature = `sha256=${createHmac("sha256", "hook").update(hook).digest("hex")}`
-    const delivered = async (headers: Record<string, string>) =>
-      (await fetch(`${url}/v1/triggers/github`, { method: "POST", body: hook, headers: { "x-github-event": "issues", ...headers } })).status
     expect(await delivered({})).toBe(401)
-    expect(await delivered({ "x-hub-signature-256": signature })).toBe(202)
+    expect(await delivered()).toBe(202)
 
     await stop()
     await start()
@@ -113,4 +119,51 @@ describe("pi-cloud on Cloudflare (local workerd)", () => {
     expect(await answer("anthropic", "claude-haiku-4-5", Date.now() - 1_000)).not.toMatch(/endsWith/)
     expect(await answer("openai-codex", "gpt-5.5", Date.now() - 1_000)).not.toMatch(/endsWith/)
   }, 60_000)
+})
+
+describe("the control plane next to its session hosts", () => {
+  const sessions = async () =>
+    (await fetch(`${url}/v1/sessions`, { headers: auth }).then((response) => response.json()) as Array<{ id: string; title?: string }>)
+      .map(({ id, title }) => ({ id, title }))
+
+  it("moves an existing deployment's state out of the old object once and never uses it again", async () => {
+    await stop()
+    await fresh()
+    await start("test/legacy.worker.ts")
+    await api("/v1/credentials/anthropic", "PUT", { type: "api_key", key: "sk-ant-legacy" })
+    const created = await api("/v1/sessions", "POST", { title: "before the move", spec: {} })
+    expect(await delivered()).toBe(202)
+    const { submissionId } = await api(`/v1/sessions/${created.id}/messages`, "POST", { content: "hello" })
+    const submission = `/v1/sessions/${created.id}/submissions/${submissionId}`
+    for (let attempt = 0; attempt < 100 && (await api(submission)).status !== "unanswered"; attempt++) await new Promise((resolve) => setTimeout(resolve, 200))
+    const before = await Promise.all([sessions(), api(submission), api(`/v1/sessions/${created.id}/entries?limit=100`)])
+    await stop()
+
+    await start()
+    expect(await Promise.all([sessions(), api(submission), api(`/v1/sessions/${created.id}/entries?limit=100`)])).toEqual(before)
+    expect(before[0]).toHaveLength(2)
+    expect(before[1].status).toBe("unanswered")
+    expect(entries(before[2])).toEqual(["pi.user"])
+    expect(await api("/v1/credentials")).toEqual(expect.arrayContaining([expect.objectContaining({ providerId: "anthropic" })]))
+    expect(await delivered()).toBe(202)
+    expect(await sessions()).toEqual(before[0])
+    await api("/v1/sessions", "POST", { title: "after the move", spec: {} })
+    await stop()
+
+    await start("test/legacy.worker.ts", 503)
+    expect(await fetch(`${url}/v1/sessions`, { headers: auth }).then((response) => response.text())).toBe("the control plane has moved")
+    await stop()
+    await start()
+    expect(await sessions()).toHaveLength(3)
+  }, 120_000)
+
+  it("starts a fresh deployment under the new name and leaves the old one alone", async () => {
+    await stop()
+    await fresh()
+    await start()
+    await api("/v1/sessions", "POST", { title: "fresh", spec: {} })
+    await stop()
+    await start("test/legacy.worker.ts")
+    expect(await sessions()).toEqual([])
+  }, 120_000)
 })
