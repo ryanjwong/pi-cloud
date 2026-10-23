@@ -5,7 +5,7 @@ import { piAgent } from "@pi-cloud/pi"
 import { extensions, modelProviders } from "@pi-cloud/runner"
 import { sandboxes } from "@pi-cloud/sandbox"
 import { localSandboxes } from "@pi-cloud/sandbox-local"
-import { runTui, type Terminal } from "@pi-cloud/tui"
+import { pick, runTui, type Terminal } from "@pi-cloud/tui"
 import xterm from "@xterm/headless"
 import { Effect } from "effect"
 import { execFileSync } from "node:child_process"
@@ -68,6 +68,25 @@ const until = async (check: () => boolean, what: string, screen: () => string) =
 }
 
 describe("Pi's TUI on a cloud session", () => {
+  it("picks a session with Pi's list, filtered by typing", async () => {
+    const items = [
+      { value: "ses_a", label: "app@main", description: "idle  anthropic/claude  2h" },
+      { value: "ses_b", label: "app@fix", description: "running  openai/gpt  1d" }
+    ]
+    const first = fakeTerminal()
+    const picked = pick("Resume a session", items, first.terminal)
+    await until(() => first.screen().includes("app@fix"), "the list", first.screen)
+    first.type("fix")
+    await until(() => !first.screen().includes("app@main"), "the filter", first.screen)
+    first.type("\r")
+    expect(await picked).toBe("ses_b")
+    const second = fakeTerminal()
+    const cancelled = pick("Resume a session", items, second.terminal)
+    await until(() => second.screen().includes("app@main"), "the list", second.screen)
+    second.type("\x1b")
+    expect(await cancelled).toBeUndefined()
+  })
+
   it("renders the cloud agent working in a clone of the repository", async () => {
     root = await mkdtemp(join(tmpdir(), "pi-cloud-tui-"))
     const origin = join(root, "origin")

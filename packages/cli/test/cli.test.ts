@@ -97,6 +97,10 @@ describe("pi-cloud", { timeout: 30_000 }, () => {
     }
   })
 
+  it("asks for an id when -r has no terminal to pick in", async () => {
+    expect(await cliAsync(["-r", "--url", "http://127.0.0.1:1"])).toEqual({ status: 1, out: "No terminal to pick a session in; pass an id: pi-cloud -r <id>.\n" })
+  })
+
   const hasSops = spawnSync("sops", ["--version"]).status === 0 && spawnSync("age-keygen", ["--help"]).error === undefined
   it.skipIf(!hasSops)("init writes only under the config directory, privately", () => {
     const repo = mkdtempSync(join(home, "repo-"))

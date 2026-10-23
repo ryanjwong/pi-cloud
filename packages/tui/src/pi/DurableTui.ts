@@ -104,7 +104,7 @@ class ListSelector extends Container implements Focusable {
 		this.#input.handleInput(data);
 		const query = this.#input.getValue();
 		const filtered =
-			query.length === 0 ? this.#items : fuzzyFilter(this.#items, query, (item) => `${item.label} ${item.value}`);
+			query.length === 0 ? this.#items : fuzzyFilter(this.#items, query, (item) => `${item.label} ${item.value} ${item.description}`);
 		this.#list = this.#build(filtered);
 	}
 
@@ -642,4 +642,25 @@ export async function runDurableTui(
 	unsubscribe();
 	themes.dispose();
 	view.stop();
+}
+
+export async function runPicker(
+	title: string,
+	items: SelectItem[],
+	terminal: Terminal = new ProcessTerminal(),
+): Promise<string | undefined> {
+	initTheme();
+	setKeybindings(KeybindingsManager.create());
+	const ui = new TuiAltScreen(terminal, false, getAgentDir());
+	const picked = new Promise<string | undefined>((resolve) => {
+		const selector = new ListSelector(title, items, resolve, () => resolve(undefined));
+		ui.addChild(selector);
+		ui.setFocus(selector);
+	});
+	ui.start();
+	try {
+		return await picked;
+	} finally {
+		ui.stop();
+	}
 }

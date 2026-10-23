@@ -2,13 +2,14 @@
 import "@pi-cloud/protocol/build"
 import { NodeRuntime } from "@effect/platform-node"
 import { type CommandResult, followEvents, openChannel, PiCloud, VERSION } from "@pi-cloud/client"
-import { runTui } from "@pi-cloud/tui"
+import { pick, runTui } from "@pi-cloud/tui"
 import { Cause, Deferred, Effect, Stream } from "effect"
 import { execFileSync } from "node:child_process"
 import { createInterface } from "node:readline/promises"
 import { parseArgs } from "node:util"
 import { githubAppCommand } from "./github-app.ts"
 import { importFromCodex, importFromPi, listCredentials, login, loginProviders, logout } from "./login.ts"
+import { choices, latestFor } from "./pick.ts"
 import { makeRenderer } from "./render.ts"
 import { readSettings, rejected, resolveConnection, unreachable, versionSkew } from "./settings.ts"
 import { deploy, doctor, init, update } from "./setup.ts"
@@ -25,7 +26,9 @@ const orExit = <A>(run: () => A, hint?: string): A => {
     return fail(error, hint)
   }
 }
+const argv = process.argv.slice(2)
 const { values: flags, positionals } = orExit(() => parseArgs({
+  args: argv.map((arg, index) => ["-r", "--resume"].includes(arg) && !/^[^-]/.test(argv[index + 1] ?? "") ? "--resume=" : arg),
   allowPositionals: true,
   options: {
     model: { type: "string" },
@@ -48,9 +51,10 @@ const { values: flags, positionals } = orExit(() => parseArgs({
 }), "Run pi-cloud --help for usage.\n")
 const [command = "tui", ...rest] = positionals
 
-const usage = `pi-cloud [-c | -r <id>] [--model provider/model]
+const usage = `pi-cloud [-c | -r [id]] [--model provider/model]
       Pi's TUI on a cloud session. In a git checkout the agent works in a cloud clone of its origin at the
-      current branch; -c continues this repository's latest session, -r attaches to any session.
+      current branch; -c continues this repository's latest session, -r attaches to any session, and without an
+      id picks one from a list, this repository's first.
 
 pi-cloud login [provider] [--from-pi | --from-codex]
       sign in to a model provider (ChatGPT/Codex: openai-codex, Claude Pro/Max: anthropic, ...) in your browser and
@@ -267,6 +271,13 @@ async function* typed(): AsyncGenerator<string> {
   }
 }
 
+const pickSession = Effect.gen(function*() {
+  if (!process.stdin.isTTY) return yield* Effect.fail(new Error("No terminal to pick a session in; pass an id: pi-cloud -r <id>."))
+  const items = choices(yield* Effect.flatMap(PiCloud, (client) => client.sessions.list()), gitOrigin()?.url, Date.now())
+  if (items.length === 0) return yield* Effect.fail(new Error("No sessions yet; run pi-cloud to start one."))
+  return yield* Effect.promise(() => pick("Resume a session (type to filter, esc to cancel)", items))
+})
+
 async function* once(line: string): AsyncGenerator<string> {
   yield line
 }
@@ -276,14 +287,12 @@ const program = Effect.gen(function*() {
   switch (command) {
     case "tui": {
       let target: { readonly id: string; readonly label?: string | undefined } | undefined
-      if (flags.resume !== undefined) target = { id: (yield* existing(flags.resume)).id }
+      const wanted = flags.resume === "" ? yield* pickSession : flags.resume
+      if (flags.resume === "" && wanted === undefined) return
+      if (wanted !== undefined) target = { id: (yield* existing(wanted)).id }
       else if (flags.continue === true) {
         const origin = gitOrigin()
-        const matching = (yield* client.sessions.list()).filter((candidate) => {
-          const saved = (candidate.spec.metadata?.origin ?? undefined) as { url?: string; branch?: string } | undefined
-          return origin === undefined ? saved === undefined : saved?.url === origin.url && saved.branch === origin.branch
-        })
-        const latest = [...matching].sort((a, b) => b.createdAt - a.createdAt)[0]
+        const latest = latestFor(yield* client.sessions.list(), origin)
         if (latest !== undefined) target = { id: latest.id, label: origin?.label }
         else write("No session for this repository yet; starting one.\n")
       }

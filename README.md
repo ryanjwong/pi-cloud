@@ -84,7 +84,7 @@ tools but not yet Pi's full coding-agent prompt or subagents. [Deploying](docs/d
 ```sh
 pi-cloud                     # new session on this repository's origin, at the current branch
 pi-cloud -c                  # continue this repository's latest session
-pi-cloud -r ses_...          # attach to any session
+pi-cloud -r [ses_...]        # attach to a session; without an id, pick one (this repository's first)
 pi-cloud ls                  # list sessions
 pi-cloud chat | send | tail  # line-mode chat, one-shot message, follow events
 pi-cloud login <provider>    # store a subscription login on the server
