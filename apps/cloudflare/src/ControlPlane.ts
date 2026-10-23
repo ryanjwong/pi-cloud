@@ -8,16 +8,37 @@ import { Redacted } from "effect"
 import { CONTROL_PLANE, type Env, INTERNAL_URL, LEGACY_CONTROL_PLANE, near, NotConfigured, quote, schema, settings } from "./env.ts"
 
 const PAGE_BYTES = 8 << 20
+const RETRY_MS = 10_000
 
 const size = (value: SqlStorageValue) => typeof value === "string" ? value.length * 2 : value instanceof ArrayBuffer ? value.byteLength : 8
 
 export class ControlPlane extends DurableObject<Env> {
   readonly #inflight = new Set<Promise<Response>>()
   #handler: Promise<(request: Request) => Promise<Response>> | undefined
+  #moving: Promise<void> | undefined
+  #retryAt = 0
   readonly #database = new DurableObjectSqliteDatabase(this.ctx.storage as never)
 
   override fetch(request: Request): Promise<Response> {
     if (this.ctx.storage.kv.get("retired") === true) return Promise.resolve(new Response("the control plane has moved", { status: 503 }))
+    return this.ctx.id.name === CONTROL_PLANE && this.ctx.storage.kv.get("moved") !== true ? this.#moveOrForward(request) : this.#serve(request)
+  }
+
+  async #moveOrForward(request: Request): Promise<Response> {
+    if (Date.now() >= this.#retryAt) {
+      this.#moving ??= this.#move().finally(() => (this.#moving = undefined))
+      try {
+        await this.#moving
+        return this.#serve(request)
+      } catch (error) {
+        console.error("control plane move deferred", error)
+        this.#retryAt = Date.now() + RETRY_MS
+      }
+    }
+    return this.env.CONTROL_PLANE.getByName(LEGACY_CONTROL_PLANE).fetch(request as never) as unknown as Promise<Response>
+  }
+
+  #serve(request: Request): Promise<Response> {
     this.#handler ??= this.#start()
     this.#handler.catch(() => (this.#handler = undefined))
     const response = this.#handler.then(
@@ -70,7 +91,6 @@ export class ControlPlane extends DurableObject<Env> {
 
   async #start() {
     const env = await settings(this.env)
-    if (this.ctx.id.name === CONTROL_PLANE && this.ctx.storage.kv.get("moved") !== true) await this.#move()
     const { handler } = ControlPlaneApp.toWebHandler({
       settings: { ...env.settings, publicUrl: INTERNAL_URL },
       auth: env.auth,

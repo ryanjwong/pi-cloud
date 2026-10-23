@@ -154,6 +154,23 @@ describe("the control plane next to its session hosts", () => {
     expect(await sessions()).toHaveLength(3)
   }, 120_000)
 
+  it("keeps serving from the old object while it still runs the previous code, then moves", async () => {
+    await stop()
+    await fresh()
+    await start("test/legacy.worker.ts")
+    await api("/v1/sessions", "POST", { title: "before", spec: {} })
+    const before = await sessions()
+    await stop()
+
+    await start("test/stale.worker.ts")
+    expect(await sessions()).toEqual(before)
+    await api("/v1/sessions", "POST", { title: "during", spec: {} })
+    await stop()
+
+    await start()
+    expect((await sessions()).map(({ title }) => title).sort()).toEqual(["before", "during"])
+  }, 120_000)
+
   it("starts a fresh deployment under the new name and leaves the old one alone", async () => {
     await stop()
     await fresh()
