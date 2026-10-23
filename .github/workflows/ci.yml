@@ -37,4 +37,6 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
       - run: git push origin HEAD:stable
