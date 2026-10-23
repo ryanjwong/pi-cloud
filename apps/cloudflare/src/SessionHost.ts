@@ -4,10 +4,11 @@ import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic"
 import { openaiProvider } from "@earendil-works/pi-ai/providers/openai"
 import { openaiCodexProvider } from "@earendil-works/pi-ai/providers/openai-codex"
 import { DurableObjectSqliteDatabase } from "@earendil-works/pi-durable/storage/sqlite/cloudflare"
-import { modelCredentialLookup } from "@pi-cloud/config"
+import { type CloudflareEnv, modelCredentialLookup } from "@pi-cloud/config"
+import { piAgent } from "@pi-cloud/pi"
 import type { WakeRequest } from "@pi-cloud/protocol"
 import { CodingTools } from "@earendil-works/pi-durable/tools"
-import { extensions, modelProviders, type ReplicaDatabase, RunnerHost } from "@pi-cloud/runner"
+import { extensions, modelProviders, type ReplicaDatabase, RunnerHost, type RunnerPlugin } from "@pi-cloud/runner"
 import { sandboxes } from "@pi-cloud/sandbox"
 import { daytonaSandboxes } from "@pi-cloud/sandbox-daytona"
 import { githubTools } from "@pi-cloud/tool-github"
@@ -40,19 +41,24 @@ export class SessionHost extends DurableObject<Env> {
       secret: Redacted.value(env.runnerSecret),
       fetch: ((input: RequestInfo | URL, init?: RequestInit) => stub.fetch(new Request(input, init) as never)) as unknown as typeof fetch,
       modelCredentials: modelCredentialLookup(env),
-      plugins: [
-        modelProviders(anthropicProvider, openaiProvider, openaiCodexProvider),
-        extensions("coding", CodingTools),
-        sandboxes({
-          providers: Option.match(env.daytonaApiKey, {
-            onNone: () => [],
-            onSome: (apiKey) => [daytonaSandboxes({ apiKey: Redacted.value(apiKey) })]
-          })
-        }),
-        githubTools()
-      ],
+      plugins: this.plugins(env),
       replica: this.#replica
     })
+  }
+
+  protected plugins(env: CloudflareEnv): ReadonlyArray<RunnerPlugin> {
+    return [
+      modelProviders(anthropicProvider, openaiProvider, openaiCodexProvider),
+      extensions("coding", CodingTools),
+      piAgent(),
+      sandboxes({
+        providers: Option.match(env.daytonaApiKey, {
+          onNone: () => [],
+          onSome: (apiKey) => [daytonaSandboxes({ apiKey: Redacted.value(apiKey) })]
+        })
+      }),
+      githubTools()
+    ]
   }
 
   readonly #replica: ReplicaDatabase = async () => {

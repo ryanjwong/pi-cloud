@@ -50,16 +50,20 @@ const api = (path: string, method?: "PUT" | "POST", body?: unknown) =>
   fetch(`${url}${path}`, { method, headers: { ...auth, "content-type": "application/json" }, body: method && JSON.stringify(body) })
     .then((response) => response.json()) as Promise<Record<string, unknown>>
 
+const settle = async (sessionId: unknown, submissionId: unknown) => {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const record = await api(`/v1/sessions/${sessionId}/submissions/${submissionId}`)
+    if (record.status === "done" || record.status === "unanswered") return record
+    await new Promise((resolve) => setTimeout(resolve, 200))
+  }
+  throw new Error("submission did not settle")
+}
+
 const answer = async (provider: string, modelId: string, expires: number) => {
   await api(`/v1/credentials/${provider}`, "PUT", { type: "oauth", access: "sk-ant-oat01-fake", refresh: "sk-ant-ort01-fake", expires })
   const session = await api("/v1/sessions", "POST", { spec: { model: { provider, modelId } } })
   const { submissionId } = await api(`/v1/sessions/${session.id}/messages`, "POST", { content: "hello" })
-  for (let attempt = 0; attempt < 100; attempt++) {
-    const record = await api(`/v1/sessions/${session.id}/submissions/${submissionId}`)
-    if (record.status === "done" || record.status === "unanswered") return String(record.detail)
-    await new Promise((resolve) => setTimeout(resolve, 200))
-  }
-  throw new Error("submission did not settle")
+  return String((await settle(session.id, submissionId)).detail)
 }
 
 const hook = JSON.stringify({
@@ -132,7 +136,7 @@ describe("the control plane next to its session hosts", () => {
     expect(await delivered()).toBe(202)
     const { submissionId } = await api(`/v1/sessions/${created.id}/messages`, "POST", { content: "hello" })
     const submission = `/v1/sessions/${created.id}/submissions/${submissionId}`
-    for (let attempt = 0; attempt < 100 && (await api(submission)).status !== "unanswered"; attempt++) await new Promise((resolve) => setTimeout(resolve, 200))
+    await settle(created.id, submissionId)
     const before = await Promise.all([sessions(), api(submission), api(`/v1/sessions/${created.id}/entries?limit=100`)])
     await stop()
 
@@ -179,5 +183,25 @@ describe("the control plane next to its session hosts", () => {
     await stop()
     await start("test/legacy.worker.ts")
     expect(await sessions()).toEqual([])
+  }, 120_000)
+})
+
+describe("Pi's coding agent on Cloudflare", () => {
+  it("sends the model Pi's prompt, its subagent tool and the sandbox working tree's AGENTS.md", async () => {
+    await stop()
+    await fresh()
+    await start("test/prompt.worker.ts")
+    const session = await api("/v1/sessions", "POST", { spec: { model: { provider: "faux", modelId: "faux-1" } } })
+    const { submissionId } = await api(`/v1/sessions/${session.id}/messages`, "POST", { content: "who are you?" })
+    await settle(session.id, submissionId)
+    const { entries } = await api(`/v1/sessions/${session.id}/entries?limit=100`) as { entries: Array<{ kind: string; model: Array<{ content: Array<{ text: string }> }> }> }
+    const sent = entries.find((entry) => entry.kind === "pi.assistant")?.model[0]?.content[0]?.text
+    for (const part of [
+      "You are an expert coding assistant operating inside pi, a coding agent harness.",
+      "Use bash for file operations like ls, rg, find",
+      '<project_instructions path="/home/daytona/repo/AGENTS.md">\nRun the linter before every commit.',
+      "<cwd>\n/home/daytona/repo\n</cwd>",
+      "tool: subagent"
+    ]) expect(sent).toContain(part)
   }, 120_000)
 })

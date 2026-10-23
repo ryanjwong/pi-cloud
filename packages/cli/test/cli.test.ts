@@ -62,7 +62,7 @@ describe("pi-cloud", { timeout: 30_000 }, () => {
     expect(isAbsolute(config.main) && existsSync(config.main)).toBe(true)
     expect(config.migrations.slice(0, 1)).toEqual([{ tag: "v1", new_sqlite_classes: ["ControlPlane", "SessionHost"] }])
     vi.stubEnv("PI_CLOUD_BUILD", "abc1234")
-    expect(workerConfig("staging").define).toEqual({ PI_CLOUD_BUILD: '"abc1234"' })
+    expect(workerConfig("staging").define).toEqual({ "import.meta.url": '"file:/bundle/worker.js"', PI_CLOUD_BUILD: '"abc1234"' })
     vi.unstubAllEnvs()
   })
 

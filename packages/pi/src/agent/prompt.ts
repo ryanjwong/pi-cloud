@@ -7,14 +7,10 @@ import {
 	bashToolSystemPromptContribution,
 	buildSystemPromptSections,
 	editToolSystemPromptContribution,
-	getAgentDir,
-	loadProjectContextFiles,
-	loadSkills,
 	readToolSystemPromptContribution,
-	type SettingsManager,
 	type Skill,
 	writeToolSystemPromptContribution,
-} from "../internal.ts";
+} from "#host";
 
 const CONTRIBUTIONS = {
 	read: readToolSystemPromptContribution,
@@ -26,6 +22,12 @@ const CONTRIBUTIONS = {
 const CONTEXT_FILES = ["AGENTS.override.md", "AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"];
 
 type ContextFile = { path: string; content: string };
+
+export type RunnerFiles = {
+	readonly agentDir?: string;
+	readonly skills: (cwd: string) => Skill[];
+	readonly project: (cwd: string) => ContextFile[];
+};
 
 function globalContextFile(agentDir: string): ContextFile | undefined {
 	for (const name of CONTEXT_FILES) {
@@ -51,19 +53,18 @@ async function environmentContextFiles(env: ExecutionEnv, cwd: string, context: 
 
 const KEYS = ["preamble", "tools", "rules", "docs", "project_context", "skills", "cwd"] as const;
 
-export function createPiPrompt(settings: SettingsManager, fallbackCwd: string) {
+export function createPiPrompt(files: RunnerFiles, fallbackCwd: string) {
 	type Resources = { contextFiles: ContextFile[]; skills: Skill[] };
 	const resources = new Map<string, Promise<Resources>>();
 	const load = (cwd: string, env: ExecutionEnv | undefined, context: Context) => {
 		const key = `${env?.id ?? ""}\0${cwd}`;
 		let found = resources.get(key);
 		if (found === undefined) {
-			const agentDir = getAgentDir();
-			const skills = loadSkills({ cwd, agentDir, skillPaths: settings.getSkillPaths(), includeDefaults: true }).skills;
+			const skills = files.skills(cwd);
 			found = env === undefined
-				? Promise.resolve({ contextFiles: loadProjectContextFiles({ cwd, agentDir }), skills })
+				? Promise.resolve({ contextFiles: files.project(cwd), skills })
 				: environmentContextFiles(env, cwd, context).then((project) => {
-					const global = globalContextFile(agentDir);
+					const global = files.agentDir === undefined ? undefined : globalContextFile(files.agentDir);
 					return { contextFiles: [...(global === undefined ? [] : [global]), ...project], skills };
 				});
 			found.catch(() => resources.delete(key));

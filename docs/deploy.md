@@ -135,8 +135,9 @@ a 503.
 Current limits on Cloudflare:
 
 - Sandboxes are Daytona only (`DAYTONA_API_KEY`). Without it, the agent can only chat.
-- The agent has Pi's coding tools but not Pi's coding-agent system prompt or subagents. Those read the runner's
-  files, so they need a Node runner.
+- The agent has Pi's coding tools, system prompt and subagents. Project instructions (`AGENTS.md`, `CLAUDE.md`)
+  come from the sandbox's working tree; skills and the global `~/.pi/agent/AGENTS.md` live in a runner's files, so
+  they need a Node runner.
 - GitHub works through the App only: there is no personal `GITHUB_TOKEN` on Cloudflare. The `github` template
   uses Daytona (`GITHUB_SANDBOX_PROVIDER`).
 - No Slack connector yet, and no WebSocket session channel (the service API and REST work).

@@ -69,7 +69,7 @@ Each package only uses the ones above it in this table.
 | `runner` | Hosts Pi Durable against the control plane; the plugin API |
 | `sandbox` | The sandbox provider interface, the agent's sandbox tools, `shellEnv` |
 | `sandbox-local`, `sandbox-docker`, `sandbox-daytona` | Sandbox providers |
-| `pi` | Pi's coding-agent prompt and subagents, for Node runners |
+| `pi` | Pi's coding-agent prompt and subagents, for Node and Cloudflare runners |
 | `triggers`, `sources`, `trigger-github`, `source-slack` | Connectors |
 | `github-app`, `tool-github` | GitHub App tokens; the agent's GitHub tools |
 | `connectors` | What a control plane mounts from its settings, on Node and Cloudflare alike |

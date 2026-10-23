@@ -63,6 +63,9 @@ importers:
       '@pi-cloud/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@pi-cloud/pi':
+        specifier: workspace:*
+        version: link:../../packages/pi
       '@pi-cloud/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
