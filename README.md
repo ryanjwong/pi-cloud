@@ -77,7 +77,7 @@ cd ~/code/some-repo && pi-cloud
 Run it again to redeploy; it only asks for keys that are missing. `pi-cloud init` does only the secrets step.
 
 Daytona provides the sandboxes, since a Worker has no shell of its own. On Cloudflare the agent gets Pi's coding
-tools but not yet Pi's full coding-agent prompt or subagents. [Deploying](docs/deploy.md) has the details.
+tools, prompt and subagents, with `AGENTS.md` read from the sandbox. [Deploying](docs/deploy.md) has the details.
 
 ## Using it
 
@@ -110,5 +110,5 @@ Cloudflare account, or the live GitHub and Daytona APIs. Known gaps:
 
 - One control-plane process at a time: leases and event streams live in its memory.
 - The TUI is Pi 1.1's durable TUI, which Pi 1.3 dropped. It has no session picker, forks or `/login`.
-- On Cloudflare: no Pi coding-agent prompt or subagents, and no Slack connector yet.
+- On Cloudflare: no Pi skills or global `AGENTS.md` (a Worker has no files of its own), and no Slack connector yet.
 - Pi Durable is experimental; versions are pinned.

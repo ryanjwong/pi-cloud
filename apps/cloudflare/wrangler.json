@@ -5,6 +5,9 @@
   "compatibility_flags": [
     "nodejs_compat"
   ],
+  "define": {
+    "import.meta.url": "\"file:/bundle/worker.js\""
+  },
   "durable_objects": {
     "bindings": [
       {

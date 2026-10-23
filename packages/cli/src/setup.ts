@@ -165,7 +165,7 @@ const STALE = `dependencies are out of date: run pnpm install in ${root}`
 export const workerConfig = (name: string) => {
   const base = JSON.parse(readFileSync(join(app, "wrangler.json"), "utf8"))
   const build = process.env.PI_CLOUD_BUILD
-  return { ...base, name, main: join(app, base.main), ...(build === undefined ? {} : { define: { PI_CLOUD_BUILD: JSON.stringify(build) } }) }
+  return { ...base, name, main: join(app, base.main), define: { ...base.define, ...(build === undefined ? {} : { PI_CLOUD_BUILD: JSON.stringify(build) }) } }
 }
 
 export const deploy = async (kind: string | undefined, name = "pi-cloud") => {
